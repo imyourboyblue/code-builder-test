@@ -2690,9 +2690,12 @@ def show_output(emit, result, code, out, command=""):
             err += ". Install cmake with propose_install_packages (homebrew)"
     m = re.search(r"Could NOT find (\w+)|Package '?([\w-]+)'?,? (?:was )?not found|No package '([\w-]+)' found",
                   out or "")
+    if not m:
+        m = re.search(r"fatal error: ([\w+-]+)\.h[^\n]*No such file", out or "")
     if code != 0 and m:
-        lib = (m.group(1) or m.group(2) or m.group(3) or "").lower() or "?"
-        have = projects.dkp_installed("switch-" + lib)
+        lib = (next((x for x in m.groups() if x), "") or "").lower() or "?"
+        lib = projects.dkp_name(lib)          # e.g. freetype2 -> switch-freetype
+        have = projects.dkp_installed(lib)
         wrapper = bool(re.search(r"\b[a-z0-9_]+-none-[a-z]+-cmake\b|\b[a-z0-9_]+-[a-z]+-cmake\b", command or ""))
         if have:
             err += (". devkitPro's %s is already installed, so installing or updating won't help. The build must "
@@ -2701,7 +2704,7 @@ add -DZLIB_ROOT=/opt/devkitpro/portlibs/switch"
                     % (have, " - this build command uses plain cmake, fix it with set_project" if command and not
                        wrapper else ""))
         else:
-            err += (". A library is missing: for a console build install devkitPro's version (for example switch-%s) "
+            err += (". A library is missing: for a console build install devkitPro's version (it's called %s) "
                     "with propose_install_packages" % lib)
     summary = result + (" First error: " + err if err else "")
     emit({"type": "tool_result", "name": "output", "summary": summary, "text": tail or "(no output)", "open": code != 0})

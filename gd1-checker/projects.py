@@ -342,6 +342,29 @@ DKP_INSTALLER = "https://github.com/devkitPro/pacman/releases/latest/download/de
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9_+.@-]{0,80}$")
 
 
+# What a build calls a library -> devkitPro's package name (without the switch-/3ds-/wiiu- part).
+DKP_NAMES = {"freetype2": "freetype", "freetype": "freetype", "ft2build": "freetype", "libpng16": "libpng",
+             "libpng": "libpng", "png": "libpng", "jpeg": "libjpeg-turbo", "libjpeg": "libjpeg-turbo",
+             "libturbojpeg": "libjpeg-turbo", "libcurl": "curl", "webp": "libwebp", "libwebp": "libwebp",
+             "zstd": "libzstd", "libzstd": "libzstd", "lzma": "liblzma", "liblzma": "liblzma", "bz2": "bzip2",
+             "bzip2": "bzip2", "archive": "libarchive", "libarchive": "libarchive", "glfw3": "glfw", "sdl2": "sdl2",
+             "sdl2_ttf": "sdl2_ttf", "sdl2_image": "sdl2_image", "sdl2_mixer": "sdl2_mixer", "zlib": "zlib",
+             "z": "zlib", "harfbuzz": "harfbuzz", "libconfig": "libconfig", "jansson": "jansson",
+             "mbedtls": "mbedtls", "opus": "libopus", "ogg": "libogg", "vorbis": "libvorbis", "flac": "flac",
+             "mpg123": "libmpg123", "libmpg123": "libmpg123", "physfs": "physfs", "lz4": "lz4"}
+DKP_PREFIXES = ("switch-", "3ds-", "wiiu-", "gamecube-", "wii-", "nds-", "gba-", "ppc-", "armv4t-")
+
+
+def dkp_name(lib, platform="switch"):
+    """devkitPro's package for a library a build asked for: dkp_name("freetype2") -> "switch-freetype"."""
+    lib = (lib or "").strip().lower()
+    for pre in DKP_PREFIXES:
+        if lib.startswith(pre):
+            platform, lib = pre[:-1], lib[len(pre):]
+            break
+    return "%s-%s" % (platform, DKP_NAMES.get(lib, lib))
+
+
 def find_pacman():
     for cand in ("/opt/devkitpro/pacman/bin/pacman", "/usr/local/bin/dkp-pacman", "/usr/bin/dkp-pacman",
                  "/opt/homebrew/bin/dkp-pacman"):
@@ -390,6 +413,8 @@ def install_plan(manager, packages, update_all=False):
         return cmds, False, "Homebrew: " + " ".join(cmds).replace(quote(brew), "brew")
     if manager != "devkitpro":
         raise ProjectError("manager must be devkitpro or homebrew.")
+    # Fix names a build tool uses but devkitPro doesn't (switch-freetype2 -> switch-freetype).
+    pkgs = [dkp_name(x) if x.startswith(DKP_PREFIXES) else x for x in pkgs]
     pac = find_pacman()
     cmds = []
     if not pac:
