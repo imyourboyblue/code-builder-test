@@ -10,6 +10,7 @@ Only uses Python's built-in parts.
 """
 
 import json
+import os
 import re
 import socket
 import threading
@@ -34,6 +35,9 @@ NEW_DEVICE = {
 }
 
 
+DEFAULT_PORTS = {"ftp": [21, 5000], "sftp": [22], "smb": [445], "folder": []}
+
+
 class DeviceError(Exception):
     pass
 
@@ -41,7 +45,11 @@ class DeviceError(Exception):
 def about_text(cfg):
     if cfg.get("about"):
         return cfg["about"]
-    return GD1_ABOUT if cfg["device_name"] == "GD1" else "a device on the local network, reached over FTP."
+    if cfg["device_name"] == "GD1":
+        return GD1_ABOUT
+    how = {"sftp": "SFTP/SSH (commands can run on it too)", "smb": "SMB file sharing (share %s)" % cfg.get("share"),
+           "folder": "a folder on this Mac (%s)" % cfg.get("folder")}.get(cfg.get("protocol"), "FTP")
+    return "a device on the local network, reached over %s." % how
 
 
 def port_open(host, port, timeout=1.5):
@@ -84,7 +92,10 @@ class Registry:
     # ---- who is on the network
 
     def _check(self, cfg):
-        online = any(port_open(cfg["host"], p) for p in cfg["ports"])
+        if cfg.get("protocol") == "folder":
+            online = os.path.isdir(os.path.expanduser(cfg.get("folder") or ""))
+        else:
+            online = any(port_open(cfg["host"], p) for p in cfg["ports"])
         now = time.time()
         with self.lock:
             self.status[cfg["device_name"]] = {"online": online, "checked": now}
@@ -137,21 +148,39 @@ class Registry:
 
     # ---- adding a device
 
-    def add(self, name, host, ports, username, password, about=""):
+    def add(self, name, host, ports, username, password, about="", protocol="ftp", share="", folder=""):
         name, host = (name or "").strip(), (host or "").strip()
+        protocol = (protocol or "ftp").lower()
+        if protocol not in ("ftp", "sftp", "smb", "folder"):
+            raise DeviceError("The connection type must be FTP, SFTP, SMB or a folder.")
+        if protocol == "folder":
+            folder = os.path.expanduser((folder or "").strip())
+            if not os.path.isdir(folder):
+                raise DeviceError("There's no folder at %s on this Mac." % folder)
+            host, ports = host or "this Mac", []
+        if protocol == "smb" and not (share or "").strip():
+            raise DeviceError("Type the name of the shared folder (the share), like Public or Media.")
         if not NAME_OK.match(name):
             raise DeviceError("Give the device a short name using letters, numbers, spaces, - or _ (like GD2).")
         if any(cfg["device_name"].lower() == name.lower() for f, cfg in self.all()):
             raise DeviceError("You already have a device called %s." % name)
-        if not re.match(r"^[A-Za-z0-9.\-:\[\]]{1,255}$", host):
+        if protocol != "folder" and not re.match(r"^[A-Za-z0-9.\-:\[\]]{1,255}$", host):
             raise DeviceError("That doesn't look like an IP address (it should look like 192.168.1.60).")
-        try:
-            ports = [int(p) for p in (ports or [21, 5000])]
-            assert ports and all(0 < p < 65536 for p in ports)
-        except (ValueError, TypeError, AssertionError):
-            raise DeviceError("Ports should be numbers like 21, 5000.")
+        if protocol != "folder":
+            try:
+                ports = [int(p) for p in (ports or DEFAULT_PORTS[protocol])]
+                assert ports and all(0 < p < 65536 for p in ports)
+            except (ValueError, TypeError, AssertionError):
+                raise DeviceError("Ports should be numbers like 21, 5000.")
         cfg = dict(NEW_DEVICE, device_name=name, host=host, ports=ports, about=about or "",
-                   username=username or "anonymous", password=password or "anonymous@")
+                   username=username or ("" if protocol != "ftp" else "anonymous"),
+                   password=password or ("" if protocol != "ftp" else "anonymous@"))
+        if protocol != "ftp":
+            cfg["protocol"] = protocol
+        if protocol == "smb":
+            cfg["share"] = share.strip().strip("/")
+        if protocol == "folder":
+            cfg["folder"] = folder
         folder = self.main.parent / "devices"
         folder.mkdir(exist_ok=True)
         f = folder / (re.sub(r"[^A-Za-z0-9_-]", "_", name) + ".json")

@@ -987,29 +987,47 @@ def t_check_address(st, emit, a):
     return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
 
 
-@tool("add_device",
-      "Save a new device (it then gets its own picture on the home screen). Logs in to its FTP server first to check "
-      "it works. Only changes settings on the Mac.",
-      {"name": dict(S, description="Short name like GD2"), "host": S,
-       "ports": {"type": "array", "items": I, "description": "FTP ports, e.g. [21] or [8080]"},
-       "username": S, "password": S, "about": dict(S, description="Optional: what the device is")}, ["name", "host"])
-def t_add_device(st, emit, a):
-    ports = a.get("ports") or [21, 5000]
+def test_device(a, timeout=8):
+    """A temporary device from the add form/tool, logged in once to check it works. Raises SystemExit on failure."""
+    proto = (a.get("protocol") or "ftp").lower()
+    ports = a.get("ports") or devices.DEFAULT_PORTS.get(proto, [21, 5000])
     test = dict(devices.NEW_DEVICE, device_name=a.get("name") or "device", host=(a.get("host") or "").strip(),
-                ports=ports if isinstance(ports, list) else [ports], username=a.get("username") or "anonymous",
-                password=a.get("password") or "anonymous@", timeout_seconds=6)
+                ports=ports if isinstance(ports, list) else [ports], timeout_seconds=timeout, protocol=proto,
+                username=a.get("username") or ("anonymous" if proto == "ftp" else ""),
+                password=a.get("password") or ("anonymous@" if proto == "ftp" else ""),
+                share=(a.get("share") or "").strip(), folder=os.path.expanduser((a.get("folder") or "").strip()))
+    if proto == "folder":
+        test["host"], test["ports"] = "this Mac", []
     dev = core.GD1(test)
+    dev.connect(quiet=True)
+    welcome = dev.ftp.getwelcome() if dev.ftp else ""
+    dev.close()
+    return test, welcome
+
+
+@tool("add_device",
+      "Save a new device (it then gets its own picture on the home screen). Logs in first to check it works. "
+      "protocol: ftp (default), sftp (SSH; also lets Patchbay run commands on it), smb (Windows/Mac file sharing; "
+      "needs share, the shared folder's name), or folder (a folder already on this Mac, like /Volumes/Media). Only "
+      "changes settings on the Mac.",
+      {"name": dict(S, description="Short name like GD2"), "host": S,
+       "protocol": {"type": "string", "enum": ["ftp", "sftp", "smb", "folder"]},
+       "ports": {"type": "array", "items": I, "description": "e.g. [21] for FTP, [22] for SFTP, [445] for SMB"},
+       "username": S, "password": S, "share": dict(S, description="SMB only: the shared folder's name"),
+       "folder": dict(S, description="folder only: the path on this Mac"),
+       "about": dict(S, description="Optional: what the device is")}, ["name"])
+def t_add_device(st, emit, a):
     try:
-        dev.connect(quiet=True)
-        dev.close()
+        test, welcome = test_device(a)
     except SystemExit as e:
-        raise ToolError("Couldn't log in to an FTP server there, so I didn't save it: %s" % e.code)
+        raise ToolError("Couldn't connect, so I didn't save it: %s" % e.code)
     try:
-        f = APP.registry.add(a.get("name"), a.get("host"), test["ports"], a.get("username"), a.get("password"),
-                             a.get("about"))
+        f = APP.registry.add(a.get("name"), test["host"], test["ports"], a.get("username"), a.get("password"),
+                             a.get("about"), test["protocol"], test.get("share"), test.get("folder"))
     except devices.DeviceError as e:
         raise ToolError(str(e))
-    return "Saved %s (settings in %s). It's on the home screen now; open it there to work on it." % (a.get("name"), f.name)
+    return "Saved %s (settings in %s, connected with %s). It's on the home screen now; open it there to work on it." % (
+        a.get("name"), f.name, welcome or test["protocol"].upper())
 
 
 @tool("identify_firmware",
@@ -1352,6 +1370,57 @@ def t_command(st, emit, a):
                        extra_fields={"project": pr["name"], "command": cmd})
 
 
+@tool("propose_device_command",
+      "Suggest running one command ON THE DEVICE itself over SSH (only for devices added with SFTP/SSH), e.g. "
+      "restarting an app or service, checking disk space (df -h), reading a log, listing processes. Does NOT run: "
+      "shows the exact command on a card; the user types the device name to run it. Use read-only commands when "
+      "they're enough.",
+      {"command": S, "reason": dict(S, description="One short sentence on why")}, ["command"])
+def t_device_command(st, emit, a):
+    cfg = st.cfg()
+    if cfg.get("protocol") != "sftp":
+        raise ToolError("%s is reached over %s, which can't run commands. Only devices added with SFTP/SSH can."
+                        % (cfg["device_name"], cfg.get("protocol", "ftp").upper()))
+    cmd = (a.get("command") or "").strip()
+    if not cmd or len(cmd) > 2000:
+        raise ToolError("Give one command to run.")
+    pid = uuid.uuid4().hex[:8]
+    st.pending[pid] = {"kind": "device_command", "remote": cfg["device_name"], "source": "", "command": cmd,
+                       "note": a.get("reason") or "", "needs_typing": True}
+    emit({"type": "confirm", "id": pid, "title": "Run a command on %s: %s" % (cfg["device_name"], a.get("reason") or cmd[:60]),
+          "remote": cfg["device_name"], "diff": cmd, "on_mac": True, "kind": "device_command", "typing": True,
+          "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
+    return ("A confirmation card is now showing. Nothing has run yet. The user must type the device name and press the "
+            "button. Tell them what the command does.")
+
+
+def run_device_command(st, cfg, p, emit):
+    emit({"type": "status", "text": "Running on %s: %s" % (cfg["device_name"], p["command"][:80])})
+    dev = core.GD1(cfg)
+    try:
+        code, out = dev.run_command(p["command"], timeout=int(cfg.get("command_timeout", 120)))
+    except SystemExit as e:
+        code, out = -1, "Couldn't connect: %s" % e.code
+    except (ftplib.Error, OSError) as e:
+        code, out = -1, str(e)
+    finally:
+        dev.close()
+    result = "Ran on %s (exit code %s)." % (cfg["device_name"], code)
+    show_output(emit, result, code, out, p["command"])
+    entry = {"time": core.now_stamp(), "action": "command", "remote": p["command"], "note": p.get("note") or "",
+             "exit_code": code}
+    try:
+        hist_file = core.data_dir(cfg) / "commands.json"
+        hist = json.loads(hist_file.read_text()) if hist_file.exists() else []
+        hist.append(entry)
+        hist_file.write_text(json.dumps(hist[-500:], indent=2))
+    except (OSError, ValueError):
+        pass
+    st.messages.append({"role": "user", "content": "[I confirmed the command. %s Output (end):\n%s]"
+                                                   % (result, output_tail(out)[-3000:])})
+    chat_turn(st, None, emit)
+
+
 @tool("propose_install_packages",
       "Install or update build packages on the Mac: devkitPro packages (switch-dev, switch-zlib, 3ds-dev...; installs "
       "devkitPro itself first if it's missing) or Homebrew packages (cmake, pkg-config...). Shows a card; after the "
@@ -1510,9 +1579,11 @@ def h_check(st, emit, a):
     return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
 
 
-@home_tool("add_device", "Save a new device after checking its FTP server answers. It then gets a picture on the "
-           "home screen.", {"name": dict(S, description="Short name like GD2"), "host": S,
-           "ports": {"type": "array", "items": I}, "username": S, "password": S, "about": S}, ["name", "host"])
+@home_tool("add_device", "Save a new device after checking it answers (FTP, SFTP/SSH, SMB file sharing, or a folder "
+           "on this Mac). It then gets a picture on the home screen.", {"name": dict(S, description="Short name like GD2"),
+           "host": S, "protocol": {"type": "string", "enum": ["ftp", "sftp", "smb", "folder"]},
+           "ports": {"type": "array", "items": I}, "username": S, "password": S, "share": S, "folder": S, "about": S},
+           ["name"])
 def h_add(st, emit, a):
     result = HANDLERS["add_device"](st, emit, a)
     emit({"type": "devices_changed"})
@@ -1611,6 +1682,9 @@ change_history, test_connection) never change the device. Use them freely.
 - You can NOT write to the device yourself. To change a file, call propose_restore, propose_edit or propose_undo. \
 That only shows the user a card; the user decides. Never say a change is done until a message tells you it was \
 confirmed and succeeded.
+- If the device is reached over SFTP/SSH, you can also suggest running a command on it with propose_device_command \
+(restart an app or service, check disk space, read a log). The user types the device name on the card to run it. \
+Prefer read-only commands; explain what a command does first. Other devices (FTP, SMB, folder) can't run commands.
 - Before proposing an edit, read the file. Prefer small find/replace edits. Keep the file's style.
 - Fixes that stop the damage for good usually mean changing how the program saves: write to a temporary file, \
 flush it, then rename it over the real one; use a SQLite journal (WAL); keep a backup copy.
@@ -1842,7 +1916,8 @@ def claude_system(system):
 # Steps that move a job forward (as opposed to only reading).
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
-                  "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper"}
+                  "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
+                  "propose_device_command"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -2146,9 +2221,11 @@ def do_confirm(st, pid, typed, emit, enable_writes=False):
     if getattr(st, "home", False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
     if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages",
-                     "ask_claude"):
+                     "ask_claude", "device_command"):
         if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
-            raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
+            raise ToolError("%s needs you to type %s exactly." % (
+                "Running a command on the device" if p["kind"] == "device_command" else "Turning writing on",
+                cfg["device_name"]))
         del st.pending[pid]
         return confirm_on_mac(st, cfg, p, emit, typed)
     if typed.strip() != cfg["device_name"]:
@@ -2264,6 +2341,9 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
         st.messages.append({"role": "user", "content": "[I sent the question to Claude. Its answer, which you should "
                                                        "follow now:\n%s]" % answer})
         chat_turn(st, None, emit)
+        return
+    if p["kind"] == "device_command":
+        run_device_command(st, cfg, p, emit)
         return
     if p["kind"] == "settings":
         try:
@@ -3022,25 +3102,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def add_device(self, data):
+        proto = (data.get("protocol") or "ftp").lower()
         try:
-            ports = [int(p) for p in re.split(r"[,\s]+", str(data.get("ports") or "21, 5000").strip()) if p]
+            ports = [int(p) for p in re.split(r"[,\s]+", str(data.get("ports") or "").strip()) if p] or \
+                devices.DEFAULT_PORTS.get(proto, [21, 5000])
         except ValueError:
             raise devices.DeviceError("Ports should be numbers like 21, 5000.")
+        args = dict(data, ports=ports, protocol=proto)
+        if proto != "folder" and not (data.get("host") or "").strip():
+            raise devices.DeviceError("Type the device's IP address.")
+        test = None
         if not data.get("save_anyway"):
-            test = dict(devices.NEW_DEVICE, device_name=data.get("name") or "device", host=(data.get("host") or "").strip(),
-                        ports=ports, username=data.get("username") or "anonymous",
-                        password=data.get("password") or "anonymous@", timeout_seconds=6)
-            if not test["host"]:
-                raise devices.DeviceError("Type the device's IP address.")
-            dev = core.GD1(test)
             try:
-                dev.connect(quiet=True)
-                dev.close()
+                test, _ = test_device(args, timeout=8)
             except SystemExit as e:
-                self.json({"error": "I couldn't log in to it: %s" % e.code, "can_save_anyway": True}, 400)
+                self.json({"error": "I couldn't connect to it: %s" % e.code, "can_save_anyway": True}, 400)
                 return
-        f = APP.registry.add(data.get("name"), data.get("host"), ports, data.get("username"), data.get("password"),
-                             data.get("about"))
+        f = APP.registry.add(data.get("name"), (test or args).get("host") or data.get("host"),
+                             (test or {}).get("ports", ports), data.get("username"), data.get("password"),
+                             data.get("about"), proto, data.get("share"), data.get("folder"))
 
         def look():   # name its firmware in the background, so the picture shows it soon
             try:

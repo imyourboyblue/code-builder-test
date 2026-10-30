@@ -316,7 +316,7 @@ async function loadHome(force){
     `<div class="tile add" id="addtile"><div class="pic">+</div><div class="name">Add a device</div><div class="sub">by its IP address</div></div>`;
   if(!on.length)$('online').insertAdjacentHTML('afterbegin','<div class="empty" style="grid-column:1/-1">None of your devices answered just now. Check they\'re switched on, then press Check again.</div>');
   $('offline').innerHTML=off.map(x=>tile(x,false)).join('');$('offh').hidden=!off.length;
-  $('addtile').onclick=addDevice;
+  $('addtile').onclick=()=>addDevice();
   document.querySelectorAll('.idbtn').forEach(b=>b.onclick=async e=>{e.preventDefault();e.stopPropagation();
     b.disabled=true;b.textContent='Looking…';
     try{const j=await postJSON('/api/identify',{device:b.dataset.name});b.replaceWith(document.createTextNode(j.firmware||'Not sure: ask in the chat'))}
@@ -352,6 +352,11 @@ async function drawScan(){let j;try{j=await getJSON('/api/netscan')}catch(e){ret
     $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
   if(j.error){$('foundwhen').textContent='';$('found').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
   scanData=j;renderFound()}
+function addWay(d){const p=d.ports||[];
+  if(d.ftp_port)return {protocol:'ftp',label:'FTP',ports:String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21')};
+  if(p.includes(22))return {protocol:'sftp',label:'SFTP',ports:'22'};
+  if(p.includes(445))return {protocol:'smb',label:'file sharing',ports:'445'};
+  return null}
 function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
   $('foundwhen').textContent=j.finished?'looked '+ago(j.finished).replace(/^seen /,''):'';
   const open=new Set([...document.querySelectorAll('#found details[open]')].map(x=>x.dataset.ip));
@@ -364,10 +369,10 @@ function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
        (mk?'<div style="font-size:13.5px">Made by: '+esc(mk)+'</div>':d.vendor?'<div style="font-size:13.5px">Uses a private Wi-Fi address, so the maker is hidden (usually a phone, tablet or laptop).</div>':''))+
       '<div style="font-size:13.5px">'+(d.port_names.length?'Open: '+esc(d.port_names.join(', ')):'No open doors Patchbay knows yet')+'</div>'+
       (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
-      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!sv?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(!sv&&addWay(d)?'<button class="primary ns-add" data-i="'+i+'">Add as a device ('+addWay(d).label+')</button>':'')+
       '<button class="ns-ask" data-i="'+i+'">Help me see its files</button><button class="ns-sec" data-i="'+i+'">🛡 Security check</button></div></details>'}).join('');
-  document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
-    $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
+  document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i],w=addWay(d);
+    addDevice({protocol:w.protocol,host:d.ip,ports:w.ports,name:(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)})});
   document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];if(busy)return;
     const q='Help me connect Patchbay to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+' so I can look at its files. Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'. Find the documented way for Patchbay to see its files (FTP, SFTP/SSH, file sharing, or a developer mode or debug bridge) and walk me through turning it on. If this kind of device has no way to see its files, say so plainly and tell me what it does allow. No screen mirroring or casting steps.';
     add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})});
@@ -420,22 +425,39 @@ $('picfile').onchange=async()=>{const f=$('picfile').files[0];if(!f)return;
     await postJSON('/api/portrait',{device:picFor,data:c.toDataURL('image/jpeg',0.88)});loadHome(false)}
   catch(e){alert('Couldn\'t use that picture: '+e.message)}};
 
-function addDevice(){
+function addDevice(pre){pre=pre||{};
   modal(`<h3>Add a device</h3>
-   <div class="msgline">The Mac Studio will try to log in to its FTP server, then remember it.</div>
+   <label>How to reach its files<select id="a-proto">
+     <option value="ftp">FTP (homebrew consoles, many small devices)</option>
+     <option value="sftp">SFTP / SSH (Linux, Raspberry Pi, Macs, NAS; can also run commands)</option>
+     <option value="smb">SMB file sharing (Windows PCs, NAS, shared folders)</option>
+     <option value="folder">A folder on this Mac (a share you already connected in Finder)</option></select></label>
+   <div class="msgline" id="a-help"></div>
    <label>Name (short, like GD2)<input id="a-name" autocomplete="off"></label>
-   <label>IP address<input id="a-host" placeholder="192.168.1.60" autocomplete="off"></label>
-   <label>FTP ports to try, in order<input id="a-ports" value="21, 5000"></label>
-   <label>FTP username (leave empty if it doesn't need one)<input id="a-user" autocomplete="off"></label>
-   <label>FTP password (leave empty if it doesn't need one)<input id="a-pass" type="password" autocomplete="new-password"></label>
+   <label id="a-hostl">IP address<input id="a-host" placeholder="192.168.1.60" autocomplete="off"></label>
+   <label id="a-portsl">Ports to try, in order<input id="a-ports" value="21, 5000"></label>
+   <label id="a-sharel" hidden>Shared folder name (the share), like Public or Media<input id="a-share" autocomplete="off"></label>
+   <label id="a-folderl" hidden>Folder on this Mac<input id="a-folder" placeholder="/Volumes/Media" autocomplete="off"></label>
+   <label id="a-userl">Username (leave empty if it doesn't need one)<input id="a-user" autocomplete="off"></label>
+   <label id="a-passl">Password (leave empty if it doesn't need one)<input id="a-pass" type="password" autocomplete="new-password"></label>
    <div class="msgline" id="a-msg"></div>
    <div class="row"><button class="primary" id="a-go">Connect and save</button><button id="a-any" hidden>Save it anyway</button>
    <button id="a-no">Cancel</button></div>`);
+  const HELP={ftp:'The Mac Studio logs in to its FTP server, then remembers it.',
+    sftp:'Uses your login on the device (or the SSH keys already on this Mac if you leave the password empty). The first time, Patchbay remembers the device\'s identity.',
+    smb:'Connects the shared folder like Finder\'s "Connect to Server". Leave the username empty for guest access.',
+    folder:'Any folder on this Mac, for example a share you connected in Finder (it shows up under /Volumes).'};
+  const PORTS={ftp:'21, 5000',sftp:'22',smb:'445',folder:''};
+  const pr=$('a-proto'),sync=()=>{const v=pr.value;$('a-help').textContent=HELP[v];$('a-ports').value=pre.ports&&pre.protocol===v?pre.ports:PORTS[v];
+    $('a-hostl').hidden=$('a-portsl').hidden=v==='folder';$('a-sharel').hidden=v!=='smb';$('a-folderl').hidden=v!=='folder';
+    $('a-userl').hidden=$('a-passl').hidden=v==='folder'};
+  pr.onchange=sync;pr.value=pre.protocol||'ftp';sync();
+  if(pre.host)$('a-host').value=pre.host;if(pre.name)$('a-name').value=pre.name;
   $('a-name').focus();$('a-no').onclick=closeModal;
   const go=async anyway=>{const msg=$('a-msg');msg.className='msgline';msg.textContent=anyway?'Saving...':'Connecting... (this can take up to a minute if it doesn\'t answer)';
     $('a-go').disabled=true;
-    try{await postJSON('/api/devices/add',{name:$('a-name').value,host:$('a-host').value,ports:$('a-ports').value,
-      username:$('a-user').value,password:$('a-pass').value,save_anyway:anyway});closeModal();loadHome(true)}
+    try{await postJSON('/api/devices/add',{name:$('a-name').value,host:$('a-host').value,ports:$('a-ports').value,protocol:pr.value,
+      share:$('a-share').value,folder:$('a-folder').value,username:$('a-user').value,password:$('a-pass').value,save_anyway:anyway});closeModal();loadHome(true)}
     catch(e){msg.className='msgline bad';msg.textContent=e.message;$('a-any').hidden=!(e.data&&e.data.can_save_anyway)}
     $('a-go').disabled=false};
   $('a-go').onclick=()=>go(false);$('a-any').onclick=()=>go(true);
@@ -548,15 +570,16 @@ function card(ev,closed){
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
-  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude';
+  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude',dcmd=ev.kind==='device_command';
+  if(dcmd)ev.typing=true;
   const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
   if(plan)return planCard(ev,closed);
-  const label=ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const label=dcmd?'Run it on '+ev.device:ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
-    '<div>'+(ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+    '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by Patchbay, so read it first.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}

@@ -85,6 +85,22 @@ Open **🩺 Setup**. Under **Updates** it says whether a newer Patchbay is on Gi
 **Update and restart**. (The Setup button says "update ready" when there is one.) Your settings, devices, backups and
 chats aren't touched. If you edited a Patchbay file by hand, it tells you which one and doesn't update.
 
+
+### SFTP, SSH, file sharing (SMB) and folders
+
+Besides FTP, **Add a device** can reach a device's files with:
+
+- **SFTP / SSH**: Linux boxes, a Raspberry Pi, Macs, most NAS boxes. Uses your login on the device, or the SSH keys
+  already on this Mac if you leave the password empty. The first time, Patchbay remembers the device's identity (in
+  data-cache/ssh_known_hosts) and warns you if it ever changes. SSH devices can also run commands: the chat suggests
+  one on a card, and it only runs after you type the device's name.
+- **SMB file sharing**: Windows PCs, NAS boxes, shared folders. Give the shared folder's name (the share); Patchbay
+  connects it like Finder's "Connect to Server".
+- **A folder on this Mac**: any folder, for example a share you already connected in Finder (under /Volumes).
+
+Files, scans, backups, edits with undo and the rest work the same whichever way a device is reached. In "Found on
+your network", **Add as a device** picks the right way for you.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.

@@ -106,7 +106,10 @@ def load_config(path):
         except ValueError:
             pass
     cfg.setdefault("device_name", "GD1")
-    cfg.setdefault("ports", [21, 5000])
+    cfg.setdefault("protocol", "ftp")
+    if cfg["protocol"] not in ("ftp", "sftp", "smb", "folder"):
+        sys.exit("%s: \"protocol\" must be ftp, sftp, smb or folder." % path)
+    cfg.setdefault("ports", {"sftp": [22], "smb": [445], "folder": []}.get(cfg["protocol"], [21, 5000]))
     cfg.setdefault("username", "anonymous")
     cfg.setdefault("password", "anonymous@")
     cfg.setdefault("passive_mode", True)
@@ -120,6 +123,8 @@ def load_config(path):
     cfg.setdefault("ollama_url", "http://localhost:11434")
     cfg.setdefault("ollama_model", "qwen3.6:35b-a3b")
     cfg.setdefault("allow_writes", False)
+    if cfg["protocol"] == "folder":
+        cfg.setdefault("host", "this Mac")
     if "host" not in cfg or not cfg["host"]:
         sys.exit("config.json needs GD1's IP address under \"host\".")
     return cfg
@@ -176,6 +181,8 @@ class GD1:
         self.port = None
 
     def connect(self, quiet=False):
+        if self.cfg.get("protocol", "ftp") != "ftp":
+            return self._connect_other(quiet)
         last_err = None
         for port in self.cfg["ports"]:
             for attempt in range(3):
@@ -196,6 +203,36 @@ class GD1:
                     time.sleep(1.5 * (attempt + 1))
         raise SystemExit("Couldn't connect to %s at %s on ports %s. Last error: %s"
                          % (self.cfg["device_name"], self.cfg["host"], self.cfg["ports"], last_err))
+
+    def _connect_other(self, quiet):
+        """SFTP, SMB or a folder (see transports.py): same commands as FTP, so everything else works unchanged."""
+        import transports
+        last_err = None
+        for port in self.cfg["ports"] or [0]:
+            for attempt in range(2):
+                try:
+                    client = transports.open_client(self.cfg, port)
+                    self.ftp, self.port = client, port or None
+                    if not quiet:
+                        say("Connected to %s (%s)." % (self.cfg["device_name"], client.getwelcome()))
+                    return client
+                except ftplib.error_perm as e:
+                    raise SystemExit("Couldn't connect to %s: %s" % (self.cfg["device_name"], str(e)[4:] or e))
+                except (OSError, EOFError) as e:
+                    last_err = e
+                    if isinstance(e, ConnectionRefusedError):
+                        break
+                    time.sleep(1.5 * (attempt + 1))
+        raise SystemExit("Couldn't connect to %s at %s with %s. Last error: %s"
+                         % (self.cfg["device_name"], self.cfg["host"], self.cfg["protocol"].upper(), last_err))
+
+    def run_command(self, command, timeout=120):
+        """Run a command on an SSH device. Returns (exit code, output)."""
+        if self.cfg.get("protocol") != "sftp":
+            raise ftplib.error_perm("502 Commands can only be run on devices reached over SSH/SFTP.")
+        if self.ftp is None:
+            self.connect(quiet=True)
+        return self.ftp.run_command(command, timeout)
 
     def call(self, fn_name, *args, **kwargs):
         """Run an FTP command, reconnecting once if the connection dropped."""
