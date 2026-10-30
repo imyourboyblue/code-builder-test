@@ -175,15 +175,15 @@ def build_env():
     return env
 
 
-def run_build(pr, emit):
-    """Run the project's build command in its folder, showing the output live."""
-    root = folder_of(pr)
+def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT):
+    """Run one command in a folder on the Mac, showing its output live. Returns (exit code, output)."""
     shell = os.environ.get("SHELL") or "/bin/zsh"
     if not Path(shell).exists():
         shell = "/bin/sh"
     started = time.time()
-    proc = subprocess.Popen([shell, "-lc", pr["build"]], cwd=str(root), env=build_env(), stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, errors="replace")
+    # No keyboard input: a command that asks for a password (like sudo) stops instead of waiting forever.
+    proc = subprocess.Popen([shell, "-lc", command], cwd=str(cwd), env=build_env(), stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     lines = []
     try:
         for line in proc.stdout:
@@ -192,15 +192,85 @@ def run_build(pr, emit):
             del lines[:-400]
             if line.strip():
                 emit({"type": "progress", "text": line[:300]})
-            if time.time() - started > BUILD_TIMEOUT:
+            if time.time() - started > timeout:
                 proc.kill()
-                lines.append("(stopped: the build took longer than an hour)")
+                lines.append("(stopped: it took longer than %d minutes)" % (timeout // 60))
                 break
         code = proc.wait()
     finally:
         if proc.poll() is None:
             proc.kill()
-    out = None
+    return code, "\n".join(lines)
+
+
+def run_build(pr, emit):
+    """Run the project's build command in its folder."""
+    code, out = run_shell(folder_of(pr), pr["build"], emit)
+    built = None
     if pr.get("output"):
-        _, out = inside(pr, pr["output"])
-    return code, "\n".join(lines), out
+        _, built = inside(pr, pr["output"])
+    return code, out, built
+
+
+# ----------------------------------------------------------------- getting source code
+
+PROJECTS_HOME = Path("~/Patchbay-projects")
+GIT_URL = re.compile(r"^https://[A-Za-z0-9.-]+/[A-Za-z0-9._~/-]+?(\.git)?/?$")
+
+
+def clone_target(url, name=None):
+    if not GIT_URL.match(url or ""):
+        raise ProjectError("That doesn't look like a public git address (like https://github.com/owner/project).")
+    name = name or re.sub(r"\.git$", "", url.rstrip("/").split("/")[-1])
+    name = re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:40] or "project"
+    dest = Path(os.path.expanduser(str(PROJECTS_HOME))) / name
+    return name, dest
+
+
+def clone(url, dest, emit):
+    """Download a project's source code (with its submodules) into dest."""
+    if dest.exists() and any(dest.iterdir()):
+        raise ProjectError("%s already exists. Use that project, or pick another name." % dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    code, out = run_shell(dest.parent, "git clone --recurse-submodules %s %s" % (quote(url), quote(dest.name)), emit,
+                          timeout=30 * 60)
+    if code != 0:
+        raise ProjectError("Downloading failed:\n" + out[-2000:])
+    return out
+
+
+def quote(s):
+    return "'" + str(s).replace("'", "'\\''") + "'"
+
+
+# ----------------------------------------------------------------- the build tools (devkitPro)
+
+def toolchain_report():
+    """What's installed for building Switch homebrew. Only reads."""
+    lines = []
+    dkp = Path(build_env().get("DEVKITPRO") or "/opt/devkitpro")
+    if not dkp.is_dir():
+        return ("devkitPro is NOT installed on this Mac. It's needed to build Switch homebrew. The user installs it "
+                "from https://devkitpro.org/wiki/Getting_Started (the macOS installer package), then in Terminal: "
+                "sudo dkp-pacman -S switch-dev")
+    lines.append("devkitPro is installed at %s." % dkp)
+    pac = None
+    for cand in ("dkp-pacman", "/opt/devkitpro/pacman/bin/pacman"):
+        if shutil.which(cand) or Path(cand).exists():
+            pac = cand
+            break
+    if pac:
+        try:
+            out = subprocess.run([pac, "-Q"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL).stdout
+            wanted = [l for l in out.splitlines() if l.split(" ")[0] in
+                      ("libnx", "devkitA64", "switch-tools", "general-tools", "devkit-env", "switch-cmake",
+                       "switch-pkg-config", "deko3d") or l.startswith("switch-")]
+            lines.append("Installed packages (name version):\n" + "\n".join(wanted[:150]))
+        except (OSError, subprocess.SubprocessError) as e:
+            lines.append("Couldn't list the packages: %s" % e)
+    else:
+        lines.append("dkp-pacman wasn't found, so package versions are unknown.")
+    lines.append("To update everything, the user runs this in Terminal (it asks for the Mac password): "
+                 "sudo dkp-pacman -Syu   To add a library: sudo dkp-pacman -S <name>, e.g. switch-ffmpeg. "
+                 "Commands that need sudo can't run from the chat.")
+    return "\n".join(lines)

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Device agent</title>
+<title>Patchbay</title>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#e2e2dd;--me:#2f5bd3;--meink:#fff;
 --ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3}
@@ -32,7 +32,7 @@ a.tile:hover{border-color:var(--me);box-shadow:0 2px 10px rgba(0,0,0,.08)}
 .tile .pic{width:96px;height:96px;border-radius:50%;object-fit:cover;display:grid;place-items:center;font-size:32px;
 font-weight:700;color:#fff;position:relative}
 .tile .dot{position:absolute;right:4px;bottom:4px;width:18px;height:18px;border-radius:50%;border:3px solid var(--card)}
-.tile .name{font-weight:600}.tile .sub{font-size:12.5px;color:var(--mute)}
+.tile .name{font-weight:600}.tile .fw{color:var(--ink);font-size:12.5px}.tile .idbtn{font-size:12px;padding:2px 8px}.tile .sub{font-size:12.5px;color:var(--mute)}
 .tile.off{opacity:.55}.tile .picbtn{position:absolute;top:8px;right:8px;font-size:12px;padding:2px 8px;opacity:0}
 .tile:hover .picbtn{opacity:1}@media (hover:none){.tile .picbtn{opacity:1}}
 .tile.add{border-style:dashed;cursor:pointer;justify-content:center;color:var(--mute);min-height:180px}
@@ -117,7 +117,7 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 </style></head><body>
 <header>
-  <a href="#/"><h1>Devices</h1></a>
+  <a href="#/" title="All devices"><h1>Patchbay</h1></a>
   <span id="crumb"></span>
   <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a></nav>
   <span id="info"></span>
@@ -223,6 +223,10 @@ async function loadHome(force){
   if(!on.length)$('online').insertAdjacentHTML('afterbegin','<div class="empty" style="grid-column:1/-1">None of your devices answered just now. Check they\'re switched on, then press Check again.</div>');
   $('offline').innerHTML=off.map(x=>tile(x,false)).join('');$('offh').hidden=!off.length;
   $('addtile').onclick=addDevice;
+  document.querySelectorAll('.idbtn').forEach(b=>b.onclick=async e=>{e.preventDefault();e.stopPropagation();
+    b.disabled=true;b.textContent='Looking…';
+    try{const j=await postJSON('/api/identify',{device:b.dataset.name});b.replaceWith(document.createTextNode(j.firmware||'Not sure: ask in the chat'))}
+    catch(x){b.textContent='Couldn\'t tell';b.disabled=false}});
   document.querySelectorAll('.picbtn').forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();pickPicture(b.dataset.name)});
 }
 function tile(d,online){
@@ -231,6 +235,7 @@ function tile(d,online){
      `<img class="pic" src="/api/portrait?device=${enc(d.name)}&v=${d.portrait_version}" alt="">`:esc(initials(d.name))}
      <span class="dot" style="background:${online?'var(--ok)':'var(--mute)'}"></span></div>
     <div class="name">${esc(d.name)}</div><div class="sub">${esc(d.host)}</div>
+    <div class="sub fw">${d.firmware?esc(d.firmware):online?`<button class="idbtn" data-name="${esc(d.name)}">Identify firmware</button>`:''}</div>
     <div class="sub">${online?'On the network'+(d.writes_on?' · writing ON':''):esc(ago(d.last_seen))}</div>`;
   return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
 $('recheck').onclick=()=>loadHome(true);
@@ -283,12 +288,16 @@ function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
   if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
 async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
   $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
-  $('info').textContent=`${info.host} · AI: ${info.model} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
+  $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${info.model} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
   catch(e){$('info').textContent=e.message}}
 async function loadChat(){log.innerHTML='';
   try{const h=await getJSON('/api/history?device='+enc(cur));
-    if(!h.events.length)add('msg ai','Hi! I can check '+esc(cur)+' for crash damage, look through its folders, read and explain files, and suggest fixes. '+
-      'I never change anything on it unless you confirm on a card here. Try: <b>Check '+esc(cur)+' for crash damage</b>.');
+    if(!h.events.length){add('msg ai','Hi! I can check '+esc(cur)+' for crash damage, look through its folders, read and explain files, and suggest fixes. '+
+      'I can also update a homebrew program for newer firmware by rebuilding it from its source code. '+
+      'I never change anything unless you confirm on a card here.');
+      const st=add('row','');st.style.alignSelf='flex-start';
+      ['Check '+cur+' for crash damage','Update a homebrew app so it works with my firmware','What firmware is '+cur+' running?'].forEach(q=>{
+        const b=document.createElement('button');b.textContent=q;b.onclick=()=>{if(busy)return;st.remove();t.value=q;$('f').requestSubmit()};st.appendChild(b)})}
     for(const ev of h.events)show(ev,null,h.pending)}catch(e){add('msg err',esc(e.message))}}
 function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
   const keep=()=>{if(ctx)log.appendChild(ctx.status)};
@@ -325,16 +334,20 @@ function card(ev,closed){
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
-  const build=ev.title.startsWith('Build');
+  const build=/^(In folder|Run:)/.test(ev.diff||'');
+  const sets=ev.title.startsWith('Change settings');
+  const label=ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
-    '<div>'+(build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
+    '<div>'+(sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+      (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(build?'Command':'Exact change')+'</summary><pre>'+(build?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
-    '<div class="row"><button class="primary">'+(build?'Run the build':'Save the change')+'</button><button>Cancel</button></div>');
+    (ev.diff?'<details open><summary>'+(build?'Command':sets?'Changes':'Exact change')+'</summary><pre>'+(build||sets?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
-  const [ok,no]=row.querySelectorAll('button');
-  ok.onclick=async()=>{if(busy)return;close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:''})};
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 $('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if(!s||busy)return;

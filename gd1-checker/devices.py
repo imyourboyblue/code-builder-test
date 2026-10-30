@@ -113,7 +113,7 @@ class Registry:
             rows.append({"name": cfg["device_name"], "host": cfg["host"], "online": bool(st.get("online")),
                          "last_seen": seen.get("last_seen"), "writes_on": bool(cfg.get("allow_writes")),
                          "has_portrait": self.portrait_file(cfg) is not None,
-                         "portrait_version": seen.get("portrait_version", 0),
+                         "portrait_version": seen.get("portrait_version", 0), "firmware": seen.get("firmware"),
                          "settings_file": str(f.relative_to(core.HERE)) if f.is_relative_to(core.HERE) else str(f)})
         return rows
 
@@ -163,6 +163,12 @@ class Registry:
         self.status.pop(name, None)
         return f
 
+    def set_firmware(self, cfg, label):
+        self._remember(cfg, firmware=(label or "").strip()[:120] or None, firmware_checked=time.time())
+
+    def firmware(self, cfg):
+        return self._seen(cfg).get("firmware")
+
     # ---- pictures
 
     def portrait_file(self, cfg):
@@ -185,3 +191,127 @@ class Registry:
             (core.data_dir(cfg) / ("portrait." + old)).unlink(missing_ok=True)
         (core.data_dir(cfg) / ("portrait." + ext)).write_bytes(data)
         self._remember(cfg, portrait_version=int(time.time()))
+
+
+# ----------------------------------------------------------------- changing settings from the chat
+
+# Every setting the chat may change: name -> (kind, plain description). Shared ones live in config.json.
+SETTINGS = {
+    "host": ("text", "the device's IP address"),
+    "ports": ("ports", "FTP ports to try, in order"),
+    "username": ("text", "FTP username"),
+    "password": ("secret", "FTP password"),
+    "passive_mode": ("bool", "FTP passive mode"),
+    "timeout_seconds": ("int", "how long to wait for the device"),
+    "remote_folders": ("list", "folders that scans check"),
+    "include": ("list", "file patterns scans check"),
+    "exclude": ("list", "file patterns scans skip"),
+    "max_file_mb": ("int", "biggest file a scan copies, in MB"),
+    "max_files": ("int", "most files a scan copies"),
+    "allow_writes": ("bool", "whether anything may be written to the device"),
+    "about": ("text", "a sentence about the device for the AI"),
+    "backup_folder": ("text", "where full backups go"),
+    "backup_folders": ("list", "folders a full backup copies"),
+    "backup_exclude": ("list", "patterns a full backup skips"),
+    "ollama_model": ("text", "which AI model to use (shared)"),
+    "chat_context": ("int", "how much the AI remembers at once (shared)"),
+    "data_folder": ("text", "where scans and backups of changes are kept (shared)"),
+    "lan_access": ("bool", "let the laptop open the app (shared, takes effect after a restart)"),
+    "port": ("int", "the app's web port (shared, takes effect after a restart)"),
+}
+SHARED = {"ollama_model", "chat_context", "data_folder", "lan_access", "port", "ollama_url"}
+
+
+def coerce(key, value):
+    if key not in SETTINGS:
+        raise DeviceError("There's no setting called %s. Settings: %s" % (key, ", ".join(sorted(SETTINGS))))
+    kind = SETTINGS[key][0]
+    try:
+        if kind == "bool":
+            if isinstance(value, str):
+                v = value.strip().lower()
+                if v not in ("true", "false", "on", "off", "yes", "no", "1", "0"):
+                    raise ValueError
+                return v in ("true", "on", "yes", "1")
+            return bool(value)
+        if kind == "int":
+            v = int(value)
+            if v <= 0:
+                raise ValueError
+            return v
+        if kind == "ports":
+            items = value if isinstance(value, list) else re.split(r"[,\s]+", str(value).strip())
+            ports = [int(p) for p in items if str(p).strip()]
+            if not ports or not all(0 < p < 65536 for p in ports):
+                raise ValueError
+            return ports
+        if kind == "list":
+            items = value if isinstance(value, list) else [x for x in re.split(r"\s*,\s*", str(value).strip()) if x]
+            return [str(x) for x in items]
+        if kind == "name":
+            if not NAME_OK.match(str(value).strip()):
+                raise ValueError
+            return str(value).strip()
+        if key == "host" and not re.match(r"^[A-Za-z0-9.\-:\[\]]{1,255}$", str(value).strip()):
+            raise ValueError
+        return str(value)
+    except (ValueError, TypeError):
+        raise DeviceError("%s isn't a valid value for %s (%s)." % (value, key, SETTINGS[key][1]))
+
+
+def show(key, value):
+    return "(hidden)" if SETTINGS.get(key, ("",))[0] == "secret" and value else json.dumps(value)
+
+
+def plan_changes(registry, device_file, changes):
+    """Work out which file each change goes in. Returns [(file, key, old, new)]. Nothing is written."""
+    out = []
+    main = registry.main
+    for key, value in (changes or {}).items():
+        new = coerce(key, value)
+        f = main if key in SHARED else Path(device_file)
+        raw = json.loads(Path(f).read_text())
+        if key == "device_name" and any(c["device_name"].lower() == new.lower() and str(p) != str(device_file)
+                                        for p, c in registry.all()):
+            raise DeviceError("Another device is already called %s." % new)
+        if raw.get(key) != new:
+            out.append((str(f), key, raw.get(key), new))
+    if not out:
+        raise DeviceError("Those settings already have those values.")
+    return out
+
+
+def apply_changes(cfg, planned):
+    """Back up each settings file, then write the changes. Returns the backup folder."""
+    folder = core.unique_dir(core.data_dir(cfg) / "settings-backups", core.now_stamp())
+    by_file = {}
+    for f, key, old, new in planned:
+        by_file.setdefault(f, []).append((key, new))
+    for f, items in by_file.items():
+        p = Path(f)
+        (folder / p.name).write_bytes(p.read_bytes())
+        raw = json.loads(p.read_text())
+        for key, new in items:
+            raw[key] = new
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(raw, indent=2) + "\n")
+        tmp.replace(p)
+    return folder
+
+
+def probe(host, port):
+    """Is something answering at host:port, and what does it say? Read-only."""
+    if not port_open(host, port, timeout=3):
+        return "Nothing answered at %s port %s." % (host, port)
+    try:
+        with socket.create_connection((host, int(port)), timeout=3) as s:
+            s.settimeout(3)
+            try:
+                greet = s.recv(300).decode("latin-1", "replace").strip()
+            except socket.timeout:
+                greet = ""
+    except OSError:
+        greet = ""
+    kind = "an FTP server" if greet.startswith("220") else "an SSH server" if greet.startswith("SSH-") else \
+        "something (no greeting; maybe a web page)" if not greet else "something"
+    return "%s port %s is open and looks like %s. Greeting: %s" % (host, port, kind, greet[:200] or "(none)")

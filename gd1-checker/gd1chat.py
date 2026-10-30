@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Device agent: your devices, an AI chat and a file manager, in your web browser.
+Patchbay: your devices, an AI chat and a file manager, in your web browser.
 
-    python3 gd1chat.py           only this Mac can open it
-    python3 gd1chat.py --lan     your laptop can open it too (needs a password)
+    python3 patchbay.py           only this Mac can open it
+    python3 patchbay.py --lan     your laptop can open it too (needs a password)
 
 The home screen shows a picture for every device you've added that is on the
 network right now. Click one to chat with the AI about it ("check it for crash
@@ -49,6 +49,7 @@ from urllib.parse import parse_qs, quote, urlparse
 import gd1check as core
 import backup
 import devices
+import firmware
 import nro
 import projects
 import filemanager as fm
@@ -375,6 +376,7 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         pid = uuid.uuid4().hex[:8]
         st.pending[pid] = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
         emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "on_mac": True,
+              "typing": bool((extra_fields or {}).get("needs_typing")),
               "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
         return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must press Confirm. "
                 "Tell the user what it does and ask them to confirm it on the card.")
@@ -672,6 +674,174 @@ def t_install(st, emit, a):
                                                               pr["device_path"]))
 
 
+# ---- settings
+
+@tool("show_settings", "Show every setting for this device and the shared app settings (passwords hidden).")
+def t_show_settings(st, emit, a):
+    cfg = st.cfg()
+    rows = ["Settings for %s (file %s):" % (cfg["device_name"], Path(st.config_path).name)]
+    for k, (kind, what) in devices.SETTINGS.items():
+        rows.append("  %s = %s   (%s)" % (k, devices.show(k, cfg.get(k)), what))
+    return "\n".join(rows)
+
+
+@tool("propose_settings",
+      "Suggest changing one or more settings (see show_settings), e.g. {\"host\": \"192.168.50.203\", \"ports\": "
+      "[8080]}. Shared settings go in config.json, the rest in this device's settings file. Does NOT write: shows "
+      "a card with each old and new value. The settings file is backed up first.",
+      {"changes": {"type": "object", "description": "setting name -> new value"},
+       "reason": dict(S, description="One short sentence on why")}, ["changes"])
+def t_prop_settings(st, emit, a):
+    cfg = st.cfg()
+    changes = a.get("changes") or {}
+    if isinstance(changes, str):
+        try:
+            changes = json.loads(changes)
+        except ValueError:
+            raise ToolError("changes must be an object like {\"host\": \"192.168.1.60\"}.")
+    try:
+        planned = devices.plan_changes(APP.registry, st.config_path, changes)
+    except devices.DeviceError as e:
+        raise ToolError(str(e))
+    lines = "\n".join("%s:  %s  ->  %s   (in %s)" % (k, devices.show(k, old), devices.show(k, new), Path(f).name)
+                      for f, k, old, new in planned)
+    typing = any(k == "allow_writes" and new for f, k, old, new in planned)
+    return add_pending(st, emit, "settings", cfg, "settings", st.config_path, a.get("reason") or "",
+                       "Change settings for %s%s" % (cfg["device_name"], ": " + a["reason"] if a.get("reason") else ""),
+                       lines, on_mac=True, extra_fields={"planned": planned, "needs_typing": typing})
+
+
+@tool("check_address", "See whether anything answers at an IP address and port on the network, and what it says "
+      "(FTP, SSH, web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
+def t_check_address(st, emit, a):
+    return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
+
+
+@tool("add_device",
+      "Save a new device (it then gets its own picture on the home screen). Logs in to its FTP server first to check "
+      "it works. Only changes settings on the Mac.",
+      {"name": dict(S, description="Short name like GD2"), "host": S,
+       "ports": {"type": "array", "items": I, "description": "FTP ports, e.g. [21] or [8080]"},
+       "username": S, "password": S, "about": dict(S, description="Optional: what the device is")}, ["name", "host"])
+def t_add_device(st, emit, a):
+    ports = a.get("ports") or [21, 5000]
+    test = dict(devices.NEW_DEVICE, device_name=a.get("name") or "device", host=(a.get("host") or "").strip(),
+                ports=ports if isinstance(ports, list) else [ports], username=a.get("username") or "anonymous",
+                password=a.get("password") or "anonymous@", timeout_seconds=6)
+    dev = core.GD1(test)
+    try:
+        dev.connect(quiet=True)
+        dev.close()
+    except SystemExit as e:
+        raise ToolError("Couldn't log in to an FTP server there, so I didn't save it: %s" % e.code)
+    try:
+        f = APP.registry.add(a.get("name"), a.get("host"), test["ports"], a.get("username"), a.get("password"),
+                             a.get("about"))
+    except devices.DeviceError as e:
+        raise ToolError(str(e))
+    return "Saved %s (settings in %s). It's on the home screen now; open it there to work on it." % (a.get("name"), f.name)
+
+
+@tool("identify_firmware",
+      "Work out which firmware / operating system ANY device runs: reads its FTP greeting, version files (like "
+      "/etc/os-release or build.prop), folder names, and the greetings of its other services (SSH, web). Read-only. "
+      "Saves the best guess so it shows on the device's picture.")
+def t_identify(st, emit, a):
+    cfg = st.cfg()
+    emit({"type": "status", "text": "Looking for firmware clues on %s..." % cfg["device_name"]})
+    report, guess = firmware.identify(cfg)
+    if guess:
+        APP.registry.set_firmware(cfg, guess)
+    return clip(report)
+
+
+@tool("save_firmware_name",
+      "Save a short name for the device's firmware (e.g. 'FreeBSD 14.1-RELEASE' or 'Switch 19.0.1, Atmosphère "
+      "1.8.0') once you're sure, so it shows on the device's picture. Only edits notes on the Mac.",
+      {"name": S}, ["name"])
+def t_save_fw(st, emit, a):
+    APP.registry.set_firmware(st.cfg(), a.get("name"))
+    return "Saved. The device's picture now says: %s" % a.get("name")
+
+
+@tool("web_search",
+      "Search the web. ONLY for generic text such as a version string, a server name or an error message; never "
+      "include the user's file contents, code, names or addresses.", {"query": S}, ["query"])
+def t_search_web(st, emit, a):
+    q = (a.get("query") or "").strip()
+    if not q:
+        raise ToolError("Give something to search for.")
+    try:
+        return clip(firmware.web_search(q[:200]))
+    except (OSError, ValueError) as e:
+        raise ToolError("The search didn't work: %s" % e)
+
+
+@tool("device_firmware",
+      "Find out which firmware and custom firmware (Atmosphère, hekate) the device runs, and which homebrew is "
+      "installed in /switch. Best effort; read-only.")
+def t_firmware(st, emit, a):
+    return firmware.device_report(st.cfg())
+
+
+@tool("latest_release",
+      "Get the newest releases (version, date, release notes) of a public GitHub project, e.g. "
+      "Atmosphere-NX/Atmosphere, switchbrew/libnx, or the homebrew's own repository. General research only.",
+      {"repo": dict(S, description="owner/name, e.g. switchbrew/libnx")}, ["repo"])
+def t_latest(st, emit, a):
+    try:
+        return clip(firmware.latest_release(a.get("repo")))
+    except (OSError, ValueError) as e:
+        raise ToolError("Couldn't get the releases: %s" % e)
+
+
+@tool("check_build_tools",
+      "Check what's installed on the Mac for building Switch homebrew (devkitPro, libnx, devkitA64, portlibs) and "
+      "their versions. Read-only.")
+def t_tools(st, emit, a):
+    return projects.toolchain_report()
+
+
+@tool("propose_get_source",
+      "Suggest downloading a homebrew program's public source code (git clone with submodules) to the Mac, into "
+      "~/Patchbay-projects/<name>, and saving it as a project. Does NOT run: shows a card the user confirms.",
+      {"url": dict(S, description="Public git address, e.g. https://github.com/owner/project"),
+       "name": dict(S, description="Optional short project name"),
+       "build": dict(S, description="Build command, if known (default: make)"),
+       "output": dict(S, description="The built file, relative to the project folder, if known"),
+       "device_path": dict(S, description="Where the built file goes on the device, if known")}, ["url"])
+def t_get_source(st, emit, a):
+    cfg = st.cfg()
+    name, dest = pe(projects.clone_target, (a.get("url") or "").strip(), a.get("name"))
+    if dest.exists() and any(dest.iterdir()):
+        raise ToolError("%s already exists on the Mac. Use set_project with that folder instead." % dest)
+    return add_pending(st, emit, "get_source", cfg, name, dest, "",
+                       "Download the source code of %s" % name,
+                       "Run: git clone --recurse-submodules %s\nInto: %s" % (a["url"].strip(), dest), on_mac=True,
+                       extra_fields={"project": name, "url": a["url"].strip(), "build": a.get("build") or "make",
+                                     "output": a.get("output") or "", "device_path": a.get("device_path") or ""})
+
+
+@tool("propose_command",
+      "Suggest running one command in a project's folder on the Mac, e.g. a cmake setup step, 'git pull', 'git "
+      "submodule update --init --recursive', or 'make clean'. Does NOT run: shows the exact command on a card the "
+      "user confirms. Commands needing sudo can't run here; give those to the user to type in Terminal.",
+      {"project": S, "command": S, "reason": dict(S, description="One short sentence on why")}, ["project", "command"])
+def t_command(st, emit, a):
+    cfg, pr = st.cfg(), project(st, a.get("project"))
+    cmd = (a.get("command") or "").strip()
+    if not cmd:
+        raise ToolError("Give the command to run.")
+    if re.search(r"(^|[;&|]\s*)sudo\b", cmd):
+        raise ToolError("Commands with sudo need the Mac password, so they can't run from the chat. Ask the user to "
+                        "type it in Terminal.")
+    root = pe(projects.folder_of, pr)
+    return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
+                       "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
+                       "In folder: %s\nRun: %s" % (root, cmd), on_mac=True,
+                       extra_fields={"project": pr["name"], "command": cmd})
+
+
 @tool("read_web_page",
       "Read a public web page (documentation, changelogs, e.g. libnx release notes on GitHub) as plain text. Only for "
       "general research: never put the user's file names, code or device details in the address.",
@@ -680,7 +850,7 @@ def t_web(st, emit, a):
     url = (a.get("url") or "").strip()
     if not url.startswith("https://"):
         raise ToolError("Only https:// addresses.")
-    req = urllib.request.Request(url, headers={"User-Agent": "device-agent/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "patchbay/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read(3 * 1024 * 1024).decode(r.headers.get_content_charset() or "utf-8", "replace")
@@ -697,7 +867,7 @@ def t_web(st, emit, a):
 
 # ----------------------------------------------------------------- the AI
 
-SYSTEM = """You are the device assistant, running fully on the user's own Mac. You help the user find and fix \
+SYSTEM = """You are Patchbay, an assistant running fully on the user's own Mac. You help the user find and fix \
 files on their device %(device)s (%(host)s), %(about)s
 
 The user is not a programmer. Answer in short, plain sentences. Explain technical words when you use them.
@@ -724,6 +894,26 @@ and builds, and when it builds cleanly offer propose_install to put the new file
 usually built with devkitPro and libnx; firmware updates usually mean building with the newest libnx and fixing code \
 where its functions changed. read_web_page can fetch public release notes; never put the user's code or device \
 details into an address.
+- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
+Use show_settings, then propose_settings with exactly what they asked. For a new address: check_address first. If \
+it's a different device than this one, offer add_device; if they mean this device moved, propose_settings for \
+host/ports. After a change to host or ports, use test_connection.
+- To tell what firmware or operating system a device runs, use identify_firmware first. If its guess is vague, \
+look up the most specific clue with web_search (generic text only), then save_firmware_name with a short answer.
+- When the user asks to update a homebrew program for their firmware (like a newer Atmosphère), follow these \
+steps, telling the user briefly what you're doing at each one:
+  1. device_firmware to learn the firmware and Atmosphère versions (ask the user if it's unclear), and read_file \
+the program's .nro to see its current version.
+  2. latest_release for Atmosphere-NX/Atmosphere and switchbrew/libnx, and for the program's own repository, to \
+see what changed. Maybe a newer release of the program already supports the firmware: then say so first.
+  3. check_build_tools. If devkitPro or libnx is missing or old, give the user the exact Terminal command \
+(e.g. sudo dkp-pacman -Syu) and wait until they say it's done.
+  4. Get the source: list_projects, or propose_get_source with the program's public git address.
+  5. Read the project's build instructions (README, Makefile, CMakeLists.txt). Use propose_command for setup steps \
+(cmake configure, git submodule update) and set_project to save the right build command and output file.
+  6. propose_build. Read the errors; fix the code with propose_project_edit (libnx renames and changed functions \
+are the usual cause; look up the libnx changelog); build again until it builds cleanly.
+  7. propose_install (the device's current file is backed up first). Then ask the user to test it on the console.
 - If something fails, say what failed in one line and what to try next.
 
 Scanning settings: folders %(folders)s. Writing to the device is currently %(writes)s."""
@@ -807,9 +997,11 @@ def do_confirm(st, pid, typed, emit):
     p = st.pending.get(pid)
     if not p:
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
-    if p["kind"] in ("project_edit", "build"):
+    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings"):
+        if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
+            raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
         del st.pending[pid]
-        return confirm_on_mac(st, cfg, p, emit)
+        return confirm_on_mac(st, cfg, p, emit, typed)
     if typed.strip() != cfg["device_name"]:
         raise ToolError("You need to type %s exactly to confirm." % cfg["device_name"])
     del st.pending[pid]
@@ -828,8 +1020,48 @@ def do_confirm(st, pid, typed, emit):
                                                    % (p["kind"], p["remote"], result)})
 
 
-def confirm_on_mac(st, cfg, p, emit):
+def confirm_on_mac(st, cfg, p, emit, typed=""):
+    if p["kind"] == "settings":
+        try:
+            folder = devices.apply_changes(cfg, p["planned"])
+        except (OSError, ValueError) as e:
+            raise ToolError("Couldn't save the settings: %s" % e)
+        result = "Saved: %s. The old settings were backed up to %s." % (
+            ", ".join("%s = %s" % (k, devices.show(k, new)) for f, k, old, new in p["planned"]), folder)
+        if any(k in ("lan_access", "port") for f, k, o, n in p["planned"]):
+            result += " Restart the app for that to take effect."
+        APP.registry.status.clear()
+        emit({"type": "answer", "text": result})
+        st.messages.append({"role": "user", "content": "[I confirmed the settings change. %s]" % result})
+        return
+    if p["kind"] == "get_source":
+        emit({"type": "status", "text": "Downloading %s..." % p["project"]})
+        dest = Path(p["source"])
+        try:
+            projects.clone(p["url"], dest, emit)
+            pr = projects.make_project(p["project"], str(dest), p["build"], p["output"], p["device_path"])
+            projects.save(st.config_path, pr)
+        except projects.ProjectError as e:
+            result = str(e)
+        else:
+            result = "Downloaded %s to %s and saved it as project %s." % (p["url"], dest, pr["name"])
+        emit({"type": "answer", "text": result.splitlines()[0]})
+        st.messages.append({"role": "user", "content": "[I confirmed the download. Result: %s]" % result})
+        chat_turn(st, None, emit)
+        return
     pr = project(st, p["project"])
+    if p["kind"] == "command":
+        emit({"type": "status", "text": "Running %s..." % p["command"][:60]})
+        try:
+            code, out = projects.run_shell(projects.folder_of(pr), p["command"], emit)
+        except (OSError, projects.ProjectError) as e:
+            raise ToolError("Couldn't run it: %s" % e)
+        result = "The command %s (exit code %d)." % ("worked" if code == 0 else "failed", code)
+        emit({"type": "answer", "text": result})
+        st.messages.append({"role": "user", "content": "[I confirmed running: %s. %s Last part of its output:\n%s]"
+                                                       % (p["command"], result, out[-6000:])})
+        chat_turn(st, None, emit)
+        return
     if p["kind"] == "project_edit":
         try:
             bk = projects.write_file(cfg, pr, p["remote"], Path(p["source"]).read_text("utf-8"))
@@ -1029,6 +1261,7 @@ class Handler(BaseHTTPRequestHandler):
             cfg = st.cfg()
             self.json({"device": cfg["device_name"], "host": cfg["host"], "model": cfg["ollama_model"],
                        "writes_on": bool(cfg.get("allow_writes")), "folders": cfg["remote_folders"],
+                       "firmware": APP.registry.firmware(cfg),
                        "computer": APP.computer, "remote": not self.from_this_mac(),
                        "settings_file": str(Path(st.config_path).relative_to(core.HERE))
                        if Path(st.config_path).is_relative_to(core.HERE) else st.config_path})
@@ -1123,6 +1356,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/logout":
             APP.access.end_session(self.session_token())
             self.json({"ok": True}, extra=[("Set-Cookie", "%s=; Path=/; Max-Age=0" % webauth.COOKIE)])
+        elif path == "/api/identify":
+            cfg = APP.device(data.get("device")).cfg()
+            report, guess = firmware.identify(cfg)
+            if guess:
+                APP.registry.set_firmware(cfg, guess)
+            self.json({"firmware": guess, "report": report})
         elif path == "/api/devices/add":
             self.add_device(data)
         elif path == "/api/portrait":
@@ -1208,6 +1447,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
         f = APP.registry.add(data.get("name"), data.get("host"), ports, data.get("username"), data.get("password"),
                              data.get("about"))
+
+        def look():   # name its firmware in the background, so the picture shows it soon
+            try:
+                cfg = core.load_config(f)
+                guess = firmware.identify(cfg)[1]
+                if guess:
+                    APP.registry.set_firmware(cfg, guess)
+            except Exception:
+                pass
+        threading.Thread(target=look, daemon=True).start()
         self.json({"ok": True, "settings_file": str(f.relative_to(core.HERE))})
 
     def chat(self, path, data):
@@ -1312,7 +1561,7 @@ def main():
     if args.set_password:
         APP.access.ask_for_new_password()
         if not args.lan:
-            print("Now start the app with: python3 gd1chat.py --lan")
+            print("Now start the app with: python3 patchbay.py --lan")
             return
     try:
         ollama_url(main_cfg)
@@ -1320,15 +1569,15 @@ def main():
         sys.exit(str(e))
     if lan and not APP.access.has_password():
         if not sys.stdin.isatty():
-            sys.exit("Opening the app to your network needs a password. Run: python3 gd1chat.py --set-password")
+            sys.exit("Opening the app to your network needs a password. Run: python3 patchbay.py --set-password")
         APP.access.ask_for_new_password()
     try:
         server = make_server(lan, port)
     except OSError:
-        sys.exit("Port %d is already in use. Is the app already open? Or try: python3 gd1chat.py --port %d"
+        sys.exit("Port %d is already in use. Is the app already open? Or try: python3 patchbay.py --port %d"
                  % (port, port + 1))
     url = "http://127.0.0.1:%d" % port
-    print("The device agent is running. On this Mac, open: %s" % url)
+    print("Patchbay is running. On this Mac, open: %s" % url)
     if lan:
         addrs = lan_addresses()
         print("On your laptop (same Wi-Fi or network), open one of these and sign in with your password:")
@@ -1336,7 +1585,7 @@ def main():
             print("    http://%s:%d" % (a, port) if not a.startswith("http") else "    " + a)
         print("If the Mac asks whether Python may accept incoming network connections, click Allow.")
     else:
-        print("Only this Mac can open it. To use it from your laptop too, start it with: python3 gd1chat.py --lan")
+        print("Only this Mac can open it. To use it from your laptop too, start it with: python3 patchbay.py --lan")
     print("Leave this Terminal window open. Press Ctrl+C here to stop.")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

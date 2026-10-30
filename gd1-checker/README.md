@@ -1,6 +1,8 @@
-# GD1 checker
+# Patchbay
 
-This script finds files on GD1 that were damaged when an app froze partway through a save. It looks for:
+Patchbay is a local AI agent for the devices on your home network. It runs on your Mac Studio and you use it in a web browser, there or on your laptop. Start it with `python3 patchbay.py` (the old `python3 gd1chat.py` still works).
+
+It began as the GD1 checker, which finds files on GD1 that were damaged when an app froze partway through a save. It looks for:
 
 - files cut short (truncated)
 - broken headers (the start of the file is wrong)
@@ -33,12 +35,12 @@ Scanning only reads from GD1. Every scan copies GD1's files to a dated snapshot 
 
 There is nothing else to install. The script only uses parts of Python that come built in.
 
-## The app: your devices, chat and files (new)
+## The Patchbay app
 
 Start it on the Mac Studio, in Terminal, from inside the `gd1-checker` folder:
 
 ```
-python3 gd1chat.py
+python3 patchbay.py
 ```
 
 Your browser opens the **Devices** screen. Leave the Terminal window open while you use it. To stop, click on Terminal and press Ctrl+C.
@@ -79,6 +81,36 @@ An .nro's program code is compiled, so it can't be edited directly. To change wh
 5. When the build works, it offers to install the new .nro on the device. As always, you type the device's name to confirm, and the device's current file is backed up first.
 
 To build Switch homebrew, the Mac Studio needs devkitPro installed (from devkitpro.org). If `make` works in Terminal in your project folder, it works here too.
+
+### Update a homebrew app for your firmware (like Chiaki)
+
+In a device's chat, click **Update a homebrew app so it works with my firmware**, or just ask, for example "Update Chiaki so it works with my Atmosphère". The AI then works through these steps, telling you what it's doing:
+
+1. It reads which firmware and Atmosphère version the console runs, and the app's current version.
+2. It looks up the newest releases of Atmosphère, libnx and the app itself. If a newer release of the app already supports your firmware, it tells you first.
+3. It checks the build tools on the Mac Studio (devkitPro, libnx). If something is missing or old, it gives you one command to paste into Terminal, like `sudo dkp-pacman -Syu`. Commands that need your Mac password always go through you.
+4. It downloads the app's source code from GitHub into `~/Patchbay-projects/`. You click **Download it** on a card first.
+5. It runs the setup steps the project needs, like `cmake` or `git submodule update`. Each one is a card you click **Run it** on.
+6. It builds, reads the errors, fixes the code, and builds again until it works. Each code change is a card you click **Save the change** on.
+7. It installs the new .nro on the console. You type the device's name, and the old .nro is backed up first. Then test it on the console.
+
+Only general things (version numbers, library names, error messages) are looked up on the web. Your code and files are never sent anywhere.
+
+### What firmware is it running?
+
+Each device's picture shows its firmware or operating system once it's known, for example `FreeBSD 14.1-RELEASE` or `Switch 19.0.1, Atmosphère 1.8.0`. New devices are identified automatically. For others, click **Identify firmware** on the tile, or ask in the chat "What firmware is GD1 running?".
+
+It works on any device. It reads version files (like `/etc/os-release`, `freebsd-version` or Android's `build.prop`), the FTP server's greeting, folder names, and the greetings of the device's other services (SSH, web pages). It only reads. If that isn't enough, the AI searches the web for the most telling clue (only the clue, such as a version string) and saves the answer.
+
+### Change settings by asking
+
+You can change any setting in plain words, for example:
+- "Search 192.168.50.203 port 8080": it checks what answers there, then either adds it as a new device or points this device there.
+- "Only scan /data and /etc"
+- "Use the qwen3.8:27b model"
+- "Turn on writing for GD1"
+
+It shows a card with every old and new value. Click **Save settings**. The settings file is backed up first (in `~/GD1-checker-data/<device>/settings-backups/`). Turning on writing also needs you to type the device's name.
 
 ### Files
 
@@ -123,7 +155,7 @@ The Mac Studio does all the work (scanning, AI, copying). Your laptop only shows
 
 1. Choose a password for the laptop:
    ```
-   python3 gd1chat.py --set-password
+   python3 patchbay.py --set-password
    ```
    Type it twice. You won't see it as you type. (Run this again any time to change it. That also signs out every computer.)
 2. Stop the Mac Studio from sleeping, or the laptop loses it: open **System Settings > Energy** and turn on **Prevent automatic sleeping when the display is off**.
@@ -131,7 +163,7 @@ The Mac Studio does all the work (scanning, AI, copying). Your laptop only shows
 **On the Mac Studio, each time:**
 
 ```
-python3 gd1chat.py --lan
+python3 patchbay.py --lan
 ```
 
 Terminal prints the address for the laptop, like `http://Joshuas-Mac-Studio.local:8765`. If the Mac asks whether "python3" may accept incoming network connections, click **Allow**. (To always start it this way, add `"lan_access": true` to `config.json`.)
@@ -160,8 +192,8 @@ All commands are run from inside the `gd1-checker` folder.
 | Look through GD1's folders and pick one | `python3 gd1check.py browse` |
 | Check GD1's files for damage | `python3 gd1check.py scan` |
 | Have the AI explain the last scan | `python3 gd1check.py explain` |
-| Open the app (devices, chat, files) | `python3 gd1chat.py` |
-| Open the app so the laptop can use it too | `python3 gd1chat.py --lan` |
+| Open the app (devices, chat, files) | `python3 patchbay.py` |
+| Open the app so the laptop can use it too | `python3 patchbay.py --lan` |
 | Back up everything on GD1 | `python3 gd1check.py backup` |
 | Run any command for another device | add `--device GD2`, e.g. `python3 gd1check.py --device GD2 scan` |
 | Put a good copy of a file back | `python3 gd1check.py restore /path/on/gd1/file.db` |
@@ -223,4 +255,4 @@ Each extra device has the same settings in its own file in the `devices` folder.
 
 The checker was tested against a fake FTP server holding damaged files (truncated and wiped databases, cut-off JSON, null padding, empty files, leftover temp files) and found every one. It has since worked on the real GD1.
 
-The app was tested with two fake FTP devices and one switched-off device: device pictures and the online check, adding devices, the chat, and on the Files screen dragging both ways, dropping files in, uploads that replace a file, new folder, rename, move, deleting a folder and undoing that delete. Signing in from a second computer was tested too, including wrong passwords, the lockout and signing out. The .nro checks were tested on made-up .nro files damaged in different ways (cut off, wiped header, zeroed code, null-padded icon section), along with changing the name and icon, editing a project, building it, installing the result, and putting a damaged .nro back from a backup. Backups were tested with 1,500 files and a 30 MB file: stopping and resuming, linking unchanged files (three backups took the space of one), the copy matching the device exactly, and running from Terminal. It hasn't run on the real Mac Studio, laptop or GD1 yet.
+The app was tested with two fake FTP devices and one switched-off device: device pictures and the online check, adding devices, the chat, and on the Files screen dragging both ways, dropping files in, uploads that replace a file, new folder, rename, move, deleting a folder and undoing that delete. Signing in from a second computer was tested too, including wrong passwords, the lockout and signing out. The .nro checks were tested on made-up .nro files damaged in different ways (cut off, wiped header, zeroed code, null-padded icon section), along with changing the name and icon, editing a project, building it, installing the result, and putting a damaged .nro back from a backup. Firmware identification was tested on a fake FreeBSD device and a fake Switch SD card, and settings changes, downloading source code and running project commands were tested too. The web lookups couldn't be tested here (no internet in the test machine); they'll work on your Mac. Backups were tested with 1,500 files and a 30 MB file: stopping and resuming, linking unchanged files (three backups took the space of one), the copy matching the device exactly, and running from Terminal. It hasn't run on the real Mac Studio, laptop or GD1 yet.

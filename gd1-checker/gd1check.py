@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GD1 checker: finds files damaged by a crash during a save, over FTP.
+Patchbay checker (gd1check): finds files damaged by a crash during a save, over FTP.
 
 What it does
   test     Check that the Mac can reach GD1's FTP server.
@@ -902,7 +902,7 @@ def main(argv=None):
     u.add_argument("change", type=int, help="change number from 'history'")
     sub.add_parser("history", help="list restores and undos")
     bk = sub.add_parser("backup", help="copy everything on the device to your backup folder")
-    bk.add_argument("--to", help="backup folder on the Mac (default: backup_folder in the settings, or ~/Device-backups)")
+    bk.add_argument("--to", help="backup folder on the Mac (default: backup_folder in the settings, or ~/Patchbay-backups)")
     args = ap.parse_args(argv)
     if args.device:
         args.config = str(config_for_device(args.device, args.config))

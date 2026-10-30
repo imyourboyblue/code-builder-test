@@ -27,7 +27,7 @@ import gd1check as core
 
 MANIFEST = "_backup.json"
 MAX_FAILS_IN_A_ROW = 20
-DEFAULT_FOLDER = "~/Device-backups"
+DEFAULT_FOLDER = "~/Patchbay-backups"
 
 
 class BackupError(Exception):
@@ -44,7 +44,7 @@ def check_folder(path):
     p = Path(os.path.expanduser(path or "")).resolve()
     if not p.is_dir():
         raise BackupError("%s isn't a folder on the Mac (if it's a drive, is it plugged in?)." % p)
-    test = p / ".device-agent-write-test"
+    test = p / ".patchbay-write-test"
     try:
         test.write_text("ok")
         test.unlink()
