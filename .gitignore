@@ -1,13 +1,25 @@
 # Your own settings, passwords and data stay on your Mac
+patchbay/config.json
+patchbay/devices/
+patchbay/access.json
+patchbay/*.tmp
+patchbay/claude.json
+patchbay/claude-usage.json
+patchbay/claude-aliases.json
+patchbay/claude-sent/
+patchbay/data-cache/
+patchbay/gd1-data/
+# The same in the old folder name, until they've moved over
 gd1-checker/config.json
 gd1-checker/devices/
 gd1-checker/access.json
 gd1-checker/*.tmp
-__pycache__/
-*.pyc
-.DS_Store
 gd1-checker/claude.json
 gd1-checker/claude-usage.json
 gd1-checker/claude-aliases.json
 gd1-checker/claude-sent/
 gd1-checker/data-cache/
+gd1-checker/gd1-data/
+__pycache__/
+*.pyc
+.DS_Store

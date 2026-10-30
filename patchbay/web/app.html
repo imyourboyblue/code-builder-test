@@ -1,0 +1,1582 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PatchBay</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#e2e2dd;--me:#2f5bd3;--meink:#fff;
+--ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecece8;--mute:#9a9a93;--line:#33332f;
+--me:#4a74e8;--code:#2a2a27;--ok:#5cc184;--warn:#e0a24a;--bad:#ff7b72;--sel:#26324f;--drop:#7c9cf0}}
+/* ---- themes: pick one in 🩺 Setup. Each one only changes these colour and shape settings. */
+:root{--overlay:rgba(0,0,0,.4);--shadow:0 6px 24px rgba(0,0,0,.18);--radius:12px;--panel-blur:none;--glow:none;--bg-art:none;--head-font:inherit}
+html[data-theme=pirate]{color-scheme:dark;--bg:#0B132B;--card:#13213F;--ink:#E0E1DD;--mute:#A9B4C2;--line:#6B4F2A;
+--me:#D4AF37;--meink:#0B132B;--ok:#5FBF77;--warn:#E8A33D;--bad:#EF6B5E;--code:#0F1A33;--sel:#3A3220;--drop:#D4AF37;
+--overlay:rgba(3,6,16,.62);--shadow:0 8px 26px rgba(0,0,0,.45);--radius:10px;--head-font:Georgia,"Iowan Old Style","Palatino",serif;
+--bg-art:radial-gradient(ellipse at 50% -20%,rgba(212,175,55,.12),transparent 55%),linear-gradient(180deg,#0B132B 0%,#0B1A33 70%,#0A2238 100%)}
+html[data-theme=mac-tahoe]{color-scheme:light;--bg:#F6F6F6;--card:#FFFFFF;--ink:#1C1C1E;--mute:#6E6E73;--line:#E5E5EA;
+--me:#007AFF;--meink:#FFFFFF;--ok:#1E7B34;--warn:#B25000;--bad:#D70015;--code:#F2F2F7;--sel:#E1EEFF;--drop:#007AFF;
+--overlay:rgba(0,0,0,.22);--shadow:0 10px 30px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);--radius:14px}
+html[data-theme=dark-neon-glass]{color-scheme:dark;--bg:#0A0F1D;--card:rgba(30,41,59,.70);--ink:#E2E8F0;--mute:#94A3B8;
+--line:rgba(148,163,184,.20);--me:#00F5D4;--meink:#0A0F1D;--ok:#34D399;--warn:#FBBF24;--bad:#FB7185;--code:rgba(15,23,42,.72);
+--sel:rgba(123,44,191,.38);--drop:#00F5D4;--overlay:rgba(2,6,18,.6);--shadow:0 10px 34px rgba(0,0,0,.5);--radius:12px;
+--panel-blur:blur(16px) saturate(140%);--glow:0 0 0 1px rgba(0,245,212,.22),0 0 22px rgba(123,44,191,.22);
+--bg-art:radial-gradient(circle at 12% 8%,rgba(123,44,191,.35),transparent 42%),radial-gradient(circle at 88% 92%,rgba(0,245,212,.20),transparent 45%),linear-gradient(160deg,#0A0F1D,#0D1428 60%,#0A0F1D)}
+html[data-theme] body{background:var(--bg-art),var(--bg);background-attachment:fixed}
+html[data-theme=pirate] h1,html[data-theme=pirate] h2,html[data-theme=pirate] h3,html[data-theme=pirate] header b,html[data-theme=pirate] .hl-h{font-family:var(--head-font);letter-spacing:.2px}
+html[data-theme=pirate] header{border-bottom:2px solid var(--me)}
+html[data-theme=pirate] button.primary{background:linear-gradient(180deg,#E3C25A,#B8912A);border-color:#8A6A1E}
+html[data-theme=pirate] .tile,html[data-theme=pirate] .hl-card{box-shadow:inset 0 0 0 1px rgba(212,175,55,.08)}
+html[data-theme=mac-tahoe] button{border-radius:8px;box-shadow:0 .5px 1.5px rgba(0,0,0,.12)}
+html[data-theme=mac-tahoe] .tile,html[data-theme=mac-tahoe] .hl-card,html[data-theme=mac-tahoe] .card{box-shadow:var(--shadow);border-color:transparent}
+html[data-theme=mac-tahoe] .card{border-left:3px solid var(--warn)}
+html[data-theme=dark-neon-glass] .tile,html[data-theme=dark-neon-glass] .hl-card,html[data-theme=dark-neon-glass] .card,
+html[data-theme=dark-neon-glass] .modal .box,html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat,
+html[data-theme=dark-neon-glass] .msg.ai{-webkit-backdrop-filter:var(--panel-blur);backdrop-filter:var(--panel-blur)}
+html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat{background:rgba(10,15,29,.55)}
+html[data-theme=dark-neon-glass] .tile,html[data-theme=dark-neon-glass] .hl-card,html[data-theme=dark-neon-glass] .modal .box{box-shadow:var(--glow)}
+html[data-theme=dark-neon-glass] a.tile:hover{box-shadow:0 0 0 1px #00F5D4,0 0 26px rgba(0,245,212,.35)}
+html[data-theme=dark-neon-glass] button.primary{box-shadow:0 0 14px rgba(0,245,212,.45)}
+html[data-theme=dark-neon-glass] .modal .box{background:rgba(22,30,48,.86)}
+html[data-theme=dark-neon-glass] #chatlist,html[data-theme=dark-neon-glass] #ctx{background:#1E293B}
+@media (prefers-reduced-transparency:reduce){html[data-theme=dark-neon-glass]{--card:#1E293B;--panel-blur:none;--code:#0F172A}
+  html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat{background:#0F172A}html[data-theme=dark-neon-glass] .modal .box{background:#1E293B}}
+/* density: Compact squeezes spacing so more fits on screen */
+html[data-density=compact] body{font-size:14px;line-height:1.4}
+html[data-density=compact] button{padding:3px 9px;font-size:13px}
+html[data-density=compact] .tile{padding:12px 10px 10px}html[data-density=compact] .grid{gap:10px}
+html[data-density=compact] .msg{padding:7px 11px}html[data-density=compact] .card{padding:9px 11px}
+html[data-density=compact] #home h2{margin:12px 0 7px}html[data-density=compact] .hl-row{padding:7px 0}
+html[data-density=compact] header{padding:5px 12px}html[data-density=compact] #f{padding:8px 12px}
+html[data-density=compact] textarea{min-height:38px;padding:7px 10px}
+.theme-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:6px}
+.theme-pick button{text-align:left;padding:8px;border-radius:10px;display:flex;flex-direction:column;gap:6px}
+.theme-pick button.on{outline:2px solid var(--me);outline-offset:1px}
+.theme-pick .sw{height:34px;border-radius:7px;display:flex;overflow:hidden;border:1px solid rgba(128,128,128,.3)}.theme-pick .sw i{flex:1}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+display:flex;flex-direction:column}
+header{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0}header a{color:inherit;text-decoration:none}
+#info{color:var(--mute);font-size:13px;flex:1;min-width:0}
+.tabs{display:flex;gap:4px}.tabs a{padding:4px 12px;border-radius:8px;border:1px solid var(--line);color:var(--ink);text-decoration:none}
+.tabs a.on{background:var(--me);color:var(--meink);border-color:var(--me)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;
+padding:5px 11px;cursor:pointer}button.primary{background:var(--me);color:var(--meink);border-color:var(--me)}
+button:disabled{opacity:.5;cursor:default}
+.view{flex:1;min-height:0;display:none}.view.on{display:flex}
+.av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex:none;display:grid;place-items:center;
+font-weight:600;color:#fff;font-size:12px}
+
+/* home */
+#home{flex-direction:column;overflow:hidden}
+.homecols{display:flex;flex:1;min-height:0;width:100%}
+.devs{flex:1;overflow-y:auto;padding:20px 16px;min-width:0}
+#homechat{width:440px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;position:relative}
+#hc-grip{position:absolute;left:-5px;top:0;bottom:0;width:10px;cursor:col-resize;z-index:5}
+#hc-grip::after{content:"";position:absolute;left:4px;top:50%;width:2px;height:44px;margin-top:-22px;border-radius:2px;background:var(--line);transition:background .15s}
+#hc-grip:hover::after,#hc-grip.on::after{background:var(--me);height:100%;top:0;margin-top:0}
+body.hc-drag{cursor:col-resize;user-select:none}body.hc-drag iframe{pointer-events:none}
+#homechat .hc-head{padding:10px 16px;border-bottom:1px solid var(--line);font-weight:600}
+#homechat .hc-head small{display:block;font-weight:400;color:var(--mute);font-size:12.5px}
+#homechat #chat{flex:1;min-height:0}
+@media (max-width:900px){.homecols{flex-direction:column;overflow-y:auto}.devs{overflow:visible;flex:none}
+  #homechat{width:auto;border-left:0;border-top:1px solid var(--line);min-height:560px}#hc-grip{display:none}}
+.tile .go{font-size:12.5px;color:var(--me);font-weight:600}
+#home .wrap{max-width:1000px;width:100%;margin:0 auto}
+#home h2{font-size:15px;color:var(--mute);font-weight:500;margin:18px 0 10px}
+.nsdev{border-bottom:1px solid var(--line);padding:8px 0}.nsdev summary{cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
+.tile{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 12px 14px;
+text-align:center;color:inherit;text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:6px}
+a.tile:hover{border-color:var(--me);box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.tile .pic{width:96px;height:96px;border-radius:50%;object-fit:cover;display:grid;place-items:center;font-size:32px;
+font-weight:700;color:#fff;position:relative}
+.tile .dot{position:absolute;right:4px;bottom:4px;width:18px;height:18px;border-radius:50%;border:3px solid var(--card)}
+.tile .name{font-weight:600}.tile .fw{color:var(--ink);font-size:12.5px}.tile .idbtn{font-size:12px;padding:2px 8px}.tile .sub{font-size:12.5px;color:var(--mute)}
+.tile.off{opacity:.55}.tile .picbtn{position:absolute;top:8px;right:8px;font-size:12px;padding:2px 8px;opacity:0}
+.tile:hover .picbtn{opacity:1}@media (hover:none){.tile .picbtn{opacity:1}}
+.tile.add{border-style:dashed;cursor:pointer;justify-content:center;color:var(--mute);min-height:180px}
+.tile.add .pic{background:none;color:var(--mute);border:2px dashed var(--line)}
+.empty{color:var(--mute);font-size:14px}
+.hl-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px 6px;margin:14px 0 4px}
+.hl-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}.hl-h{font-weight:600;font-size:15px}
+.hl-pill{font-size:12.5px;padding:2px 10px;border-radius:999px;background:var(--code);color:var(--mute)}
+.hl-p-warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.hl-p-bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.hl-p-ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.hl-when{font-size:12px;color:var(--mute);margin-left:auto}
+.hl-row{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.hl-ic{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;background:var(--mute)}
+.hl-warn .hl-ic{background:var(--warn)}.hl-bad .hl-ic{background:var(--bad)}.hl-info .hl-ic{background:var(--me);font-style:italic;font-family:Georgia,serif}
+.hl-txt{flex:1;min-width:0}.hl-t{font-weight:600;font-size:14px}.hl-a{font-size:13px;color:var(--mute);margin-top:2px}
+.hl-btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.hl-btns button{white-space:nowrap}
+.hl-notes{border-top:1px solid var(--line);padding:6px 0}.hl-notes summary{cursor:pointer;font-size:13px;color:var(--mute);padding:2px 0}
+.hl-notes .hl-row:first-of-type{border-top:0}
+@media (max-width:600px){.hl-row{flex-wrap:wrap}.hl-btns{width:100%;justify-content:flex-start;padding-left:38px}}
+
+/* chat */
+#chat{flex-direction:column}
+#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px;max-width:900px;width:100%;margin:0 auto}
+.msg{padding:10px 14px;border-radius:12px;max-width:85%;white-space:pre-wrap;word-wrap:break-word;position:relative}
+.cp{position:absolute;right:8px;bottom:-12px;font:11px system-ui,sans-serif;padding:1px 8px;border-radius:7px;
+  border:1px solid var(--line);background:var(--card);color:var(--mute);cursor:pointer;opacity:0;transition:opacity .15s}
+.msg:hover>.cp,.cp:focus,.cp.done{opacity:1}
+pre{position:relative}pre>.cp{top:4px;bottom:auto;right:4px}pre:hover>.cp{opacity:1}
+@media (hover:none){.cp{opacity:.75}}
+.me{align-self:flex-end;background:var(--me);color:var(--meink)}
+.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.err{align-self:flex-start;color:var(--bad);border:1px solid var(--bad);background:var(--card)}
+.step{align-self:flex-start;color:var(--mute);font-size:13px;max-width:100%}
+.step summary{cursor:pointer}.step pre{max-height:300px}
+pre{background:var(--code);padding:8px 10px;border-radius:8px;overflow:auto;font:12.5px/1.45 ui-monospace,Menlo,monospace;
+white-space:pre;margin:6px 0}
+.msg a{color:inherit;text-decoration:underline;word-break:break-all}.ai a{color:var(--me)}
+code{background:var(--code);padding:1px 4px;border-radius:4px;font:13px ui-monospace,Menlo,monospace}
+.card{align-self:stretch;border:2px solid var(--warn);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
+.card h3{margin:0 0 6px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+input[type=text],input[type=password],input:not([type]){font:inherit;padding:6px 10px;border-radius:8px;
+border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.card input,.modal .confirm input{width:140px}
+.add{color:var(--ok)}.del{color:var(--bad)}
+.live{color:var(--mute);font-size:13px;align-self:flex-start;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap}
+#f{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);max-width:900px;width:100%;margin:0 auto}
+textarea{flex:1;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);
+color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
+.think{align-self:stretch;max-width:520px;font-size:13px;color:var(--mute)}
+.tk-bar{height:4px;border-radius:4px;background:var(--line);overflow:hidden;position:relative;margin:2px 0 6px}
+.tk-bar i{position:absolute;top:0;bottom:0;width:35%;border-radius:4px;background:linear-gradient(90deg,transparent,var(--me),transparent);animation:tk-slide 1.4s ease-in-out infinite}
+@keyframes tk-slide{0%{left:-35%}100%{left:100%}}
+.tk-row{display:flex;gap:8px;align-items:center}.tk-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-meta{font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}
+.tk-dot{width:8px;height:8px;border-radius:50%;background:var(--me);animation:tk-pulse 1s ease-in-out infinite alternate;flex:none}
+@keyframes tk-pulse{from{opacity:.3;transform:scale(.8)}to{opacity:1;transform:scale(1.1)}}
+@media (prefers-reduced-motion:reduce){.tk-bar i{animation:none;left:0;width:100%;opacity:.5}.tk-dot{animation:none}}
+.dv-tog{display:flex;gap:4px;margin:6px 0}.dv-tog button{font-size:12px;padding:2px 10px}
+.dv[data-mode=sbs] .dv-tog [data-m=sbs],.dv[data-mode=uni] .dv-tog [data-m=uni]{background:var(--me);color:var(--meink);border-color:var(--me)}
+.dv[data-mode=sbs] .dv-uni,.dv[data-mode=uni] .dv-sbs{display:none}
+.dv-sbs,.dv-big{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:8px}.dv-big{max-height:72vh}
+.sbs{border-collapse:collapse;width:100%;table-layout:fixed;font:12px/1.45 ui-monospace,Menlo,monospace}
+.sbs th{position:sticky;top:0;background:var(--code);text-align:left;font:600 12px system-ui,sans-serif;padding:5px 8px;border-bottom:1px solid var(--line)}
+.sbs td{padding:0 6px;vertical-align:top;white-space:pre-wrap;word-break:break-word}
+.sbs td.ln{width:3.2em;text-align:right;color:var(--mute);user-select:none;padding-right:6px;border-right:1px solid var(--line)}
+.sbs td.sd{background:color-mix(in srgb,var(--bad) 14%,transparent)}.sbs td.sa{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.sbs td.se{background:repeating-linear-gradient(45deg,transparent 0 6px,color-mix(in srgb,var(--line) 45%,transparent) 6px 7px)}
+.sbs tr.sh td{background:var(--code);color:var(--mute);font:11.5px system-ui,sans-serif;padding:3px 8px}
+.modal .box.wide{max-width:min(1400px,96vw)}
+.riskbox{margin:8px 0;padding:9px 11px;border-radius:8px;border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent);font-size:13.5px}
+.riskbox b{color:var(--bad)}.riskbox label{display:flex!important;gap:8px;align-items:flex-start;margin-top:8px;color:var(--ink)!important;border-radius:6px;padding:2px}
+.riskbox input{width:auto!important;flex:none;margin-top:3px}
+.longmsg summary{cursor:pointer;color:inherit;opacity:.85;font-size:12.5px;margin-top:6px}
+.pr-item{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
+.pr-item .pr-t{flex:1;min-width:0}.pr-item pre{margin:4px 0 0;font-size:12px;color:var(--mute);white-space:pre-wrap;max-height:3.9em;overflow:hidden}
+.pr-btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+#t-count{font-size:11.5px;color:var(--mute);text-align:right;padding:0 16px;max-width:900px;margin:-8px auto 6px;width:100%}
+
+.chatbar{display:flex;gap:8px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;
+  max-width:900px;width:100%;margin:0 auto}
+.chatbar .ttl{flex:1;min-width:0;color:var(--mute);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chatbar select{font:13px inherit;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:220px}
+.chatbar button{font-size:13px;padding:3px 10px}
+#chatlist{position:absolute;z-index:15;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  box-shadow:var(--shadow);width:min(380px,92vw);max-height:60vh;overflow:auto;padding:6px;display:none}
+#chatlist .it{display:flex;gap:6px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:14px}
+#chatlist .it:hover{background:var(--sel)}#chatlist .it.on{background:var(--sel);font-weight:600}
+#chatlist .it .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatlist .it small{color:var(--mute);font-weight:400}#chatlist .it button{font-size:12px;padding:1px 7px}
+.quick{display:flex;gap:6px;flex-wrap:wrap;padding:6px 16px 0;max-width:900px;width:100%;margin:0 auto}
+.quick button{font-size:13px;padding:3px 10px;border-radius:14px}
+#atts{display:flex;gap:6px;flex-wrap:wrap;padding:6px 16px 0;max-width:900px;width:100%;margin:0 auto}
+#atts:empty{display:none}
+.chip{font-size:12.5px;padding:2px 4px 2px 10px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.chip button{border:0;background:none;padding:0 6px;font-size:12.5px}
+#chat.dropping #log{outline:3px dashed var(--drop);outline-offset:-6px}
+.msg .files{font-size:12.5px;opacity:.85;margin-top:4px}
+.stream{white-space:pre-wrap}
+
+/* files */
+#files{flex-direction:column;padding:10px 16px 0;gap:10px}
+.panes{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.panes.only-mac,.panes.only-dev{grid-template-columns:1fr}
+.panes.only-mac #pane-dev,.panes.only-dev #pane-mac{display:none}
+.viewpick{display:flex;gap:0;align-self:flex-start;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.viewpick button{border:0;border-radius:0;padding:4px 12px;font-size:13px;background:var(--card)}
+.viewpick button.on{background:var(--me);color:var(--meink)}
+.viewpick button+button{border-left:1px solid var(--line)}
+@media (max-width:760px){.panes{grid-template-columns:1fr;grid-auto-rows:minmax(300px,1fr);overflow-y:auto}}
+.pane{display:flex;flex-direction:column;min-height:0;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pane.dropping{outline:3px dashed var(--drop);outline-offset:-3px}
+.pane .top{padding:8px 10px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.pane .title{display:flex;align-items:center;gap:8px;font-weight:600}
+.pane .title small{font-weight:400;color:var(--mute)}
+.pane .path{display:flex;gap:6px}.pane .path input{flex:1;min-width:0;font:13px ui-monospace,Menlo,monospace}
+.pane .tools{display:flex;gap:6px;flex-wrap:wrap}.pane .tools button{font-size:13px;padding:3px 9px}
+.list{flex:1;overflow:auto;user-select:none}
+.list table{width:100%;border-collapse:collapse;font-size:13.5px}
+.list td{padding:4px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.list td.n{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
+.list td.s,.list td.m{color:var(--mute);font-size:12.5px;text-align:right}
+.list tr{cursor:default}.list td.r{width:1%;padding:0 6px}
+.pen{font-size:12px;padding:1px 7px;border-color:transparent;background:none;color:var(--mute)}
+.list tr .pen{opacity:0}.list tr:hover .pen,.list tr.sel .pen{opacity:1}@media (hover:none){.list tr .pen{opacity:1}}
+.pen:hover{border-color:var(--line);color:var(--ink)}
+#ctx{position:fixed;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;
+box-shadow:var(--shadow);display:none;min-width:170px}
+#ctx button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 10px;border-radius:6px;font-size:14px}
+#ctx button:hover{background:var(--sel)}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
+.list .hint{padding:16px;color:var(--mute);font-size:13px}
+.marks{display:flex;gap:4px;flex-wrap:wrap}.marks:empty{display:none}
+.mark{font-size:12px;padding:1px 2px 1px 8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);cursor:pointer}
+.mark button{border:0;background:none;padding:0 5px;font-size:12px;color:var(--mute)}
+.selcount{font-weight:400;color:var(--me);font-size:12.5px}
+#queue{display:flex;flex-direction:column;gap:6px}#queue:empty{display:none}
+.tq{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:13px}
+.tq .h{display:flex;gap:8px;align-items:center}.tq .h b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tq .h button{font-size:12px;padding:1px 8px}.tq .bar{margin:5px 0 3px;height:7px}
+.tq .sub{color:var(--mute);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tq.done .bar div{background:var(--ok)}.tq.failed .bar div,.tq.cancelled .bar div{background:var(--bad)}
+.modal .box.wide{max-width:900px}
+.pv pre{max-height:60vh}.pv img{max-width:100%;max-height:60vh;display:block;margin:8px auto;border-radius:8px}
+.pv textarea{width:100%;min-height:50vh;font:12.5px/1.45 ui-monospace,Menlo,monospace;white-space:pre;overflow:auto}
+.hits{max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+.hits div{padding:5px 10px;border-bottom:1px solid var(--line);font:12.5px ui-monospace,Menlo,monospace;cursor:pointer;display:flex;gap:8px}
+.hits div:hover{background:var(--sel)}.hits div span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+#activity{font:12.5px/1.45 ui-monospace,Menlo,monospace;color:var(--mute);max-height:110px;overflow-y:auto;
+padding:6px 2px 10px;white-space:pre-wrap}
+#activity .bad{color:var(--bad)}#activity .good{color:var(--ok)}
+
+/* backups */
+#backups{flex-direction:column;overflow-y:auto;padding:20px 16px}
+#apps{flex-direction:column;overflow-y:auto;padding:20px 16px}#apps .wrap{max-width:980px;width:100%;margin:0 auto}
+.apgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.apcard{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:10px;align-items:flex-start}
+.apcard img,.apcard .noicon{width:56px;height:56px;border-radius:8px;flex:none;object-fit:cover;background:var(--line)}
+#backups .wrap{max-width:860px;width:100%;margin:0 auto}
+#backups h2{font-size:16px;margin:0 0 8px}#backups h3{font-size:15px;color:var(--mute);font-weight:500;margin:22px 0 8px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.panel code{word-break:break-all}
+.bar{height:10px;border-radius:5px;background:var(--code);overflow:hidden;margin:12px 0 6px}
+.bar div{height:100%;width:0;background:var(--me);transition:width .4s}
+#bk-cur{font:12.5px ui-monospace,Menlo,monospace;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+background:var(--card);margin-bottom:8px;font-size:14px}
+.bk .when{font-weight:600;min-width:150px}.bk .meta{color:var(--mute);flex:1;min-width:200px}
+.badge{font-size:12px;padding:1px 8px;border-radius:10px;border:1px solid currentColor}
+.badge.ok{color:var(--ok)}.badge.part{color:var(--warn)}
+.note{color:var(--mute);font-size:13.5px}
+.picker{border:1px solid var(--line);border-radius:8px;max-height:300px;overflow:auto;margin:8px 0}
+.picker div{padding:5px 10px;cursor:pointer;border-bottom:1px solid var(--line);font-size:14px}
+.picker div:hover{background:var(--sel)}
+
+/* dialogs */
+.modal{position:fixed;inset:0;background:var(--overlay);display:none;place-items:center;padding:16px;z-index:10}
+.modal.on{display:grid}
+.modal .box{background:var(--card);border-radius:14px;padding:18px;max-width:560px;width:100%;max-height:90vh;overflow:auto;
+border:2px solid var(--line)}
+.modal .box.danger{border-color:var(--warn)}
+.modal h3{margin:0 0 8px;font-size:16px}
+.modal ul{margin:6px 0;padding-left:20px;font-size:13.5px;max-height:260px;overflow:auto}
+.modal label{display:block;font-size:13px;color:var(--mute);margin-top:8px}
+.modal label input{width:100%;margin-top:2px}
+.modal label input[type=checkbox],.modal label input[type=radio]{width:auto;flex:none;margin:0 2px 0 0}
+.modal .msgline{font-size:13.5px;margin-top:8px}
+.modal .bad{color:var(--bad)}
+.cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
+.cl-dot::before{content:"\25CF ";}
+.cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected{background:rgba(255,59,48,.16);color:var(--bad)}
+.cl-state{font-size:13.5px;font-weight:600;padding:7px 10px;border-radius:8px;margin-bottom:8px;background:var(--line);color:var(--mute)}
+.cl-state::before{content:"\25CF ";}.cl-state.connected{background:rgba(52,199,89,.16);color:var(--ok)}.cl-state.rejected{background:rgba(255,59,48,.14);color:var(--bad)}
+.att-n{background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;font-weight:700;margin-left:3px}
+.att-intro{font-size:13.5px;color:var(--mute);margin:0 0 12px;line-height:1.45}
+.att-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius,12px);padding:12px 14px;margin-bottom:10px}
+.att-path{font-weight:600;word-break:break-all}.att-size{font-weight:400;color:var(--mute);font-size:12.5px}
+.att-probs{margin:6px 0;padding-left:18px;font-size:13.5px}.att-probs li.error b{color:var(--bad)}.att-probs li.warning b{color:var(--warn)}
+.att-src{font-size:12.5px;color:var(--mute);margin-bottom:8px}.att-acts{gap:6px;display:flex;flex-wrap:wrap}
+button.danger{color:var(--bad);border-color:var(--bad)}
+.cd-list{margin:8px 0}.cd-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:inherit;margin:0}
+.cd-row input{width:auto;margin-top:3px}.cd-size{color:var(--mute);font-weight:400;font-size:12.5px}.cd-what{color:var(--mute);font-size:12.5px}
+button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
+</style></head><body>
+<header>
+  <a href="#/" title="All devices"><h1>PatchBay</h1></a>
+  <span id="crumb"></span>
+  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a><a id="tab-attention">Needs attention <span id="att-n" class="att-n" hidden></span></a></nav>
+  <span id="info"></span>
+  <button id="clear-btn" type="button" hidden title="Delete what PatchBay keeps on this Mac for this device">🗑 Clear data</button>
+  <button id="activity-btn" type="button" title="Everything PatchBay did, with Undo">🕘 Activity</button>
+  <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
+  <button id="reset" type="button" hidden>New chat</button>
+  <button id="logout" type="button" hidden>Sign out</button>
+</header>
+
+<main class="view" id="home"><div class="homecols"><div class="devs"><div class="wrap">
+  <div class="row" style="margin:0"><span id="homeinfo" class="empty" style="flex:1"></span>
+    <button id="netscan-btn" title="Find TVs, consoles, computers and other devices on your network">🔎 Find devices on my network</button>
+    <button id="recheck">Check again</button><button id="health-btn" title="Backups, damaged files, disk space, security">Check health</button></div>
+  <div id="health"></div>
+  <h2>On the network now</h2><div class="grid" id="online"></div>
+  <h2 id="offh">Not found on the network right now</h2><div class="grid" id="offline"></div>
+  <h2 id="foundh" hidden>Found on your network <small id="foundwhen" style="font-weight:400;color:var(--mute);font-size:13px"></small>
+    <button id="ns-again" style="font-size:13px;margin-left:8px">Look again</button></h2><div id="found"></div>
+</div></div>
+<aside id="homechat"><div id="hc-grip" title="Drag to make the chat wider or narrower (double-click to reset)"></div><div class="hc-head">Ask PatchBay<small>About all your devices. Click a picture to chat about one device.</small></div></aside>
+</div></main>
+
+<main class="view" id="chat" style="position:relative">
+  <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
+    <span class="ttl" id="chat-title"></span>
+    <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select> <span id="model-why" style="font-size:12px"></span></label>
+    <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent">☁ Claude <span id="cl-dot" class="cl-dot"></span></button></div>
+  <div id="chatlist"></div>
+  <div id="log"></div>
+  <div class="quick" id="quick"></div>
+  <div id="atts"></div>
+  <form id="f"><button type="button" id="attach" title="Add files to your message (or drop them here)">📎</button>
+  <textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
+  <button class="primary" id="send">Send</button></form>
+  <div id="t-count" hidden></div>
+  <input type="file" id="chatfile" multiple hidden>
+</main>
+
+<main class="view" id="files">
+  <div class="viewpick" id="viewpick"><button data-v="both">Both</button><button data-v="mac" id="vp-mac">Mac only</button><button data-v="dev" id="vp-dev">Device only</button></div>
+  <div class="panes" id="panes">
+    <section class="pane" id="pane-mac"></section>
+    <section class="pane" id="pane-dev"></section>
+  </div>
+  <div id="queue"></div>
+  <div id="activity"></div>
+</main>
+
+<main class="view" id="apps"><div class="wrap">
+  <div class="row" style="margin:0 0 10px"><span id="ap-info" class="empty" style="flex:1"></span>
+    <button id="ap-scan" class="primary">Read the apps</button><button id="ap-upd">Check for updates</button></div>
+  <div id="ap-body"></div>
+</div></main>
+
+<main class="view" id="attention"><div class="wrap">
+  <div class="att-intro">Scans check each file and then delete it from this Mac. Only files with problems are kept here until you decide.
+    There are no spare copies, so <b>Repair</b> puts back a good version from the program's own release or from a backup you made (Backups tab).</div>
+  <div id="att-body"></div>
+</div></main>
+
+<main class="view" id="backups"><div class="wrap">
+  <section class="panel">
+    <h2 id="bk-title">Back up everything</h2>
+    <div class="note">Copies every file on the device to a folder you choose. This only reads the device.</div>
+    <div class="row">Saved to: <code id="bk-folder">…</code><button id="bk-change">Change…</button></div>
+    <div class="row"><input id="bk-label" placeholder="Label (optional), e.g. before the 1.8 update" style="flex:1;min-width:220px"></div>
+    <div class="row"><button class="primary" id="bk-start">Back up now</button><button id="bk-pick">Back up only some files or folders…</button><button id="bk-stop" hidden>Stop</button></div>
+    <div id="bk-progress" hidden><div class="bar"><div id="bk-bar"></div></div><div id="bk-line"></div><div id="bk-cur"></div></div>
+    <div id="bk-msg" class="msgline" style="margin-top:8px"></div>
+  </section>
+  <section class="panel" style="margin-top:14px"><h2>Options</h2>
+    <div class="row">Keep the newest <input id="bk-keep" type="number" min="0" style="width:70px"> backups <span class="note">(0 = keep all; older ones are deleted after each backup)</span></div>
+    <div class="row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bk-zip"> Compress (zip) each finished backup to save space</label></div>
+    <div class="row">Second copy to: <code id="bk-mirror">none</code><button id="bk-mirror-pick">Choose…</button><button id="bk-mirror-off">Turn off</button></div>
+    <div class="row"><button id="bk-save">Save options</button><span class="note" id="bk-optmsg"></span></div></section>
+  <h3>Past backups</h3><div id="bk-list"></div>
+  <p class="note">Files that didn't change since the last backup aren't copied again, so each new backup only takes
+  the space of what changed, yet every backup folder still holds a full copy. To put files back on the device, click
+  <b>Show in Files</b> and drag them from the left side to the right. To free space, delete old backup folders in Finder;
+  the other backups stay complete.</p>
+</div></main>
+
+<div class="modal" id="modal"><div class="box" id="box"></div></div>
+<div id="ctx"></div>
+<input type="file" id="picfile" accept="image/*" hidden>
+<input type="file" id="upfile" multiple hidden>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const enc=encodeURIComponent;
+const HOMECHAT='__home__';
+let cur=null, view='home', busy=false, homeTimer=null, bkTimer=null, info={};
+
+function hue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h}
+function initials(n){n=n.trim();if(n.length<=4)return n.toUpperCase();const p=n.split(/[\s_-]+/);
+  return (p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase()}
+function ago(t){if(!t)return 'never seen yet';const s=Date.now()/1000-t;
+  if(s<90)return 'seen just now';if(s<3600)return 'seen '+Math.round(s/60)+' min ago';
+  if(s<172800)return 'seen '+Math.round(s/3600)+' h ago';return 'seen '+Math.round(s/86400)+' days ago'}
+function size(n){if(n==null)return '';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}
+  return (i?n.toFixed(1):n)+' '+u[i]}
+async function getJSON(url){const r=await fetch(url);if(r.status===401){location.reload();throw new Error('signed out')}
+  const j=await r.json();if(!r.ok)throw new Error(j.error||('Error '+r.status));return j}
+async function postJSON(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){location.reload();throw new Error('signed out')}const j=await r.json();
+  if(!r.ok){const e=new Error(j.error||('Error '+r.status));e.data=j;throw e}return j}
+async function stream(url,body,on){ // reads the server's live, line-by-line replies
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){location.reload();return}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);if(line)on(JSON.parse(line))}}}
+
+/* ---------- routing: #/  #/d/NAME/chat  #/d/NAME/files */
+function route(){
+  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups|apps|attention)/);
+  clearInterval(bkTimer);
+  clearInterval(homeTimer);
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  if(!m){view='home';const was=cur;cur=HOMECHAT;$('clear-btn').hidden=true;$('home').classList.add('on');$('tabs').hidden=true;$('reset').hidden=false;
+    $('homechat').appendChild($('chat'));$('chat').classList.add('on');
+    $('crumb').innerHTML='';$('info').textContent='';loadHome(false);homeTimer=setInterval(()=>loadHome(false),15000);
+    if(was!==HOMECHAT)loadChat();return}
+  document.body.insertBefore($('chat'),$('files'));
+  const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
+  $(view).classList.add('on');$('tabs').hidden=false;$('clear-btn').hidden=false;$('reset').hidden=view!=='chat';
+  for(const v of ['chat','files','backups','apps','attention']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
+  if(changed){loadInfo();loadChat();bkOptsLoaded=false;attCount()}
+  if(view==='files')openFiles(changed);
+  else if(view==='backups'){loadBackups();bkTimer=setInterval(loadBackups,1500)}
+  else if(view==='apps')loadApps()
+  else if(view==='attention')loadAttention()
+  else $('t').focus();
+}
+window.addEventListener('hashchange',route);
+
+/* ---------- Clear data: what PatchBay keeps on the Mac for a device (never the device itself) */
+async function clearData(all){
+  let j;try{j=await getJSON('/api/cleardata?'+(all?'all=1':'device='+enc(cur)))}catch(e){return alert(e.message)}
+  const word=all?'Clear everything':cur, devs=j.devices;
+  const tot=k=>devs.reduce((s,d)=>s+(d.parts.find(p=>p.id===k)||{bytes:0}).bytes,0);
+  const anyPw=devs.some(d=>d.password.saved), canRemove=devs.some(d=>d.can_remove);
+  modal('<h3>🗑 '+(all?'Clear everything PatchBay keeps on this Mac':'Clear '+esc(cur)+'\'s data on this Mac')+'</h3>'+
+    '<div class="msgline">This deletes files on '+esc(info.computer||'this Mac')+' only. Nothing on '+(all?'your devices':esc(cur))+' is touched. It can\'t be undone.</div>'+
+    (all?'<div style="font-size:13px;margin:4px 0 8px">Devices: '+devs.map(d=>esc(d.device)+' ('+esc(d.total)+')').join(', ')+'</div>':'')+
+    '<div class="cd-list">'+j.parts.map(p=>'<label class="cd-row"><input type="checkbox" class="cd-part" value="'+p.id+'"'+(p.default?' checked':'')+'>'+
+      '<span><b>'+esc(p.label)+'</b> <span class="cd-size">'+esc(size(tot(p.id)))+'</span><br><span class="cd-what">'+esc(p.what)+'</span></span></label>').join('')+
+    (anyPw?'<label class="cd-row"><input type="checkbox" id="cd-pw"><span><b>Saved password</b><br><span class="cd-what">Removes the login password PatchBay saved (in the Mac\'s Keychain). Leave it unticked to keep it.</span></span></label>':'')+
+    (canRemove?'<label class="cd-row"><input type="checkbox" id="cd-rm"><span><b>Remove '+(all?'the devices':'the device')+' from PatchBay</b><br><span class="cd-what">'+(all?'Each device':'It')+' disappears from the home screen. Leave unticked to keep '+(all?'them':'it')+' and start fresh.'+(devs.some(d=>!d.can_remove)?' (Your first device stays, since PatchBay\'s main settings belong to it.)':'')+'</span></span></label>':'')+
+    '</div><div class="row confirm">Type <b>'+esc(word)+'</b> to confirm: <input id="cd-typed" autocomplete="off"><button class="primary danger-bg" id="cd-ok">Delete</button><button id="cd-no">Cancel</button></div><div id="cd-msg" class="msgline"></div>',true);
+  $('cd-no').onclick=closeModal;$('cd-typed').focus();
+  const go=async()=>{if($('cd-typed').value.trim()!==word){$('cd-typed').style.borderColor='var(--bad)';return}
+    const parts=[...document.querySelectorAll('.cd-part')].filter(x=>x.checked).map(x=>x.value);
+    const pw=!!($('cd-pw')&&$('cd-pw').checked), rm=!!($('cd-rm')&&$('cd-rm').checked);
+    if(!parts.length&&!pw&&!rm){$('cd-msg').textContent='Tick at least one thing to delete.';return}
+    $('cd-ok').disabled=true;$('cd-ok').textContent='Deleting…';
+    try{const r=await postJSON('/api/cleardata',{all:!!all,device:cur,parts,password:pw,remove:rm,typed:$('cd-typed').value});
+      closeModal();alert(r.message);if(rm||all)location.hash='#/';else{loadChat();attCount()}}
+    catch(e){$('cd-ok').disabled=false;$('cd-ok').textContent='Delete';$('cd-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}};
+  $('cd-ok').onclick=go;$('cd-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
+$('clear-btn').onclick=()=>clearData(false);
+
+/* ---------- Needs attention: files a scan found problems in */
+let ATT=[];
+async function attCount(){try{const j=await getJSON('/api/attention?device='+enc(cur));ATT=j.items;const n=$('att-n');n.textContent=ATT.length;n.hidden=!ATT.length}catch(e){}}
+async function loadAttention(){const b=$('att-body');b.innerHTML='<div class="empty">Loading…</div>';await attCount();
+  if(!ATT.length){b.innerHTML='<div class="empty">Nothing needs your attention. The last scans found no problems (or you\'ve dealt with them).</div>';return}
+  b.innerHTML=ATT.map((x,i)=>{const src=x.good_backup?'a good copy in your backup '+x.good_backup:x.good_copy?'a good copy saved from an old scan':x.release?'the program\'s own release (PatchBay looks it up)':'';
+    return '<div class="att-item"><div class="att-path">'+esc(x.path)+' <span class="att-size">'+esc(size(x.size||0))+' · found '+esc((x.found||'').replace('_',' '))+'</span></div>'+
+    '<ul class="att-probs">'+x.problems.map(p=>'<li class="'+esc(p.level)+'"><b>'+esc(p.level==='error'?'Problem':p.level==='warning'?'Warning':'Note')+':</b> '+esc(p.text)+'</li>').join('')+'</ul>'+
+    '<div class="att-src">'+(src?'Repair from: '+esc(src)+'.':'No known good copy yet: Repair will look for one online first, and asks you before changing anything.')+'</div>'+
+    '<div class="row att-acts"><button data-i="'+i+'" data-a="keep">Keep as is</button><button class="primary" data-i="'+i+'" data-a="repair">Repair</button><button class="danger" data-i="'+i+'" data-a="delete">Delete from device</button></div></div>'}).join('');
+  b.querySelectorAll('button[data-a]').forEach(btn=>btn.onclick=()=>attAct(ATT[+btn.dataset.i],btn.dataset.a))}
+async function attAct(x,a){
+  if(a==='keep'){if(!confirm('Keep '+x.path+' as it is? PatchBay won\'t flag this version again, and deletes the copy it kept on this Mac.'))return;
+    try{await postJSON('/api/attention/keep',{device:cur,path:x.path});act('Kept as is. It won\'t be flagged again unless it changes.');loadAttention()}catch(e){alert(e.message)}}
+  else if(a==='delete')plan({op:'delete',paths:[x.path]})
+  else{const why=x.problems.map(p=>p.text).join(' ');
+    const text='Repair '+x.path+' on '+cur+'. The scan found: '+why+' The copy kept on the Mac is the damaged one, not a good one. '+
+      (x.good_backup?'My backup '+x.good_backup+' has a good copy. ':'')+'Find a good version first (my backups, or the program\'s original release; look it up, don\'t guess). If you find one, show one plan to put it back. If you can\'t, tell me.';
+    location.hash='#/d/'+enc(cur)+'/chat';setTimeout(()=>{t.value=text;t.focus();if(!busy)$('f').requestSubmit()},400)}}
+
+/* ---------- home: device portraits */
+let homeData=null;
+async function loadHome(force){
+  try{homeData=await getJSON('/api/devices'+(force?'?force=1':''))}catch(e){$('homeinfo').innerHTML='<span style="color:var(--bad)">'+reachMsg(e)+'</span>';return}
+  const d=homeData;$('logout').hidden=!d.remote;
+  $('homeinfo').textContent=d.remote?'You\'re using PatchBay on '+d.computer+' from another computer.':'';
+  const on=d.devices.filter(x=>x.online),off=d.devices.filter(x=>!x.online);
+  $('online').innerHTML=on.map(x=>tile(x,true)).join('')+
+    `<div class="tile add" id="addtile"><div class="pic">+</div><div class="name">Add a device</div><div class="sub">by its IP address</div></div>`;
+  if(!on.length)$('online').insertAdjacentHTML('afterbegin','<div class="empty" style="grid-column:1/-1">None of your devices answered just now. Check they\'re switched on, then press Check again.</div>');
+  $('offline').innerHTML=off.map(x=>tile(x,false)).join('');$('offh').hidden=!off.length;
+  $('addtile').onclick=()=>addDevice();
+  document.querySelectorAll('.idbtn').forEach(b=>b.onclick=async e=>{e.preventDefault();e.stopPropagation();
+    b.disabled=true;b.textContent='Looking…';
+    try{const j=await postJSON('/api/identify',{device:b.dataset.name});b.replaceWith(document.createTextNode(j.firmware||'Not sure: ask in the chat'))}
+    catch(x){b.textContent='Couldn\'t tell';b.disabled=false}});
+  document.querySelectorAll('.picbtn').forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();pickPicture(b.dataset.name)});
+  if(scanData)renderFound();else if(!scanTimer)pollScan();
+  if(!healthLoaded)loadHealth(false);
+}
+function tile(d,online){
+  const inner=`<button class="picbtn" data-name="${esc(d.name)}" title="Change picture">Picture</button>
+    <div class="pic" style="${d.has_portrait?'':'background:hsl('+hue(d.name)+' 45% 45%)'}">${d.has_portrait?
+     `<img class="pic" src="/api/portrait?device=${enc(d.name)}&v=${d.portrait_version}" alt="">`:esc(initials(d.name))}
+     <span class="dot" style="background:${online?'var(--ok)':'var(--mute)'}"></span></div>
+    <div class="name">${esc(d.name)}</div><div class="sub">${esc(d.host)}</div>
+    <div class="sub fw">${d.firmware?esc(d.firmware):online?`<button class="idbtn" data-name="${esc(d.name)}">Identify firmware</button>`:''}</div>
+    <div class="sub">${online?'On the network'+(d.writes_on?' · writing ON':''):esc(ago(d.last_seen))}</div>
+    ${online?'<div class="go">Open chat →</div>':''}`;
+  return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
+$('recheck').onclick=()=>loadHome(true);
+
+// ---- health checks (when the home screen opens, and when you press Check health; never on a timer)
+let healthLoaded=false;
+async function loadHealth(deep){const box=$('health');
+  if(deep)box.innerHTML='<div class="hl-card"><div class="hl-head"><span class="hl-h">Health</span><span class="hl-pill">Checking every device…</span></div></div>';
+  let j;try{j=await getJSON('/api/health'+(deep?'?deep=1':''))}catch(e){box.textContent=e.message;return}
+  // the same problem on several devices becomes one row ("Switch and Ps5 have never had a full backup")
+  const groups=[];
+  j.alerts.forEach(a=>{const key=a.level+'|'+a.title.split(a.device).join('{}')+'|'+a.advice.split(a.device).join('{}')+'|'+(a.action?a.action.go:'');
+    const g=groups.find(x=>x.key===key);if(g)g.items.push(a);else groups.push({key,level:a.level,items:[a]})});
+  const names=l=>l.length<2?l[0]:l.slice(0,-1).join(', ')+' and '+l[l.length-1];
+  const gtitle=g=>{const a=g.items[0];if(g.items.length<2)return a.title;
+    return a.title.split(a.device).join(names(g.items.map(x=>x.device))).replace(/ has /,' have ').replace(/'s /,'\u2019s ').replace(/ isn't /,' aren\'t ').replace(/ is /,' are ')};
+  const label=(act,dev,many)=>{const w=act.go==='backups'?'Back up':act.go==='security'?'See report for':'Ask about';
+    return many?w+' '+esc(dev):(act.go==='backups'?'Open Backups':act.go==='security'?'Open the report':'Ask the chat')};
+  const ICON={bad:'!',warn:'!',info:'i'};
+  const row=g=>{const a=g.items[0],many=g.items.length>1;
+    return '<div class="hl-row hl-'+g.level+'"><span class="hl-ic">'+ICON[g.level]+'</span><div class="hl-txt"><div class="hl-t">'+esc(gtitle(g))+'</div>'+
+      '<div class="hl-a">'+esc(many?a.advice.split(a.device).join('the device'):a.advice)+'</div></div>'+
+      (a.action?'<div class="hl-btns">'+g.items.map(x=>'<button class="hl-go" data-i="'+j.alerts.indexOf(x)+'">'+label(x.action,x.device,many)+'</button>').join('')+'</div>':'')+'</div>'};
+  const main=groups.filter(g=>g.level!=='info'),info=groups.filter(g=>g.level==='info');
+  const n=main.reduce((s,g)=>s+1,0);
+  box.innerHTML='<div class="hl-card"><div class="hl-head"><span class="hl-h">Health</span>'+
+    (n?'<span class="hl-pill hl-p-'+(main.some(g=>g.level==='bad')?'bad':'warn')+'">'+n+' thing'+(n>1?'s':'')+' to look at</span>':'<span class="hl-pill hl-p-ok">\u2713 All good</span>')+
+    (deep?'<span class="hl-when">checked just now</span>':'')+'</div>'+
+    main.map(row).join('')+
+    (info.length?'<details class="hl-notes"><summary>'+info.length+' note'+(info.length>1?'s':'')+'</summary>'+info.map(row).join('')+'</details>':'')+'</div>';
+  box.querySelectorAll('.hl-go').forEach(b=>b.onclick=()=>{const a=j.alerts[+b.dataset.i],act=a.action;
+    if(a.device==='PatchBay'){if(!busy){t.value=act.ask;send.click()}return}   // the home chat, right here
+    if(act.go==='backups'){location.hash='#/d/'+enc(a.device)+'/backups';return}
+    if(act.go==='security'){openSecurity({ip:act.ip,name:a.device,kind:''});return}
+    location.hash='#/d/'+enc(a.device)+'/chat';setTimeout(()=>{if(busy)return;t.value=act.ask;send.click()},900)});
+  healthLoaded=true}
+$('health-btn').onclick=()=>loadHealth(true);
+
+// ---- the home chat's width: drag its left edge (remembered on this computer)
+(function(){const pane=$('homechat'),grip=$('hc-grip');if(!grip)return;
+  const clamp=w=>Math.round(Math.max(320,Math.min(w,window.innerWidth*0.75)));
+  const setW=w=>{pane.style.width=clamp(w)+'px'};
+  try{const w=+localStorage.getItem('pb-homechat-w');if(w)setW(w)}catch(e){}
+  grip.addEventListener('pointerdown',e=>{e.preventDefault();grip.setPointerCapture(e.pointerId);grip.classList.add('on');document.body.classList.add('hc-drag');
+    const x0=e.clientX,w0=pane.getBoundingClientRect().width;
+    const move=ev=>setW(w0+(x0-ev.clientX));
+    const up=()=>{grip.removeEventListener('pointermove',move);grip.classList.remove('on');document.body.classList.remove('hc-drag');
+      try{localStorage.setItem('pb-homechat-w',parseInt(pane.style.width))}catch(e){}};
+    grip.addEventListener('pointermove',move);grip.addEventListener('pointerup',up,{once:true});grip.addEventListener('pointercancel',up,{once:true})});
+  grip.ondblclick=()=>{pane.style.width='';try{localStorage.removeItem('pb-homechat-w')}catch(e){}};
+  window.addEventListener('resize',()=>{if(pane.style.width)setW(parseInt(pane.style.width))});
+})();
+
+// ---- find devices on the network (the list stays on the home page until you look again)
+let scanTimer=null,scanData=null;
+function savedAs(d){const m=homeData&&homeData.devices.find(x=>x.host===d.ip);return m?m.name:d.saved_as}
+async function startScan(){$('foundh').hidden=false;$('found').innerHTML='<div>Starting...</div>';
+  try{await postJSON('/api/netscan/start',{})}catch(e){$('found').textContent=e.message;return}
+  pollScan()}
+function pollScan(){clearInterval(scanTimer);drawScan();scanTimer=setInterval(drawScan,1200)}
+async function drawScan(){let j;try{j=await getJSON('/api/netscan')}catch(e){return}
+  if(!j.running)clearInterval(scanTimer);
+  if(!j.running&&!j.finished&&!j.error){$('foundh').hidden=true;return}
+  $('foundh').hidden=false;
+  if(j.running){$('foundwhen').textContent='looking now...';
+    $('found').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
+    $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
+  if(j.error){$('foundwhen').textContent='';$('found').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
+  scanData=j;renderFound()}
+function addWay(d){const p=d.ports||[];
+  if(d.ftp_port)return {protocol:'ftp',label:'FTP',ports:String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21')};
+  if(p.includes(22))return {protocol:'sftp',label:'SFTP',ports:'22'};
+  if(p.includes(445))return {protocol:'smb',label:'file sharing',ports:'445'};
+  return null}
+function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
+  $('foundwhen').textContent=j.finished?'looked '+ago(j.finished).replace(/^seen /,''):'';
+  const open=new Set([...document.querySelectorAll('#found details[open]')].map(x=>x.dataset.ip));
+  $('found').innerHTML=(r.length?'':'<div class="empty">No other devices answered. Make sure they\'re switched on and on the same Wi-Fi or network, then press Look again.</div>')+
+    r.map((d,i)=>{const sv=savedAs(d),mk=d.vendor&&d.vendor!=='Private address'?d.vendor:'';
+      return '<details class="nsdev" data-ip="'+esc(d.ip)+'"'+(open.has(d.ip)?' open':'')+'><summary><b>'+esc(d.name||d.model||d.kind)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(d.ip)+(d.name||d.model?' · '+esc(d.kind):'')+(mk&&!(d.kind||'').includes(mk)?' · '+esc(mk):'')+'</span>'+
+      (sv?' <span style="font-size:12px">✅ saved as '+esc(sv)+'</span>':'')+'</summary>'+
+      ((d.model&&d.model!==(d.name||d.model)?'<div style="font-size:13.5px">Model: '+esc(d.model)+'</div>':'')+
+       (d.page_title?'<div style="font-size:13.5px">Its web page says: '+esc(d.page_title)+'</div>':'')+
+       (mk?'<div style="font-size:13.5px">Made by: '+esc(mk)+'</div>':d.vendor?'<div style="font-size:13.5px">Uses a private Wi-Fi address, so the maker is hidden (usually a phone, tablet or laptop).</div>':''))+
+      '<div style="font-size:13.5px">'+(d.port_names.length?'Open: '+esc(d.port_names.join(', ')):'No open doors PatchBay knows yet')+'</div>'+
+      (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(!sv&&addWay(d)?'<button class="primary ns-add" data-i="'+i+'">Add as a device ('+addWay(d).label+')</button>':'')+
+      '<button class="ns-ask" data-i="'+i+'">Help me see its files</button><button class="ns-sec" data-i="'+i+'">🛡 Security check</button></div></details>'}).join('');
+  document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i],w=addWay(d);
+    addDevice({protocol:w.protocol,host:d.ip,ports:w.ports,name:(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)})});
+  document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];if(busy)return;
+    const q='Help me connect PatchBay to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+' so I can look at its files. Open on it: '+(d.port_names.join(', ')||'nothing PatchBay knows')+'. Find the documented way for PatchBay to see its files (FTP, SFTP/SSH, file sharing, or a developer mode or debug bridge) and walk me through turning it on. If this kind of device has no way to see its files, say so plainly and tell me what it does allow. No screen mirroring or casting steps.';
+    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})});
+  document.querySelectorAll('.ns-sec').forEach(b=>b.onclick=()=>openSecurity(r[+b.dataset.i]));}
+// ---- security check of one of your own devices (only looks: no break-in attempts, no password guessing)
+let secTimer=null;
+const SEV={critical:['Critical','#b3261e'],high:['High','#d9480f'],medium:['Medium','#b7791f'],low:['Low','#2b6cdf'],info:['Info','#6b7280']};
+async function openSecurity(d){
+  const label=d.name||d.model||d.kind;
+  modal('<h3>🛡 Security check: '+esc(label)+' <span style="font-weight:400;color:var(--mute);font-size:14px">'+esc(d.ip)+'</span></h3><div id="sec-body"></div>');
+  $('box').classList.add('wide');
+  const ask=()=>{$('sec-body').innerHTML='<div style="font-size:13.5px">PatchBay checks which doors are open, what software answers and whether that version has known security problems, its secure-page setup, and risky settings. It only looks: it doesn\'t try to break in or guess passwords. The only login it tries is FTP\'s public "anonymous" login.</div>'+
+      '<label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="sec-own"> This is my device (or I\'m allowed to check it).</label>'+
+      '<div class="row" style="margin-top:10px"><button class="primary" id="sec-go" disabled>Start the check</button><button onclick="closeModal()">Cancel</button></div>';
+    $('sec-own').onchange=()=>$('sec-go').disabled=!$('sec-own').checked;
+    $('sec-go').onclick=async()=>{try{await postJSON('/api/security/start',{ip:d.ip,kind:d.kind,owner_confirmed:true})}catch(e){$('sec-body').insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>');return}poll()}};
+  const draw=async()=>{if(!$('sec-body'))return clearInterval(secTimer);let j;try{j=await getJSON('/api/security?ip='+enc(d.ip))}catch(e){return}
+    if(j.running){$('sec-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="sec-stop">Stop</button></div>';
+      $('sec-stop').onclick=()=>postJSON('/api/security/stop',{ip:d.ip});return}
+    clearInterval(secTimer);
+    if(j.error){$('sec-body').innerHTML='<div style="color:var(--bad)">'+esc(j.error)+'</div><div class="row" style="margin-top:10px"><button id="sec-retry">Try again</button><button onclick="closeModal()">Close</button></div>';$('sec-retry').onclick=ask;return}
+    if(!j.report)return ask();
+    secReport(d,j.report)};
+  const poll=()=>{clearInterval(secTimer);draw();secTimer=setInterval(draw,1200)};
+  poll();
+}
+function secReport(d,rep){const f=rep.findings||[],n={};f.forEach(x=>n[x.severity]=(n[x.severity]||0)+1);
+  const fix=f.filter(x=>x.severity!=='info').length;
+  $('sec-body').innerHTML='<div style="font-size:14px;margin-bottom:6px">'+(fix?'<b>'+fix+' thing'+(fix>1?'s':'')+' to fix</b>: ':'<b>Nothing serious found.</b> ')+
+      Object.keys(SEV).filter(k=>n[k]).map(k=>n[k]+' '+SEV[k][0].toLowerCase()).join(', ')+' <span style="color:var(--mute);font-size:12.5px">· checked '+esc(ago(rep.checked).replace(/^seen /,''))+'</span></div>'+
+    f.map((x,i)=>'<div style="border-top:1px solid var(--line,#ddd);padding:8px 0"><span style="background:'+SEV[x.severity][1]+';color:#fff;border-radius:4px;padding:1px 6px;font-size:12px">'+SEV[x.severity][0]+'</span> <b>'+esc(x.title)+'</b>'+(x.port?' <span style="color:var(--mute);font-size:12.5px">port '+x.port+'</span>':'')+
+      '<div style="font-size:13.5px;margin-top:3px">'+esc(x.why)+'</div><div style="font-size:13.5px;margin-top:3px"><b>Fix:</b> '+esc(x.fix)+'</div>'+
+      (x.cves.length?'<ul style="margin:4px 0;font-size:13px">'+x.cves.map(c=>'<li>'+link('https://nvd.nist.gov/vuln/detail/'+enc(c.id),esc(c.id))+' (score '+c.score.toFixed(1)+'): '+esc(c.summary)+'</li>').join('')+'</ul>':'')+
+      (x.severity!=='info'?'<button class="sec-help" data-i="'+i+'" style="margin-top:4px">Help me fix this</button>':'')+'</div>').join('')+
+    '<div style="font-size:13px;color:var(--mute);border-top:1px solid var(--line,#ddd);padding-top:8px">Open doors: '+(rep.services.map(s=>s.port+' ('+esc(s.name)+(s.software.length?', '+esc(s.software.map(w=>w.product+' '+w.version).join(', ')):'')+')').join(', ')||'none')+'</div>'+
+    '<div class="row" style="margin-top:10px"><button id="sec-again">Check again</button><button onclick="closeModal()">Close</button></div>';
+  $('sec-again').onclick=async()=>{try{await postJSON('/api/security/start',{ip:d.ip,kind:d.kind,owner_confirmed:true});openSecurity(d)}catch(e){alert(e.message)}};
+  document.querySelectorAll('.sec-help').forEach(b=>b.onclick=async()=>{const x=f[+b.dataset.i];closeModal();if(busy)return;
+    const q='Help me fix this security problem on my '+(d.name||d.model||d.kind)+(d.model&&d.name?' (model '+d.model+')':'')+' at '+d.ip+': '+x.title+'. '+x.why+' Suggested fix: '+x.fix+(x.cves.length?' Known problems: '+x.cves.slice(0,3).map(c=>c.id).join(', ')+'.':'')+' Walk me through it step by step for this model.';
+    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})});
+}
+$('netscan-btn').onclick=startScan;$('ns-again').onclick=startScan;
+
+let picFor=null;
+function pickPicture(name){picFor=name;$('picfile').value='';$('picfile').click()}
+$('picfile').onchange=async()=>{const f=$('picfile').files[0];if(!f)return;
+  try{const img=await createImageBitmap(f);const s=256,c=document.createElement('canvas');c.width=c.height=s;
+    const k=Math.max(s/img.width,s/img.height),w=img.width*k,h=img.height*k;
+    c.getContext('2d').drawImage(img,(s-w)/2,(s-h)/2,w,h);
+    await postJSON('/api/portrait',{device:picFor,data:c.toDataURL('image/jpeg',0.88)});loadHome(false)}
+  catch(e){alert('Couldn\'t use that picture: '+e.message)}};
+
+function addDevice(pre){pre=pre||{};
+  modal(`<h3>Add a device</h3>
+   <label>How to reach its files<select id="a-proto">
+     <option value="ftp">FTP (homebrew consoles, many small devices)</option>
+     <option value="sftp">SFTP / SSH (Linux, Raspberry Pi, Macs, NAS; can also run commands)</option>
+     <option value="smb">SMB file sharing (Windows PCs, NAS, shared folders)</option>
+     <option value="folder">A folder on this Mac (a share you already connected in Finder)</option></select></label>
+   <div class="msgline" id="a-help"></div>
+   <label>Name (short, like GD2)<input id="a-name" autocomplete="off"></label>
+   <label id="a-hostl">IP address<input id="a-host" placeholder="192.168.1.60" autocomplete="off"></label>
+   <label id="a-portsl">Ports to try, in order<input id="a-ports" value="21, 5000"></label>
+   <label id="a-sharel" hidden>Shared folder name (the share), like Public or Media<input id="a-share" autocomplete="off"></label>
+   <label id="a-folderl" hidden>Folder on this Mac<input id="a-folder" placeholder="/Volumes/Media" autocomplete="off"></label>
+   <label id="a-userl">Username (leave empty if it doesn't need one)<input id="a-user" autocomplete="off"></label>
+   <label id="a-passl">Password (leave empty if it doesn't need one)<input id="a-pass" type="password" autocomplete="new-password"></label>
+   <div class="msgline" id="a-msg"></div>
+   <div class="row"><button class="primary" id="a-go">Connect and save</button><button id="a-any" hidden>Save it anyway</button>
+   <button id="a-no">Cancel</button></div>`);
+  const HELP={ftp:'PatchBay logs in to its FTP server, then remembers it.',
+    sftp:'Uses your login on the device (or the SSH keys already on this Mac if you leave the password empty). The first time, PatchBay remembers the device\'s identity.',
+    smb:'Connects the shared folder like Finder\'s "Connect to Server". Leave the username empty for guest access.',
+    folder:'Any folder on this Mac, for example a share you connected in Finder (it shows up under /Volumes).'};
+  const PORTS={ftp:'21, 5000',sftp:'22',smb:'445',folder:''};
+  const pr=$('a-proto'),sync=()=>{const v=pr.value;$('a-help').textContent=HELP[v];$('a-ports').value=pre.ports&&pre.protocol===v?pre.ports:PORTS[v];
+    $('a-hostl').hidden=$('a-portsl').hidden=v==='folder';$('a-sharel').hidden=v!=='smb';$('a-folderl').hidden=v!=='folder';
+    $('a-userl').hidden=$('a-passl').hidden=v==='folder'};
+  pr.onchange=sync;pr.value=pre.protocol||'ftp';sync();
+  if(pre.host)$('a-host').value=pre.host;if(pre.name)$('a-name').value=pre.name;
+  $('a-name').focus();$('a-no').onclick=closeModal;
+  const go=async anyway=>{const msg=$('a-msg');msg.className='msgline';msg.textContent=anyway?'Saving...':'Connecting... (this can take up to a minute if it doesn\'t answer)';
+    $('a-go').disabled=true;
+    try{await postJSON('/api/devices/add',{name:$('a-name').value,host:$('a-host').value,ports:$('a-ports').value,protocol:pr.value,
+      share:$('a-share').value,folder:$('a-folder').value,username:$('a-user').value,password:$('a-pass').value,save_anyway:anyway});closeModal();loadHome(true)}
+    catch(e){msg.className='msgline bad';msg.textContent=e.message;$('a-any').hidden=!(e.data&&e.data.can_save_anyway)}
+    $('a-go').disabled=false};
+  $('a-go').onclick=()=>go(false);$('a-any').onclick=()=>go(true);
+}
+
+/* ---------- dialogs */
+function modal(html,danger){$('box').className='box'+(danger?' danger':'');$('box').innerHTML=html;$('modal').classList.add('on')}
+function closeModal(){$('modal').classList.remove('on')}
+$('modal').onclick=e=>{if(e.target===$('modal'))closeModal()};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.reload()};
+
+/* ---------- chat */
+const log=$('log'),t=$('t'),send=$('send');
+function md(s){const keep=[];return esc(s).replace(/```[\w-]*\n?([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>')
+  .replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')
+  .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)"<]+)\)/g,(m,l,u)=>{keep.push(link(u,l));return '\u0000'+(keep.length-1)+'\u0000'})
+  .replace(/\bhttps?:\/\/[^\s<"\u0000]+/g,u=>{const m=u.match(/^(.*?)([.,;:!?)\]']*)$/);return link(m[1],m[1])+m[2]})
+  .replace(/\u0000(\d+)\u0000/g,(m,i)=>keep[+i])}
+function link(u,label){return '<a href="'+u+'" target="_blank" rel="noopener noreferrer">'+label+'</a>'}
+function add(cls,html,raw){const d=document.createElement('div');d.className=cls;d.innerHTML=html;
+  d.querySelectorAll('pre').forEach(pr=>copyBtn(pr,pr.textContent));
+  if(/\bmsg\b/.test(cls))copyBtn(d,raw!=null?raw:d.textContent);
+  log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+function copyBtn(el,text){const b=document.createElement('button');b.type='button';b.className='cp';b.textContent='Copy';
+  b.title='Copy to the clipboard';b.onclick=async ev=>{ev.stopPropagation();ev.preventDefault();
+    const ok=await copyText(text);b.textContent=ok?'Copied':'Couldn\'t copy';b.classList.add('done');
+    setTimeout(()=>{b.textContent='Copy';b.classList.remove('done')},1500)};el.appendChild(b)}
+async function copyText(text){ // the clipboard API only works on https or this Mac; the laptop (plain http) uses the old way
+  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}
+  const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';
+  document.body.appendChild(ta);ta.select();let ok=false;try{ok=document.execCommand('copy')}catch(e){}ta.remove();return ok}
+// Before/after side by side: the old version on the left, the new one on the right, matching lines level.
+// A unified diff of two texts, made in the page (for edits typed on the Files screen).
+function lineDiff(a,b,name){const A=a.split('\n'),B=b.split('\n'),n=A.length,m=B.length;
+  if(n*m>4e6)return 'Too big to compare line by line here ('+n+' and '+m+' lines).';
+  let p=0;while(p<n&&p<m&&A[p]===B[p])p++;let q=0;while(q<n-p&&q<m-p&&A[n-1-q]===B[m-1-q])q++;
+  const a2=A.slice(p,n-q),b2=B.slice(p,m-q),N=a2.length,M=b2.length,T=[];
+  for(let i=0;i<=N;i++)T.push(new Uint32Array(M+1));
+  for(let i=N-1;i>=0;i--)for(let j=M-1;j>=0;j--)T[i][j]=a2[i]===b2[j]?T[i+1][j+1]+1:Math.max(T[i+1][j],T[i][j+1]);
+  const ops=[];for(let i=0;i<p;i++)ops.push(' '+A[i]);let i=0,j=0;
+  while(i<N||j<M){if(i<N&&j<M&&a2[i]===b2[j]){ops.push(' '+a2[i]);i++;j++}else if(j<M&&(i>=N||T[i][j+1]>T[i+1][j])){ops.push('+'+b2[j]);j++}else{ops.push('-'+a2[i]);i++}}
+  for(let k=n-q;k<n;k++)ops.push(' '+A[k]);
+  // keep 3 lines around each change, like a normal diff
+  const out=['--- before: '+name,'+++ after: '+name],keep=ops.map(()=>false);
+  ops.forEach((o,k)=>{if(o[0]!==' ')for(let x=Math.max(0,k-3);x<=Math.min(ops.length-1,k+3);x++)keep[x]=true});
+  let L=1,R=1,k=0;
+  while(k<ops.length){if(!keep[k]){if(ops[k][0]!=='+')L++;if(ops[k][0]!=='-')R++;k++;continue}
+    let e=k;while(e<ops.length&&keep[e])e++;const blk=ops.slice(k,e);
+    out.push('@@ -'+L+','+blk.filter(o=>o[0]!=='+').length+' +'+R+','+blk.filter(o=>o[0]!=='-').length+' @@');
+    blk.forEach(o=>{out.push(o);if(o[0]!=='+')L++;if(o[0]!=='-')R++});k=e}
+  return out.join('\n')}
+function sbsHtml(d){let L=0,R=0,dels=[],adds=[],rows=[],files=[];
+  const cell=(n,txt,cls)=>'<td class="ln">'+(n||'')+'</td><td class="'+cls+'">'+(txt===null?'':esc(txt)||' ')+'</td>';
+  const flush=()=>{for(let i=0;i<Math.max(dels.length,adds.length);i++){const a=dels[i],b=adds[i];
+      rows.push('<tr>'+(a?cell(a[0],a[1],'sd'):cell('',null,'se'))+(b?cell(b[0],b[1],'sa'):cell('',null,'se'))+'</tr>')}dels=[];adds=[]};
+  for(const l of (d||'').split('\n')){
+    if(l.startsWith('--- ')||l.startsWith('+++ ')){if(l.startsWith('+++ '))files.push(l.slice(4).replace(/^after: /,''));continue}
+    const h=l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if(h){flush();L=+h[1];R=+h[2];rows.push('<tr class="sh"><td colspan="4">Line '+R+'</td></tr>');continue}
+    if(l.startsWith('-')){dels.push([L++,l.slice(1)]);continue}
+    if(l.startsWith('+')){adds.push([R++,l.slice(1)]);continue}
+    if(l.startsWith('\\'))continue;
+    if(l&&!/^[ +\-@]/.test(l)){flush();rows.push('<tr class="sh"><td colspan="4">'+esc(l)+'</td></tr>');continue}
+    if(!l)continue;flush();rows.push('<tr>'+cell(L++,l.slice(1),'sc')+cell(R++,l.slice(1),'sc')+'</tr>')}
+  flush();
+  return '<table class="sbs"><colgroup><col style="width:3.4em"><col><col style="width:3.4em"><col></colgroup><thead><tr><th colspan="2">Before'+(files[0]?' · '+esc(files[0]):'')+'</th><th colspan="2">After</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>'}
+let dvN=0;
+function diffView(d){const id='dv'+(++dvN),wide=($('chat').getBoundingClientRect().width||0)>=760;
+  return '<div class="dv" id="'+id+'" data-mode="'+(wide?'sbs':'uni')+'"><div class="dv-tog"><button type="button" data-m="sbs">Side by side</button><button type="button" data-m="uni">One column</button><button type="button" data-m="big" title="Open the before and after big, side by side">⤢ Open large</button></div>'+
+    '<div class="dv-sbs">'+sbsHtml(d)+'</div><pre class="dv-uni">'+diffHtml(d)+'</pre></div>'}
+document.addEventListener('click',e=>{const b=e.target.closest('.dv-tog button');if(!b)return;const dv=b.closest('.dv');
+  if(b.dataset.m==='big'){const card=dv.closest('.card'),title=card&&card.querySelector('h3')?card.querySelector('h3').textContent:'The change';
+    modal('<h3>'+esc(title)+'</h3><div class="dv-big">'+dv.querySelector('.dv-sbs').innerHTML+'</div><div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');
+    $('box').classList.add('wide');return}
+  dv.dataset.mode=b.dataset.m});
+function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
+  if(l.startsWith('+')&&!l.startsWith('+++'))return '<span class="add">'+e+'</span>';
+  if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
+async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
+  $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
+  $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${modelLabel(info.model)} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
+  catch(e){$('info').textContent=e.message}}
+async function loadChat(){log.innerHTML='';drawQuick();loadChatBar();loadModels();loadClaude();
+  try{const h=await getJSON('/api/history?device='+enc(cur));
+    if(!h.events.length&&cur===HOMECHAT){add('msg ai','Hi! I\'m PatchBay. Ask me about any of your devices, find or add a device by its address, '+
+      'or change a setting. To work on one device, click its picture.');
+}
+    else if(!h.events.length){add('msg ai','Hi! I can check '+esc(cur)+' for crash damage, look through its folders, read and explain files, and suggest fixes. '+
+      'I can also update a homebrew program for newer firmware by rebuilding it from its source code. '+
+      'I never change anything unless you confirm on a card here.');
+}
+    for(const ev of h.events)show(ev,null,h.pending);
+    if(h.running&&!busy)chatStream('/api/follow',{since:h.job_at},h.job_at)}
+  catch(e){add('msg err',reachMsg(e))}}
+function reachMsg(e){return location.protocol==='file:'?'This page was opened as a file, so it can\'t talk to PatchBay. In Terminal run python3 patchbay.py, then open http://127.0.0.1:8765 in your browser.':
+  'Can\'t reach PatchBay ('+esc(e.message)+'). Is python3 patchbay.py running in Terminal on your Mac?'}
+function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
+  const keep=()=>{if(ctx)log.appendChild(ctx.status)};
+  const endStream=()=>{if(ctx&&ctx.stream){ctx.stream.remove();ctx.stream=null}};
+  if(ev.type==='user')add('msg me',meHtml(ev.text)+(ev.files&&ev.files.length?'<div class="files">📎 '+ev.files.map(esc).join(', ')+'</div>':''),ev.text);
+  else if(ev.type==='delta'){if(ctx){if(!ctx.stream){ctx.stream=add('msg ai stream','')}
+    ctx.stream.firstChild&&ctx.stream.firstChild.nodeType===3?ctx.stream.firstChild.nodeValue+=ev.text:ctx.stream.prepend(document.createTextNode(ev.text));
+    log.scrollTop=log.scrollHeight;keep()}}
+  else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
+  else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
+  else if(ev.type==='tool'){endStream();if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
+    ctx.status.step();ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
+  else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
+    add('step','<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':'✓ ')+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+  else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
+  else if(ev.type==='answer'){endStream();add('msg ai',md(ev.text||'(no answer)'),ev.text||'')}
+  else if(ev.type==='error'){const d=add('msg err',esc(ev.text)+' <button class="rep" style="margin-left:6px;font-size:12px">Copy error report</button>',ev.text);
+    d.querySelector('.rep').onclick=async e=>{try{const r=await getJSON('/api/report');e.target.textContent=(await copyText(r.text))?'Copied — paste it to me':'Open 🩺 Setup to copy it'}catch(x){e.target.textContent='Open 🩺 Setup'}}}
+  else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
+  else if(ev.type==='restart'){waitForRestart()}
+  else if(ev.type==='reload_hint'){const c=add('card','<div>The change to PatchBay\'s page is saved. Reload to see it (if the page looks broken afterwards, open <a href="/fix">PatchBay repair</a> to undo it).</div><div class="row"><button class="primary">Reload the page</button></div>');
+    c.querySelector('button').onclick=()=>location.reload();keep()}
+  else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
+  else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
+  else if(ev.type==='new_chat'){log.innerHTML='';add('msg me',esc(ev.text),ev.text);if(ctx)log.appendChild(ctx.status);loadChatBar()}
+  else if(ev.type==='claude_cost'){showCost(ev)}
+  else if(ev.type==='choices'){endStream();const c=add('card',md(ev.text)+'<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+
+      ev.options.map((o,i)=>'<button'+(i===0?' class="primary"':'')+' data-i="'+i+'">'+esc(o.label)+'</button>').join('')+'</div>',ev.text);
+    c.querySelectorAll('button[data-i]').forEach(b=>b.onclick=async()=>{if(busy)return;const o=ev.options[+b.dataset.i];
+      c.querySelector('.row').innerHTML='<i>'+esc(o.label)+'</i>';add('msg me',esc(o.label),o.label);await chatStream('/api/chat',{text:o.send})});keep()}
+}
+// The "working" line under the chat: a moving bar, what it's doing now, how many steps, and how long so far.
+function thinking(){
+  const el=add('think','<div class="tk-bar"><i></i></div><div class="tk-row"><span class="tk-dot"></span><span class="tk-text">Thinking…</span><span class="tk-meta"></span></div>');
+  const label=el.querySelector('.tk-text'),meta=el.querySelector('.tk-meta'),t0=Date.now();let steps=0;
+  Object.defineProperty(el,'textContent',{get:()=>label.textContent,set:v=>{label.textContent=v}});
+  const tick=()=>{const s=Math.floor((Date.now()-t0)/1000),m=Math.floor(s/60);
+    meta.textContent=(steps?'step '+steps+' · ':'')+(m?m+'m '+String(s%60).padStart(2,'0')+'s':s+'s')+(s>=90&&!steps?' · big models can take a minute or two':'')};
+  tick();const timer=setInterval(tick,1000);
+  el.step=()=>{steps++;tick()};el.stop=()=>clearInterval(timer);return el}
+// ---- themes and density (saved on the Mac, so every browser and the PatchBay app match)
+const THEMES=[['auto','Match my Mac','Light or dark, like macOS',['#f6f6f4','#1e1e1c','#2f5bd3','#5cc184']],
+  ['pirate','Pirate','Ocean night, parchment and gold',['#0B132B','#13213F','#D4AF37','#EF6B5E']],
+  ['mac-tahoe','Mac Tahoe','Clean, bright and native',['#F6F6F6','#FFFFFF','#007AFF','#E5E5EA']],
+  ['dark-neon-glass','Dark neon glass','Frosted panels, neon glow',['#0A0F1D','#1E293B','#00F5D4','#7B2CBF']]];
+function setLook(theme,density){const h=document.documentElement;
+  if(theme!==undefined){if(theme==='auto')h.removeAttribute('data-theme');else h.setAttribute('data-theme',theme)}
+  if(density!==undefined){if(density==='compact')h.setAttribute('data-density','compact');else h.removeAttribute('data-density')}}
+function drawLook(){const box=$('sc-look');if(!box)return;const h=document.documentElement;
+  const cur_t=h.getAttribute('data-theme')||'auto',cur_d=h.getAttribute('data-density')||'comfortable';
+  box.innerHTML='<div class="theme-pick">'+THEMES.map(([id,name,sub,c])=>'<button type="button" data-t="'+id+'" class="'+(id===cur_t?'on':'')+'">'+
+      '<span class="sw">'+c.map(x=>'<i style="background:'+x+'"></i>').join('')+'</span><b style="font-size:13.5px">'+esc(name)+'</b><small style="color:var(--mute);font-size:12px">'+esc(sub)+'</small></button>').join('')+'</div>'+
+    '<div style="display:flex;gap:14px;align-items:center;margin-top:8px;font-size:13.5px">Spacing: '+
+    ['comfortable','compact'].map(d=>'<label style="display:flex;gap:5px;align-items:center;margin:0;color:inherit"><input type="radio" name="dens" value="'+d+'" style="width:auto"'+(d===cur_d?' checked':'')+'> '+(d==='compact'?'Compact (fits more)':'Comfortable')+'</label>').join('')+'</div>';
+  box.querySelectorAll('[data-t]').forEach(b=>b.onclick=async()=>{setLook(b.dataset.t);drawLook();try{await postJSON('/api/ui',{theme:b.dataset.t})}catch(e){}});
+  box.querySelectorAll('[name=dens]').forEach(r=>r.onchange=async()=>{setLook(undefined,r.value);try{await postJSON('/api/ui',{density:r.value})}catch(e){}})}
+
+async function chatStream(url,body,since){
+  // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
+  const dev=cur;busy=true;setSend(true);const ctx={status:thinking(),live:null,stream:null};
+  let n=since||0,finished=false,tries=0;
+  const on=ev=>{if(ev.type==='ping')return;if(ev.type==='done'){finished=true;return}n++;
+    if(cur===dev&&(view==='chat'||dev===HOMECHAT))show(ev,ctx)};
+  try{await stream(url,Object.assign({device:dev},body),on)}catch(e){}
+  while(!finished&&!restarting&&tries<200){tries++;
+    ctx.status.textContent='The connection to '+(info.computer||'the Mac')+' dropped. Reconnecting… (the work carries on there)';
+    await new Promise(r=>setTimeout(r,Math.min(10000,1500*tries)));
+    try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
+  if(!finished&&!restarting)add('msg err','Can\'t reach PatchBay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
+  ctx.status.stop();ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
+  if(dev===cur)loadChatBar()}
+function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
+  send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
+function card(ev,closed){
+  if(ev.self)return selfCard(ev,closed);
+  if(ev.on_mac)return macCard(ev,closed);
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
+    (/\.(nro|nsp|ovl|3dsx|elf)$/i.test(ev.remote||'')?'<div>If this app is open on '+esc(ev.device)+', close it first.</div>':'')+
+    (ev.writes_on?'':'<label style="display:block;margin-top:6px"><input type="checkbox" class="ew" checked style="width:auto"> Also turn on writing for '+esc(ev.device)+' (it\'s off right now, and this change needs it). You can turn it off again any time by asking.</label>')+
+    (ev.diff?'<details open><summary>Exact change</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre>'+diffHtml(ev.diff)+'</pre>')+'</details>':'')+
+    '<div class="row">Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off"><button class="primary">Confirm</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [inp,ok,no]=[c.querySelector('input'),...row.querySelectorAll('button')];
+  ok.onclick=async()=>{if(busy)return;if(inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const ew=c.querySelector('.ew');close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value,enable_writes:!!(ew&&ew.checked)})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
+}
+// A red box for commands that can delete or break things, with a tick the user must give.
+function riskBox(list,where){if(!list||!list.length)return '';
+  return '<div class="riskbox"><b>⚠ Risky command</b> on '+esc(where)+'. It '+list.map(esc).join('; it ')+'. PatchBay can\'t undo this, and nothing is backed up first.'+
+    '<label><input type="checkbox" class="risk-ok"> I understand what this can delete or change, and I want to run it.</label></div>'}
+function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
+  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude',dcmd=ev.kind==='device_command';
+  if(dcmd)ev.typing=true;
+  const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
+  if(plan)return planCard(ev,closed);
+  const label=dcmd?'Run it on '+ev.device:ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by PatchBay, so read it first.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+      (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
+      'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
+    (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
+    riskBox(ev.risk,dcmd?ev.device:(ev.computer||'the Mac'))+
+    '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input'),und=c.querySelector('.risk-ok');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    if(und&&!und.checked){und.parentNode.style.outline='2px solid var(--bad)';return}
+    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed,understood:!!(und&&und.checked)})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
+}
+function selfCard(ev,closed){ // a change to PatchBay's own code, or restarting PatchBay
+  const rs=ev.kind==='self_restart';
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    (rs?'<div>PatchBay stops and starts again so its new code is used. Chats in progress stop. The page reconnects by itself, and if PatchBay can\'t start, it puts the last change back by itself.</div>':
+      '<div>This changes <b>PatchBay itself</b> ('+esc(ev.remote)+' on '+esc(ev.computer)+'). None of your devices are touched. It was checked for mistakes, the old version is backed up first, and <b>Undo</b> is in 🕘 Activity.</div>'+
+      '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">'+esc(ev.stats||'')+(ev.page_only?' · takes effect when you reload the page':' · takes effect after a restart')+'</div>'+
+      (ev.word?'<div style="margin-top:6px;padding:8px 10px;border-radius:8px;border:1px solid var(--bad);color:var(--bad)"><b>⚠ This touches one of PatchBay\'s safety rules</b> ('+esc((ev.safety||[]).join(', '))+'). Only confirm if you asked for exactly this.</div>':''))+
+    '<details'+(rs||(ev.diff||'').split('\n').length<80?' open':'')+'><summary>'+(rs?'Changes it will use':'Exact change')+'</summary>'+(rs?'<pre>'+esc(ev.diff||'')+'</pre>':diffView(ev.diff||''))+'</details>'+
+    '<div class="row">'+(ev.word?'Type <b>'+esc(ev.word)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+(rs?'Restart PatchBay':'Save the change')+'</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim().toLowerCase()!==ev.word.toLowerCase()){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
+let restarting=false;
+async function waitForRestart(){if(restarting)return;restarting=true;
+  const note=add('live','Restarting PatchBay…');await new Promise(r=>setTimeout(r,2500));
+  for(let i=0;i<60;i++){try{const r=await fetch('/api/devices',{cache:'no-store'});if(r.ok){location.reload();return}}catch(e){}
+    await new Promise(r=>setTimeout(r,1000))}
+  note.innerHTML='PatchBay hasn\'t come back yet. Start it again from the Dock, or open <a href="/fix">PatchBay repair</a>.'}
+function planCard(ev,closed){
+  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>Approve this once and PatchBay does every step without stopping to ask. '+
+    'Changes on '+esc(ev.computer)+' happen by themselves'+(ev.typing?'; the changes to '+esc(ev.device)+' listed below go through too, each backed up first':
+    '; anything else that writes to '+esc(ev.device)+' still asks you')+'. You can press Stop any time.</div>'+
+    '<pre>'+esc(ev.diff||'')+'</pre><div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to approve: <input autocomplete="off">':'')+
+    '<button class="primary">Approve plan</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const typed=inp?inp.value:'';close('Approved.');await chatStream('/api/confirm',{id:ev.id,typed})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
+
+/* attachments: drop files into the chat, or the 📎 button */
+let atts=[];
+function drawAtts(){$('atts').innerHTML=atts.map((a,i)=>`<span class="chip">📎 ${esc(a.name)} <small>${size(a.size)}</small><button data-i="${i}" title="Remove">×</button></span>`).join('');
+  $('atts').querySelectorAll('button').forEach(b=>b.onclick=()=>{atts.splice(+b.dataset.i,1);drawAtts()})}
+async function attachFiles(files){
+  for(const f of files){
+    if(!f.size&&!f.type&&f.name.indexOf('.')<0){add('msg err','Folders can\'t be added. Add the files inside it.');continue}
+    const chip=document.createElement('span');chip.className='chip';chip.textContent='Adding '+f.name+'…';$('atts').appendChild(chip);
+    try{const r=await fetch('/api/chat/attach?device='+enc(cur)+'&name='+enc(f.name),{method:'POST',body:f});const j=await r.json();
+      if(!r.ok)throw new Error(j.error);atts.push(j)}catch(e){add('msg err','Couldn\'t add '+esc(f.name)+': '+esc(e.message))}
+    chip.remove();drawAtts()}}
+$('attach').onclick=()=>{$('chatfile').value='';$('chatfile').click()};
+$('chatfile').onchange=()=>attachFiles([...$('chatfile').files]);
+['dragover','dragenter'].forEach(n=>$('chat').addEventListener(n,e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();$('chat').classList.add('dropping')}}));
+$('chat').addEventListener('dragleave',e=>{if(!$('chat').contains(e.relatedTarget))$('chat').classList.remove('dropping')});
+$('chat').addEventListener('drop',e=>{if(![...e.dataTransfer.types].includes('Files'))return;e.preventDefault();$('chat').classList.remove('dropping');attachFiles([...e.dataTransfer.files])});
+
+/* quick buttons */
+function drawQuick(){
+  const home=cur===HOMECHAT;
+  const q=home?[['Which devices are online?',1],['Add a new device',1],['Search an address and port…','Search 192.168.1.'],['Change a setting…','Change ']]
+    :[['Check for crash damage','Check '+cur+' for crash damage',1],['Update an app…','Update the app '],['Back up now','Back up everything on '+cur,1],
+      ['What firmware?','What firmware is '+cur+' running?',1],['Find an app…','Find the app '],['Plan a big job…','Make a plan to ']];
+  $('quick').innerHTML='';
+  {const b=document.createElement('button');b.type='button';b.textContent='⭐ Saved prompts';b.title='Save long prompts and run them again with one click';
+    b.onclick=()=>openPrompts();$('quick').appendChild(b)}
+  for(const [label,text,go] of q.map(x=>x.length===2&&x[1]===1?[x[0],x[0],1]:x)){const b=document.createElement('button');b.type='button';b.textContent=label;
+    b.onclick=()=>{if(busy)return;t.value=text;if(go)$('f').requestSubmit();else{t.focus();t.setSelectionRange(t.value.length,t.value.length)}};$('quick').appendChild(b)}}
+
+/* past chats and the model picker */
+async function loadChatBar(){
+  try{const j=await getJSON('/api/chats?device='+enc(cur));const c=j.chats.find(x=>x.id===j.current);
+    $('chat-title').textContent=c?c.title:'New chat';$('chats-btn').textContent='Past chats ('+j.chats.length+') ▾';chatsCache=j}catch(e){}}
+let chatsCache=null;
+$('chats-btn').onclick=async e=>{e.stopPropagation();const l=$('chatlist');if(l.style.display==='block'){l.style.display='none';return}
+  await loadChatBar();const j=chatsCache||{chats:[]};
+  l.innerHTML=j.chats.length?j.chats.map(c=>`<div class="it${c.id===j.current?' on':''}" data-id="${esc(c.id)}"><span class="t">${esc(c.title)}<br><small>${esc(c.updated||'')} · ${c.count} message${c.count===1?'':'s'}</small></span><button data-del="${esc(c.id)}" title="Delete this chat">Delete</button></div>`).join('')
+    :'<div class="note" style="padding:8px">No saved chats yet. Every chat is saved by itself.</div>';
+  const r=$('chats-btn').getBoundingClientRect(),pr=$('chat').getBoundingClientRect();l.style.left=(r.left-pr.left)+'px';l.style.top=(r.bottom-pr.top+4)+'px';l.style.display='block';
+  l.querySelectorAll('.it').forEach(it=>it.onclick=async ev=>{ev.stopPropagation();if(ev.target.dataset.del){
+      if(!confirm('Delete this saved chat?'))return;try{await postJSON('/api/chats/delete',{device:cur,id:ev.target.dataset.del})}catch(x){alert(x.message)}
+      l.style.display='none';if(ev.target.dataset.del===j.current)loadChat();else loadChatBar();return}
+    if(busy)return;try{await postJSON('/api/chats/open',{device:cur,id:it.dataset.id});l.style.display='none';loadChat()}catch(x){alert(x.message)}})};
+document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('chatlist').style.display='none'});
+// ---- Setup: self-check with Fix buttons, the app icon / start at login, and the error report
+const LV={ok:['✅','var(--ok,#2a7)'],warn:['⚠️','var(--warn,#b80)'],bad:['❌','var(--bad)']};
+async function openSetup(msg){
+  modal('<h3>🩺 Setup check</h3><div id="sc-body">Checking…</div>');
+  let j;try{j=await getJSON('/api/selfcheck')}catch(e){$('sc-body').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>';return}
+  const a=j.app;
+  $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    j.checks.map(c=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line,#ddd)">'+
+      '<span>'+LV[c.level][0]+'</span><div style="flex:1"><b>'+esc(c.name)+'</b><div style="font-size:13.5px">'+esc(c.detail)+'</div>'+
+      (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
+      (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>').join('')+
+    (a.mac?'<h3 style="margin-top:14px">Starting PatchBay</h3>'+
+      '<div style="font-size:13.5px">'+(a.app?(a.native?'✅ The PatchBay app (with its own window) is in your Applications folder. Drag it onto the Dock to start PatchBay with one click.':'✅ The PatchBay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a PatchBay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the PatchBay app')+'</button>'+
+      (a.no_tools?'<button id="sc-tools" class="primary">Install Apple\'s free tools</button>':'')+(a.build_error?'<button id="sc-berr">Copy the build error</button>':'')+
+      '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start PatchBay by itself when I log in to the Mac</label></div>'+
+      (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
+      (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
+    '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
+    '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
+    '<h3 style="margin-top:14px">Start over</h3><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
+    '<div class="row" style="margin-top:6px"><button id="sc-clearall" class="danger">Clear everything…</button></div>'+
+    '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
+    '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
+  const say=t=>$('sc-msg').innerHTML=t;
+  $('sc-clearall').onclick=()=>{closeModal();clearData(true)};
+  document.querySelectorAll('.sc-fix').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='Working…';
+    try{const r=await postJSON('/api/selfcheck/fix',{id:b.dataset.id});openSetup(r.message)}catch(e){b.disabled=false;b.textContent='Try again';say('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}});
+  const ap=$('sc-app');if(ap)ap.onclick=async()=>{ap.disabled=true;ap.textContent='Building the app… (about a minute)';
+    try{const r=await postJSON('/api/macapp',{action:'make_app'});openSetup(r.native?'Made the PatchBay app with its own window. Open Applications in Finder and drag PatchBay onto the Dock (if an older PatchBay icon is there, remove it first).':'Made the PatchBay app as a simple launcher. '+(r.note||''))}
+    catch(e){ap.disabled=false;ap.textContent='Try again';say(esc(e.message))}};
+  const tl=$('sc-tools');if(tl)tl.onclick=async()=>{tl.disabled=true;try{await postJSON('/api/macapp',{action:'install_tools'});say('Apple\'s installer should be open now (it may be behind this window). Click Install, wait for it to finish, then press Rebuild the app.')}catch(e){tl.disabled=false;say(esc(e.message))}};
+  const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
+  const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
+  drawLook();
+  $('sc-again').onclick=()=>openSetup();
+  checkUpdate();
+  $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
+    say(okc?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Select the text below and copy it.')+'';
+    if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
+}
+$('setup-btn').onclick=()=>openSetup();
+
+// ---- Apps: the homebrew library with update checks
+let apTimer=null;
+async function loadApps(){clearInterval(apTimer);const dev=cur;let j;
+  try{j=await getJSON('/api/library?device='+enc(dev))}catch(e){$('ap-body').textContent=e.message;return}
+  if(view!=='apps'||cur!==dev)return;
+  if(j.job&&j.job.running){$('ap-scan').disabled=true;$('ap-body').innerHTML='<div>'+esc(j.job.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round(j.job.progress*100)+'%"></div></div>';
+    apTimer=setTimeout(loadApps,1200);return}
+  $('ap-scan').disabled=false;
+  const lib=j.library;
+  if(!lib){$('ap-info').textContent='';$('ap-body').innerHTML=(j.job&&j.job.error?'<div style="color:var(--bad)">'+esc(j.job.error)+'</div>':'')+'<div class="empty">Press <b>Read the apps</b> to list every homebrew app on '+esc(dev)+' with its version and icon. The first time it reads each app once (this can take a minute); after that only new or changed ones.</div>';return}
+  drawApps(dev,lib,j.job&&j.job.error)}
+function drawApps(dev,lib,err){
+  const upd=lib.apps.concat(lib.sysmodules||[]).filter(a=>a.latest&&a.latest.status==='newer').length;
+  $('ap-info').textContent=lib.apps.length+' apps'+((lib.sysmodules||[]).length?', '+lib.sysmodules.length+' background programs':'')+' · read '+ago(lib.checked).replace(/^seen /,'')+
+    (lib.updates_checked?' · '+(upd?upd+' update'+(upd>1?'s':'')+' available':'everything known is up to date'):'');
+  const card=(a,i)=>{const L=a.latest,st=L?L.status:null;
+    return '<div class="apcard">'+(a.icon?'<img src="/api/library/icon?device='+enc(dev)+'&id='+a.icon+'" alt="">':'<div class="noicon"></div>')+
+    '<div style="flex:1;min-width:0"><b>'+esc(a.name)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(a.version||'')+'</span>'+
+    '<div style="font-size:12.5px;color:var(--mute);overflow-wrap:anywhere">'+esc(a.author?a.author+' · ':'')+esc(a.where||a.path)+(a.boot2?' · starts at boot':'')+'</div>'+
+    (a.problems&&a.problems.length?'<div style="font-size:13px;color:var(--bad)">⚠ Damaged: '+esc(a.problems[0])+'</div>':'')+(a.note?'<div style="font-size:13px">'+esc(a.note)+'</div>':'')+
+    (L?'<div style="font-size:13px;margin-top:2px">'+(st==='newer'?'🆕 <b>'+esc(L.tag)+'</b> is out ('+esc(L.date)+')':st==='same'?'✅ Up to date ('+esc(L.tag)+')':st==='older'?'Yours is newer than the latest release ('+esc(L.tag)+'), maybe your own build':st==='none'?'No releases on GitHub':'Newest release: '+esc(L.tag)+' ('+esc(L.date)+')')+'</div>':'')+
+    '<div style="font-size:12px;color:var(--mute)">'+(a.repo?'GitHub: '+link('https://github.com/'+a.repo,esc(a.repo))+(a.repo_guessed?' (guessed)':''):'No GitHub project known')+' · <a href="#" class="ap-repo" data-i="'+i+'">'+(a.repo?'change':'set it')+'</a></div>'+
+    '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(st==='newer'?'<button class="primary ap-up" data-i="'+i+'">Update</button>':'')+
+      (a.problems&&a.problems.length?'<button class="ap-fix" data-i="'+i+'">Help me fix it</button>':'')+'</div></div></div>'};
+  const all=lib.apps.concat(lib.sysmodules||[]);
+  const ps=lib.platform==='playstation',grid=list=>'<div class="apgrid">'+list.map(([a,i])=>card(a,i)).join('')+'</div>',idx=lib.apps.map((a,i)=>[a,i]);
+  const hb=idx.filter(([a])=>!ps||a.homebrew),games=ps?idx.filter(([a])=>!a.homebrew):[];
+  $('ap-body').innerHTML=(err?'<div style="color:var(--bad)">'+esc(err)+'</div>':'')+(ps?'<h3 style="margin-top:0">Homebrew apps</h3>':'')+
+    (hb.length?grid(hb):'<div class="empty">No homebrew apps found.</div>')+
+    (games.length?'<details style="margin-top:14px"><summary style="cursor:pointer"><b>Games and official apps ('+games.length+')</b></summary>'+grid(games)+'</details>':'')+
+    ((lib.sysmodules||[]).length?'<h3>'+(ps?'Payloads and plugins':'Background programs (sysmodules)')+'</h3><div class="apgrid">'+lib.sysmodules.map((a,i)=>card(a,lib.apps.length+i)).join('')+'</div>':'');
+  const ask=q=>{location.hash='#/d/'+enc(dev)+'/chat';setTimeout(()=>{if(busy)return;t.value=q;send.click()},900)};
+  document.querySelectorAll('.ap-up').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];
+    ask('Update '+a.name+' ('+(a.where||a.path)+', version '+(a.version||'unknown')+') to the newest release '+a.latest.tag+' from github.com/'+a.repo+'. Back up the current file first.')});
+  document.querySelectorAll('.ap-fix').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];ask(a.path+' looks damaged ('+a.problems[0]+'). Can you fix it?')});
+  document.querySelectorAll('.ap-repo').forEach(b=>b.onclick=async e=>{e.preventDefault();const a=all[+b.dataset.i];
+    const r=prompt('GitHub project for '+a.name+' (owner/name, like mtheall/ftpd). Leave empty to forget it.',a.repo||'');if(r===null)return;
+    try{await postJSON('/api/library/repo',{device:dev,path:a.path,repo:r});loadApps()}catch(x){alert(x.message)}});
+}
+$('ap-scan').onclick=async()=>{try{await postJSON('/api/library/scan',{device:cur});loadApps()}catch(e){$('ap-body').textContent=e.message}};
+$('ap-upd').onclick=async()=>{const b=$('ap-upd');b.disabled=true;b.textContent='Checking…';
+  try{const r=await postJSON('/api/library/updates',{device:cur});drawApps(cur,r.library,r.errors.length?'Couldn\'t check: '+r.errors.join('; '):'')}catch(e){$('ap-info').textContent=e.message}
+  b.disabled=false;b.textContent='Check for updates'};
+
+// ---- activity log with undo
+async function openActivity(msg,dev){
+  modal('<h3>🕘 Activity</h3><div id="act-body">Loading…</div>');$('box').classList.add('wide');
+  let j;try{j=await getJSON('/api/activity')}catch(e){$('act-body').textContent=e.message;return}
+  const devs=[...new Set(j.items.map(x=>x.device))].sort();
+  const draw=()=>{const f=$('act-dev')?$('act-dev').value:(dev||'');const items=j.items.filter(x=>!f||x.device===f);
+    $('act-list').innerHTML=items.length?items.map((x,i)=>'<div style="border-bottom:1px solid var(--line,#ddd);padding:7px 0">'+
+      '<div style="font-size:12.5px;color:var(--mute)">'+(x.when?new Date(x.when*1000).toLocaleString():'')+' · '+esc(x.device)+' · '+(x.where==='device'?'on the device':'on this Mac')+'</div>'+
+      '<div><b>'+esc(x.what)+'</b>'+(x.undone?' <span style="font-size:12px">↩ undone</span>':'')+'</div>'+
+      (x.detail?'<div style="font-size:13px">'+esc(x.detail)+'</div>':'')+
+      (x.undo?'<button class="act-undo" data-id="'+esc(x.id)+'" style="margin-top:4px">Undo</button><div class="act-c"></div>':'')+'</div>').join(''):
+      '<div class="empty">Nothing yet.</div>';
+    document.querySelectorAll('.act-undo').forEach(b=>b.onclick=()=>{const x=j.items.find(y=>y.id===b.dataset.id),box=b.nextElementSibling,dv=x.where==='device';
+      const wOff=dv&&!j.writes_on[x.device];
+      box.innerHTML='<div style="font-size:13.5px;margin-top:4px">'+esc(x.undo)+'. The current version is backed up first.</div>'+
+        (wOff?'<label style="display:flex;gap:6px;align-items:center;margin:4px 0;color:inherit"><input type="checkbox" class="act-w" checked style="width:auto"> Also turn on writing to '+esc(x.device)+' (it\'s off)</label>':'')+
+        '<div class="row" style="margin-top:4px">'+(dv?'Type <b>'+esc(x.device)+'</b> to confirm: <input class="act-t" autocomplete="off" style="width:120px">':'')+
+        '<button class="primary act-go">Undo it</button><button class="act-no">Cancel</button></div><div class="act-m" style="font-size:13px"></div>';
+      box.querySelector('.act-no').onclick=()=>box.innerHTML='';
+      box.querySelector('.act-go').onclick=async ev=>{ev.target.disabled=true;
+        try{const r=await postJSON('/api/activity/undo',{id:x.id,typed:dv?box.querySelector('.act-t').value:'',enable_writes:wOff&&box.querySelector('.act-w').checked});
+          openActivity(r.message,$('act-dev')?$('act-dev').value:'')}
+        catch(e){ev.target.disabled=false;box.querySelector('.act-m').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}}})};
+  $('act-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    '<div class="row" style="margin:0 0 6px"><label style="margin:0;display:flex;gap:6px;align-items:center;color:inherit">Device <select id="act-dev"><option value="">All devices</option>'+
+    devs.map(d=>'<option'+(d===dev?' selected':'')+'>'+esc(d)+'</option>').join('')+'</select></label></div>'+
+    '<div id="act-list" style="max-height:60vh;overflow:auto"></div><div class="row" style="margin-top:8px"><button onclick="closeModal()">Close</button></div>';
+  $('act-dev').onchange=draw;draw();
+}
+$('activity-btn').onclick=()=>openActivity('',(location.hash.match(/^#\/d\/([^/]+)/)||[])[1]?decodeURIComponent(location.hash.match(/^#\/d\/([^/]+)/)[1]):'');
+
+// ---- one-button update (git pull + restart)
+async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;
+  try{u=await getJSON('/api/update')}catch(e){box.textContent=e.message;return}
+  if(!$('sc-upd'))return;
+  if(u.error){box.innerHTML='<span style="color:var(--bad)">'+esc(u.error)+'</span>';return}
+  if(!u.behind){box.innerHTML='✅ PatchBay is up to date'+(u.current?' <span style="color:var(--mute)">(version '+esc(u.current)+')</span>':'')+'.';setUpdBadge(false);return}
+  setUpdBadge(true);
+  box.innerHTML='<b>An update is ready</b> ('+u.behind+' change'+(u.behind>1?'s':'')+'):<ul style="margin:4px 0;max-height:140px;overflow:auto">'+u.changes.map(c=>'<li>'+esc(c)+'</li>').join('')+'</ul>'+
+    (u.edited.length&&!u.own?'<div class="riskbox" style="border-color:var(--warn)"><b style="color:var(--warn)">Some PatchBay files were changed on this Mac:</b> '+esc(u.edited.map(e=>e.split('/').pop()).join(', '))+'. '+
+       'PatchBay saves a copy of your version first, updates, and then puts your changes back on top. If they clash with the update, the updated version is used and your copy stays saved, so nothing is lost.'+
+       (u.diff?'<details style="margin-top:6px"><summary style="cursor:pointer">See what was changed</summary>'+diffView(u.diff)+'</details>':'')+'</div>':'')+
+    '<button class="primary" id="sc-update">'+(u.edited.length&&!u.own?'Save my changes and update':'Update and restart')+'</button> <span style="font-size:12.5px;color:var(--mute)">Your settings, devices, backups and chats stay as they are.</span>';
+  const b=$('sc-update');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Updating…';
+    try{const r=await postJSON('/api/update/apply',{keep_local:!!u.edited.length});
+      if(!r.restarting){box.textContent=r.message;return}
+      box.textContent='Updated. Restarting PatchBay…';
+      await new Promise(ok=>setTimeout(ok,2500));
+      for(let i=0;i<60;i++){try{await getJSON('/api/update?fetch=0');location.reload();return}catch(e){await new Promise(ok=>setTimeout(ok,1000))}}
+      box.textContent='PatchBay didn\'t come back by itself. Start it again from the Dock or Terminal.'}
+    catch(e){b.disabled=false;b.textContent='Try again';box.insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>')}}}
+function setUpdBadge(on){const s=$('setup-btn');if(s)s.textContent=on?'🩺 Setup · update ready':'🩺 Setup'}
+setTimeout(async()=>{try{const u=await getJSON('/api/update');setUpdBadge(!u.error&&u.behind>0)}catch(e){}},4000);
+
+// ---- Claude (cloud help with your own API key)
+function money(x){return '$'+(x<0.995?(+x).toFixed(x<0.1?3:2):(+x).toFixed(2))}
+function showCost(c){const b=$('claude-btn');if(!b)return;
+  b.textContent='☁ Claude'+(c&&c.session>0?' · '+money(c.session)+' today':'');
+  b.title='Ask Claude for help. This session: '+money(c.session||0)+'. This month: '+money(c.month||0)+(c.cap?' of '+money(c.cap)+' limit':'')+'.'}
+async function claudeStatus(force){try{const s=await getJSON('/api/claude/status'+(force?'?force=1':''));
+  const d=$('cl-dot');d.className='cl-dot '+s.state;d.textContent={connected:'connected',rejected:'key rejected',none:'not connected',unknown:'not checked'}[s.state]||'';
+  $('claude-btn').title=s.text+'. Click for Claude settings.';const b=$('cl-state');if(b){b.className='cl-state '+s.state;b.textContent=s.text}return s}catch(e){return null}}
+claudeStatus();
+async function loadClaude(){try{const j=await getJSON('/api/claude');showCost({session:j.session_cost,month:j.month_cost,cap:j.monthly_cap});return j}catch(e){return null}}
+$('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window.CLWHY=j.model_why||{};setTimeout(()=>claudeStatus(true),0);
+  modal('<h3>☁ Ask Claude for help</h3><div id="cl-state" class="cl-state">Checking your key...</div><div style="font-size:13.5px">Claude is Anthropic\'s cloud AI. It uses your own API key, which stays on '+esc(info.computer||'this Mac')+
+    '. Before anything is sent, your user name, home folder, IP addresses, device names, the Mac\'s name, emails and passwords are swapped for stand-ins like &lt;device-1&gt;.</div>'+
+    '<label>When to use Claude<select id="cl-mode" style="width:100%;margin-top:2px">'+Object.entries(j.modes).map(([k,v])=>'<option value="'+k+'"'+(k===j.mode?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>'+
+    '<label>Claude model<select id="cl-model" style="width:100%;margin-top:2px" onchange="this.nextElementSibling.textContent=((window.CLWHY||{})[this.value]||\'\')">'+Object.entries(j.models).map(([k,v])=>'<option value="'+k+'"'+(k===j.model?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select><span style="font-size:12px;color:var(--mute)">'+esc((j.model_why||{})[j.model]||'')+'</span></label>'+
+    '<label><input type="checkbox" id="cl-auto" style="width:auto"'+(j.auto_send?' checked':'')+'> Send automatically (otherwise a card shows exactly what will be sent, and you press Send). "Always" mode always sends automatically.</label>'+
+    '<label>Monthly spending limit in dollars (0 = no limit)<input id="cl-cap" type="number" min="0" step="1" value="'+j.monthly_cap+'"></label>'+
+    '<label>API key '+(j.key_set?'(saved, ends in …'+esc(j.key_end)+'; leave empty to keep it)':'(get one at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>)')+
+    '<input id="cl-key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>'+
+    '<div style="margin-top:10px;font-size:13.5px">This session: <b>'+money(j.session_cost)+'</b> ('+j.session_calls+' questions). This month: <b>'+money(j.month_cost)+'</b>'+(j.monthly_cap?' of '+money(j.monthly_cap):'')+'.'+
+      (j.cap_reached?' <b style="color:var(--bad)">The monthly limit is reached, so nothing is sent until you raise it.</b>':'')+'<br><small>Costs are worked out from what Claude reports for each answer; your Anthropic account shows the exact bill.</small></div>'+
+    '<div id="cl-msg" style="font-size:13px;margin-top:6px"></div>'+
+    '<div class="row" style="margin-top:12px;gap:6px;display:flex;flex-wrap:wrap"><button class="primary" id="cl-save">Save</button><button id="cl-test"'+(j.key_set?'':' disabled')+'>Test the key</button><button id="cl-sent">See what was sent</button>'+
+    (j.key_set?'<button id="cl-forget">Remove the key</button>':'')+'<button onclick="closeModal()">Close</button></div>');
+  const msg=t=>$('cl-msg').innerHTML=t;
+  const save=async extra=>{const b={mode:$('cl-mode').value,model:$('cl-model').value,auto_send:$('cl-auto').checked,monthly_cap:$('cl-cap').value};
+    const k=$('cl-key').value.trim();if(k)b.key=k;Object.assign(b,extra||{});return postJSON('/api/claude/settings',b)};
+  $('cl-save').onclick=async()=>{try{const r=await save();showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap});msg('Saved.'+(r.key_set?'':' Add an API key to start using Claude.'));$('cl-key').value='';claudeStatus(true)}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  $('cl-test').onclick=async()=>{msg('Asking Claude…');try{await save();const r=await postJSON('/api/claude/test',{});msg('It works. Claude said: '+esc(r.answer));showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap})}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  const f=$('cl-forget');if(f)f.onclick=async()=>{if(!confirm('Remove the saved API key from this Mac?'))return;try{await save({key:''});closeModal()}catch(e){msg(esc(e.message))}};
+  $('cl-sent').onclick=async()=>{try{const r=await getJSON('/api/claude/sent');
+    modal('<h3>What was sent to Claude</h3>'+(r.items.length?r.items.map(x=>'<details><summary>'+esc(x.time)+' · '+esc(x.why)+'</summary><pre style="white-space:pre-wrap;font-size:12px">'+esc(x.text)+'</pre></details>').join(''):'<div>Nothing yet.</div>')+
+      '<div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');$('box').classList.add('wide')}catch(e){msg(esc(e.message))}}};
+
+let MODELS=[];
+function modelLabel(name){const m=MODELS.find(x=>x.name===name);return m?m.label:name}
+function modelWhy(){const m=MODELS.find(x=>x.name===$('model').value);$('model-why').textContent=m&&m.why?m.why:''}
+async function loadModels(){try{const j=await getJSON('/api/models');const s=$('model');MODELS=j.models;
+  s.innerHTML=j.models.map(m=>`<option value="${esc(m.name)}" title="${esc(m.why||'')}"${m.name===j.current?' selected':''}>${esc(m.label||m.name)}</option>`).join('');
+  s.title=j.error||'Which AI model answers.';modelWhy()}catch(e){}}
+$('model').onchange=async()=>{modelWhy();try{await postJSON('/api/model',{model:$('model').value});info.model=$('model').value;if(cur!==HOMECHAT)loadInfo();
+  add('msg ai','From now on the "'+esc(modelLabel($('model').value))+'" model answers (for every device).')}catch(e){alert(e.message);loadModels()}};
+
+$('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
+  const files=atts;atts=[];drawAtts();
+  t.value='';grow();add('msg me',meHtml(s)+(files.length?'<div class="files">📎 '+files.map(f=>esc(f.name)).join(', ')+'</div>':''),s);
+  await chatStream('/api/chat',{text:s,attachments:files.map(f=>f.ref)})};
+t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('f').requestSubmit()}});
+// the message box grows with what you type or paste (up to almost half the window), and says how long it is
+function grow(){t.style.height='auto';t.style.height=Math.min(t.scrollHeight+2,window.innerHeight*0.45)+'px';
+  const n=t.value.length,lines=t.value.split('\n').length,c=$('t-count');
+  c.hidden=n<400;c.textContent=n.toLocaleString()+' characters · '+lines+' line'+(lines>1?'s':'')+' · Shift+Enter for a new line'}
+t.addEventListener('input',grow);
+function meHtml(s){s=s||'';const lines=s.split('\n');
+  if(s.length<1500&&lines.length<25)return esc(s);
+  const head=lines.length>=25?lines.slice(0,12).join('\n'):s.slice(0,700);
+  return '<span>'+esc(head)+'…</span><details class="longmsg" ontoggle="this.previousElementSibling.hidden=this.open"><summary>Show all ('+s.length.toLocaleString()+' characters, '+lines.length+' lines)</summary>'+esc(s)+'</details>'}
+
+/* saved prompts: name a message once, run it again with one click ({device} becomes the device you're on) */
+let prompts=[];
+async function loadPrompts(){try{prompts=(await getJSON('/api/prompts')).prompts}catch(e){prompts=[]}return prompts}
+function fillPrompt(text){return text.split('{device}').join(cur===HOMECHAT?'my devices':cur)}
+function runPrompt(p,go){if(busy)return;closeModal();t.value=fillPrompt(p.text);grow();
+  postJSON('/api/prompts',{action:'ran',name:p.name}).catch(()=>{});
+  if(go)$('f').requestSubmit();else{t.focus();t.setSelectionRange(t.value.length,t.value.length)}}
+async function openPrompts(msg,editName){await loadPrompts();
+  const ed=editName!==undefined?prompts.find(p=>p.name===editName)||{name:'',text:t.value}:null;
+  modal('<h3>⭐ Saved prompts</h3>'+(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    (ed?'<div><label>Name<input id="pr-name" value="'+esc(ed.name)+'" placeholder="e.g. Full health check"></label>'+
+      '<label style="display:block;margin-top:6px">Prompt <small style="color:var(--mute)">(write {device} where the device\'s name should go)</small>'+
+      '<textarea id="pr-text" style="width:100%;min-height:220px;max-height:50vh;margin-top:4px">'+esc(ed.text)+'</textarea></label>'+
+      '<div class="row" style="display:flex;gap:6px;margin-top:8px"><button class="primary" id="pr-save">Save</button><button id="pr-back">Back</button></div><div id="pr-msg" style="font-size:13px;margin-top:4px"></div></div>':
+    '<div style="font-size:13.5px;color:var(--mute)">Run a long prompt again with one click. They work in every chat; {device} becomes the device you\'re chatting about.</div>'+
+    '<div class="row" style="display:flex;gap:6px;margin:8px 0"><button class="primary" id="pr-new">'+(t.value.trim()?'Save what\'s in the message box':'New prompt')+'</button><button onclick="closeModal()">Close</button></div>'+
+    (prompts.length?prompts.map((p,i)=>'<div class="pr-item"><div class="pr-t"><b>'+esc(p.name)+'</b> <small style="color:var(--mute)">'+p.text.length.toLocaleString()+' characters'+(p.runs?' · run '+p.runs+' time'+(p.runs>1?'s':''):'')+'</small><pre>'+esc(p.text.slice(0,400))+'</pre></div>'+
+      '<div class="pr-btns"><button class="primary" data-run="'+i+'">Run</button><button data-put="'+i+'" title="Put it in the message box so you can change it first">Edit first</button><button data-ed="'+i+'">Change</button><button data-del="'+i+'" title="Delete">🗑</button></div></div>').join('')
+      :'<div class="empty" style="padding:10px 0">No saved prompts yet. Type or paste one in the message box, then press ⭐ Saved prompts → Save.</div>')));
+  if(ed){$('pr-back').onclick=()=>openPrompts();
+    $('pr-save').onclick=async()=>{try{await postJSON('/api/prompts',{action:'save',name:$('pr-name').value,text:$('pr-text').value,old_name:ed.name||undefined});openPrompts('Saved.')}
+      catch(e){$('pr-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}};$('pr-name').focus();return}
+  $('pr-new').onclick=()=>openPrompts('', '');
+  document.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>runPrompt(prompts[+b.dataset.run],true));
+  document.querySelectorAll('[data-put]').forEach(b=>b.onclick=()=>runPrompt(prompts[+b.dataset.put],false));
+  document.querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>openPrompts('',prompts[+b.dataset.ed].name));
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{const p=prompts[+b.dataset.del];if(!confirm('Delete the saved prompt "'+p.name+'"?'))return;
+    await postJSON('/api/prompts',{action:'delete',name:p.name});openPrompts('Deleted "'+p.name+'".')})}
+$('reset').onclick=async()=>{if(busy)return;try{await postJSON('/api/reset',{device:cur})}catch(e){return alert(e.message)}log.innerHTML='';
+  add('msg ai','New chat started. What would you like to do? (The last one is saved under Past chats.)');loadChatBar()};
+
+/* ---------- files: the Mac on the left, the device on the right */
+const panes={mac:{side:'mac',path:null,entries:[],sel:new Set(),last:null},dev:{side:'dev',path:'/',entries:[],sel:new Set(),last:null}};
+let filesFor=null;
+function act(text,cls){const a=$('activity');const d=document.createElement('div');if(cls)d.className=cls;d.textContent=text;
+  a.appendChild(d);while(a.children.length>200)a.firstChild.remove();a.scrollTop=a.scrollHeight}
+function paneShell(p){
+  const el=$('pane-'+p.side),isDev=p.side==='dev';
+  el.innerHTML=`<div class="top">
+    <div class="title">${isDev?'':'🖥️ '}${esc(isDev?cur:info.computer||'Mac')} <small>${isDev?'the device':'this computer runs the agent'}</small>
+      ${isDev?'<button data-a="renamedev" class="pen" title="Give this device a new name in PatchBay">✎ Rename device</button>':''}</div>
+    <div class="path"><button data-a="up" title="Up one folder">↑</button><input data-a="path" spellcheck="false"><button data-a="refresh" title="Refresh">⟳</button>
+      <button data-a="mark" title="Bookmark this folder">☆</button>${isDev?'<button data-a="search" title="Find files by name on the whole device">🔍 Search</button>':''}</div>
+    <div class="marks"></div>
+    <div class="tools">${isDev?`
+      <button data-a="tomac" title="Copy the selected items to the folder open on the left">← Copy to ${esc(info.computer||'Mac')}</button>
+      <button data-a="upload">Upload from this computer…</button><button data-a="download">Download</button>
+      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>
+      <button data-a="backup" title="Copy the selected files or folders to your backup folder">Back up</button>
+      <button data-a="preview" title="Look inside the selected file">Preview</button><button data-a="compare" title="Compare two selected files (one here and one on the other side, or two here)">Compare</button>
+      <button data-a="all" title="Select everything in this folder">Select all</button><span class="selcount"></span>`:`
+      <button data-a="home">Home</button><button data-a="todev" title="Copy the selected items to the folder open on the right">Copy to ${esc(cur)} →</button>
+      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button>
+      <button data-a="preview">Preview</button><button data-a="compare">Compare</button><button data-a="all">Select all</button>
+      <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label><span class="selcount"></span>`}</div></div>
+    <div class="list"></div>`;
+  el.querySelectorAll('[data-a]').forEach(b=>{const a=b.dataset.a;
+    if(a==='path')b.onkeydown=e=>{if(e.key==='Enter')load(p,b.value)};
+    else if(a==='hidden')b.onchange=()=>{p.hidden=b.checked;load(p,p.path)};
+    else b.onclick=()=>tool(p,a)});
+  dropZone(el,()=>p.path,p);
+}
+async function openFiles(changed){
+  if(filesFor!==cur||changed){filesFor=cur;$('activity').innerHTML='';panes.dev.path='/';
+    if(!info.computer)await loadInfo();paneShell(panes.mac);paneShell(panes.dev);
+    $('vp-mac').textContent=(info.computer||'Mac')+' only';$('vp-dev').textContent=cur+' only';
+    act('Drag files between the two sides, or drop files from Finder onto '+cur+'. Double-click a folder to open it.');
+    load(panes.mac,panes.mac.path||'~');load(panes.dev,'/');loadMarks()}
+  pollQueue();
+}
+async function load(p,path){
+  const list=$('pane-'+p.side).querySelector('.list');list.innerHTML='<div class="hint">Loading…</div>';
+  try{const j=await getJSON('/api/files/list?side='+p.side+'&device='+enc(cur)+'&path='+enc(path)+(p.hidden?'&hidden=1':''));
+    p.path=j.path;p.parent=j.parent;p.entries=j.entries;p.sel.clear();p.last=null;render(p)}
+  catch(e){list.innerHTML='<div class="hint" style="color:var(--bad)">'+esc(e.message)+'</div>'}
+  $('pane-'+p.side).querySelector('[data-a=path]').value=p.path||path;drawMarks()}
+function full(p,name){return p.side==='mac'?(p.path.replace(/\/$/,'')+'/'+name):((p.path==='/'?'':p.path)+'/'+name)}
+function parentOf(p){if(p.side==='mac')return p.parent||p.path;const s=p.path.replace(/\/[^/]*$/,'');return s||'/'}
+function render(p){
+  const list=$('pane-'+p.side).querySelector('.list');
+  if(!p.entries.length){list.innerHTML='<div class="hint">This folder is empty.'+(p.side==='dev'?' Drop files here to upload them.':'')+'</div>';return}
+  list.innerHTML='<table>'+p.entries.map((e,i)=>`<tr data-i="${i}" draggable="true" class="${p.sel.has(i)?'sel':''}">
+    <td>${e.kind==='dir'?'📁':e.kind==='link'?'🔗':'📄'}</td><td class="n" title="${esc(e.name)}">${esc(e.name)}</td>
+    <td class="s">${e.kind==='file'?size(e.size):''}</td><td class="m">${esc(e.modified||'')}</td>
+    <td class="r">${e.kind!=='link'?'<button class="pen" title="Rename">✎</button>':''}</td></tr>`).join('')+'</table>';
+  list.querySelectorAll('tr').forEach(tr=>{const i=+tr.dataset.i,e=p.entries[i];
+    tr.onclick=ev=>{if(ev.shiftKey&&p.last!=null){const [a,b]=[Math.min(p.last,i),Math.max(p.last,i)];for(let k=a;k<=b;k++)p.sel.add(k)}
+      else if(ev.metaKey||ev.ctrlKey){p.sel.has(i)?p.sel.delete(i):p.sel.add(i);p.last=i}
+      else{p.sel.clear();p.sel.add(i);p.last=i}paint(p);lastPane=p};
+    const pen=tr.querySelector('.pen');if(pen)pen.onclick=ev=>{ev.stopPropagation();p.sel.clear();p.sel.add(i);paint(p);tool(p,'rename')};
+    tr.oncontextmenu=ev=>{ev.preventDefault();if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)}menu(ev,p,e)};
+    tr.ondblclick=()=>{if(e.kind==='dir')load(p,full(p,e.name));else if(e.kind==='file')preview(p.side,full(p,e.name))};
+    tr.ondragstart=ev=>{if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)} // never rebuild the list mid-drag
+      ev.dataTransfer.setData('application/x-devagent',JSON.stringify({side:p.side,items:picked(p)}));ev.dataTransfer.effectAllowed='copyMove'};
+    if(e.kind==='dir')dropZone(tr,()=>full(p,e.name),p,true)});
+}
+function paint(p){$('pane-'+p.side).querySelectorAll('.list tr').forEach(tr=>tr.classList.toggle('sel',p.sel.has(+tr.dataset.i)));
+  const n=p.sel.size;$('pane-'+p.side).querySelector('.selcount').textContent=n>1?n+' selected':''}
+function picked(p){return [...p.sel].map(i=>p.entries[i]).filter(e=>e.kind!=='link').map(e=>({path:full(p,e.name),kind:e.kind,name:e.name}))}
+function dropZone(el,where,p,row){
+  const ok=ev=>[...ev.dataTransfer.types].some(x=>x==='application/x-devagent'||x==='Files');
+  el.addEventListener('dragover',ev=>{if(!ok(ev))return;ev.preventDefault();if(row)ev.stopPropagation();
+    el.classList.add(row?'target':'dropping')});
+  el.addEventListener('dragleave',ev=>{if(!el.contains(ev.relatedTarget))el.classList.remove('target','dropping')});
+  el.addEventListener('drop',ev=>{if(!ok(ev))return;ev.preventDefault();ev.stopPropagation();
+    el.classList.remove('target','dropping');document.querySelectorAll('.dropping').forEach(x=>x.classList.remove('dropping'));
+    dropped(ev.dataTransfer,p.side,where())});
+}
+async function dropped(dt,side,target){
+  const raw=dt.getData('application/x-devagent');
+  if(raw){const d=JSON.parse(raw);if(!d.items.length)return;
+    if(d.side==='dev'&&side==='mac')return copyToMac(d.items,target);
+    if(d.side==='mac'&&side==='dev')return plan({op:'upload',target,items:d.items.map(x=>({from:'mac',path:x.path}))});
+    if(d.side==='dev'&&side==='dev'){const items=d.items.filter(x=>x.path!==target&&parentPath(x.path)!==target);
+      if(items.length)return plan({op:'move',target,paths:items.map(x=>x.path)});return}
+    return act('Both of those are on '+info.computer+'. Use Finder to move files around on it.','bad')}
+  const files=[...dt.files];if(!files.length)return;
+  if(side!=='dev')return act('To upload files, drop them on the '+cur+' side (right).','bad');
+  uploadFiles(files,target)}
+function parentPath(x){const s=x.replace(/\/[^/]*$/,'');return s||'/'}
+async function uploadFiles(files,target){
+  const refs=[];
+  for(const f of files){
+    if(!f.size&&!f.type&&f.name.indexOf('.')<0){act('Skipped '+f.name+': folders can\'t be dropped from Finder. Open the folder on the left and drag it from there.','bad');continue}
+    act('Sending '+f.name+' ('+size(f.size)+') to '+info.computer+'…');
+    try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(f.name),{method:'POST',body:f});
+      const j=await r.json();if(!r.ok)throw new Error(j.error);refs.push({from:'staged',ref:j.ref})}
+    catch(e){act('Couldn\'t send '+f.name+': '+e.message,'bad')}}
+  if(refs.length)plan({op:'upload',target,items:refs})}
+async function copyToMac(items,folder){
+  act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'. Progress is in the queue below.');
+  try{await postJSON('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder});pollQueue()}catch(e){act(e.message,'bad')}}
+function fileEvent(ev){if(ev.type==='progress')act(ev.text);else if(ev.type==='answer')act(ev.text,'good');else if(ev.type==='error')act(ev.text,'bad')}
+function download(path){const a=document.createElement('a');a.href='/api/files/download?device='+enc(cur)+'&path='+enc(path);
+  a.download='';document.body.appendChild(a);a.click();a.remove();act('Downloading '+path+' to this computer\'s Downloads folder.')}
+async function plan(req){
+  act('Working out what this would change…');
+  let j;try{j=await postJSON('/api/files/plan',Object.assign({device:cur},req))}catch(e){return act(e.message,'bad')}
+  showPlan(j)}
+function showPlan(j){
+  modal(`<h3>${esc(j.title)}</h3>
+    <div class="msgline">Nothing has been written yet. Every file that gets replaced or deleted is backed up to ${esc(info.computer)} first, and you can undo it.</div>
+    <ul>${j.lines.map(l=>'<li>'+esc(l)+'</li>').join('')}${j.more?'<li>…and '+j.more+' more</li>':''}</ul>
+    ${j.writes_on?'':'<div class="msgline bad">Writing is turned off for '+esc(j.device)+', so this will be refused. To allow it, set "allow_writes": true in its settings file ('+esc(info.settings_file||'')+').</div>'}
+    ${j.bulk?'<div class="riskbox"><b>⚠ This deletes a lot at once:</b> '+j.bulk.files+' file'+(j.bulk.files===1?'':'s')+(j.bulk.folders?' in '+j.bulk.folders+' folder'+(j.bulk.folders===1?'':'s'):'')+'. Each one is backed up first and can be put back from 🕘 Activity, but check the list.<label><input type="checkbox" id="c-und"> I understand, delete them.</label></div>':''}
+    <div class="row confirm">Type <b>${esc(j.device)}</b> to confirm: <input id="c-typed" autocomplete="off"><button class="primary" id="c-ok">Confirm</button><button id="c-no">Cancel</button></div>`,true);
+  $('c-typed').focus();$('c-no').onclick=()=>{closeModal();act('Cancelled. Nothing was written.')};
+  const go=async()=>{if($('c-typed').value.trim()!==j.device){$('c-typed').style.borderColor='var(--bad)';$('c-typed').focus();return}
+    if(j.bulk&&!$('c-und').checked){$('c-und').parentNode.style.outline='2px solid var(--bad)';return}
+    const understood=!!(j.bulk&&$('c-und').checked);
+    closeModal();try{await postJSON('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value,understood});
+      if(view!=='files'){location.hash='#/d/'+enc(cur)+'/files'}pollQueue()}catch(e){act(e.message,'bad');alert(e.message)}};
+  $('c-ok').onclick=go;$('c-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
+function menu(ev,p,e){ // right-click menu on a file or folder
+  const c=$('ctx'),dev=p.side==='dev',acts=[];
+  if(e.kind==='dir')acts.push(['Open',()=>load(p,full(p,e.name))]);
+  acts.push(['Rename…',()=>tool(p,'rename')]);
+  if(dev){if(e.kind==='file')acts.push(['Download to this computer',()=>tool(p,'download')]);
+    acts.push(['Copy to '+(info.computer||'the Mac'),()=>tool(p,'tomac')],['Back up',()=>tool(p,'backup')],['Delete…',()=>tool(p,'delete')])}
+  else acts.push(['Copy to '+cur,()=>tool(p,'todev')]);
+  acts.push(['New folder here…',()=>tool(p,'mkdir')]);
+  if(e.kind==='file')acts.unshift(['Preview',()=>preview(p.side,full(p,e.name))]);
+  acts.push(['Ask AI about this',()=>askAI(p.side,full(p,e.name),e.kind)]);
+  if(e.kind==='file'){if(compareA&&compareA.path!==full(p,e.name))acts.push(['Compare with '+compareA.path.split('/').pop(),()=>{const a=compareA;compareA=null;compareFiles(a,{side:p.side,path:full(p,e.name)})}]);
+    acts.push(['Compare with… (pick this first)',()=>{compareA={side:p.side,path:full(p,e.name)};act('Now right-click the second file and choose "Compare with '+e.name+'".')}])}
+  c.innerHTML='';acts.forEach(([l,f])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>{c.style.display='none';f()};c.appendChild(b)});
+  c.style.display='block';c.style.left=Math.min(ev.clientX,innerWidth-190)+'px';c.style.top=Math.min(ev.clientY,innerHeight-c.offsetHeight-8)+'px'}
+document.addEventListener('click',()=>{$('ctx').style.display='none'});
+document.addEventListener('scroll',()=>{$('ctx').style.display='none'},true);
+async function backupItems(items){
+  if(!items.length)return act('Select the files or folders to back up first (click, or Cmd-click for more).','bad');
+  try{await postJSON('/api/backup/start',{device:cur,items:items.map(x=>({path:x.path,kind:x.kind}))});
+    act('Backing up '+items.map(x=>x.name).join(', ')+' to your backup folder. The Backups tab shows progress.','good')}
+  catch(e){act(e.message,'bad')}}
+function setFilesView(v){let ok=['both','mac','dev'].includes(v)?v:'both';
+  try{localStorage.setItem('pb-files-view',ok)}catch(e){}
+  $('panes').classList.toggle('only-mac',ok==='mac');$('panes').classList.toggle('only-dev',ok==='dev');
+  $('viewpick').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v===ok))}
+$('viewpick').querySelectorAll('button').forEach(b=>b.onclick=()=>setFilesView(b.dataset.v));
+{let v='both';try{v=localStorage.getItem('pb-files-view')||'both'}catch(e){}setFilesView(v)}
+let lastPane=null,compareA=null,marks={mac:[],dev:[]};
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='a'&&view==='files'&&lastPane&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){
+  e.preventDefault();lastPane.entries.forEach((x,i)=>lastPane.sel.add(i));paint(lastPane)}});
+
+/* bookmarks */
+async function loadMarks(){try{marks=await getJSON('/api/bookmarks?device='+enc(cur))}catch(e){marks={mac:[],dev:[]}}drawMarks()}
+function drawMarks(){for(const p of [panes.mac,panes.dev]){const el=$('pane-'+p.side);if(!el.querySelector('.marks'))continue;
+  const list=marks[p.side]||[];el.querySelector('[data-a=mark]').textContent=list.includes(p.path)?'★':'☆';
+  el.querySelector('.marks').innerHTML=list.map((m,i)=>`<span class="mark" data-i="${i}" title="${esc(m)}">${esc(m.replace(/\/$/,'').split('/').pop()||m)}<button title="Remove bookmark">×</button></span>`).join('');
+  el.querySelectorAll('.mark').forEach(x=>x.onclick=ev=>{const m=list[+x.dataset.i];if(ev.target.tagName==='BUTTON'){list.splice(+x.dataset.i,1);saveMarks()}else load(p,m)})}}
+function toggleMark(p){const list=marks[p.side]=marks[p.side]||[];const i=list.indexOf(p.path);if(i>=0)list.splice(i,1);else list.push(p.path);saveMarks()}
+async function saveMarks(){try{marks=await postJSON('/api/bookmarks',{device:cur,marks})}catch(e){act(e.message,'bad')}drawMarks()}
+
+/* transfer queue */
+let qTimer=null,qSeen={};
+async function pollQueue(){clearTimeout(qTimer);if(view!=='files')return;
+  let j;try{j=await getJSON('/api/transfers?device='+enc(cur))}catch(e){return}
+  const q=$('queue');q.innerHTML=j.transfers.map(x=>{const pct=x.bytes_total?100*x.bytes_done/x.bytes_total:(x.files_total?100*x.files_done/x.files_total:(x.state==='done'?100:2));
+    const left=x.speed>0?(x.bytes_total-x.bytes_done)/x.speed:0;
+    const state={running:x.paused?'Paused':'Copying',done:'Done',failed:'Stopped',cancelled:'Cancelled',waiting:'Waiting'}[x.state]||x.state;
+    return `<div class="tq ${x.state}"><div class="h"><b>${esc(x.title)}</b><span>${state}</span>
+      ${x.state==='running'?`<button data-id="${x.id}" data-act="${x.paused?'resume':'pause'}">${x.paused?'Resume':'Pause'}</button><button data-id="${x.id}" data-act="cancel">Cancel</button>`:
+        `<button data-id="${x.id}" data-act="clear">Clear</button>`}</div>
+      <div class="bar"><div style="width:${Math.max(2,Math.min(100,pct)).toFixed(1)}%"></div></div>
+      <div class="sub">${x.state==='running'?`${x.files_done} of ${x.files_total} files · ${size(x.bytes_done)} of ${size(x.bytes_total)}`+
+        (x.speed>0?` · ${size(x.speed)}/s · about ${dur(left)} left`:'')+(x.current?' · '+esc(x.current):''):esc(x.message||'')}</div></div>`}).join('');
+  q.querySelectorAll('button').forEach(b=>b.onclick=async()=>{try{await postJSON('/api/transfers/control',{id:b.dataset.id,action:b.dataset.act})}catch(e){}pollQueue()});
+  let refresh=false;for(const x of j.transfers){if(x.state!=='running'&&qSeen[x.id]==='running'){refresh=true;act(x.message,x.state==='done'?'good':'bad')}qSeen[x.id]=x.state}
+  if(refresh){load(panes.mac,panes.mac.path);load(panes.dev,panes.dev.path)}
+  if(j.transfers.some(x=>x.state==='running'))qTimer=setTimeout(pollQueue,1000)}
+
+/* preview and edit */
+async function preview(side,path){
+  modal('<div class="pv"><h3>'+esc(path)+'</h3><div class="note">Loading…</div></div>');$('box').classList.add('wide');
+  let j;try{j=await getJSON('/api/files/preview?device='+enc(cur)+'&side='+side+'&path='+enc(path))}catch(e){$('box').querySelector('.note').textContent=e.message;return}
+  const probs=(j.problems||[]).length?'<div class="msgline bad">'+j.problems.map(esc).join('<br>')+'</div>':'';
+  const body=j.kind==='image'?'<img src="'+j.src+'" alt="">':j.kind==='too_big'?'<div class="note">Too big to preview ('+size(j.size)+').</div>':
+    '<pre id="pv-text"></pre>';
+  $('box').innerHTML=`<div class="pv"><h3>${esc(path)}</h3><div class="note">${side==='mac'?esc(info.computer||'Mac'):esc(cur)} · ${size(j.size)}${j.kind==='hex'?' · binary file, first 4 KB shown':''}${j.cut?' · only the first 2 MB shown':''}</div>
+    ${probs}${body}<div class="row">${j.kind==='text'&&j.editable?'<button id="pv-edit">Edit</button>':''}
+    ${side==='dev'?'<button id="pv-dl">Download</button>':''}<button id="pv-ai">Ask AI about this</button><button id="pv-close">Close</button></div></div>`;
+  if($('pv-text'))$('pv-text').textContent=j.text||'';
+  $('pv-close').onclick=closeModal;$('pv-ai').onclick=()=>{closeModal();askAI(side,path,'file')};
+  if($('pv-dl'))$('pv-dl').onclick=()=>download(path);
+  if($('pv-edit'))$('pv-edit').onclick=()=>editText(side,path,j.text)}
+function editText(side,path,text,draft){
+  $('box').className='box';$('box').innerHTML=`<div class="pv"><h3>Edit ${esc(path)}</h3><div class="note">${side==='dev'?'Saving shows you exactly what changes on '+esc(cur)+', and the old file is backed up first.':'The old version is backed up on '+esc(info.computer||'the Mac')+' first.'}</div>
+    <textarea id="pv-area" spellcheck="false"></textarea><div class="row"><button class="primary" id="pv-save">Save</button><button id="pv-cancel">Cancel</button></div></div>`;
+  $('pv-area').value=draft===undefined?text:draft;$('pv-area').focus();$('pv-cancel').onclick=closeModal;
+  $('pv-save').onclick=async()=>{const val=$('pv-area').value;if(val===text){closeModal();return}
+    const name=path.split('/').pop(),folder=path.slice(0,path.length-name.length).replace(/\/$/,'')||'/';
+    if(side==='mac'){if(!confirm('Save the changes to '+path+'?'))return;
+      try{const r=await postJSON('/api/files/mac_save',{device:cur,path,text:val});closeModal();act('Saved '+path+'. The old version is in '+r.backup,'good');load(panes.mac,panes.mac.path)}catch(e){alert(e.message)}return}
+    // Show exactly what changes, before and after side by side, before anything goes to the device.
+    modal('<h3>Check the change to '+esc(path)+'</h3><div style="font-size:13.5px;margin-bottom:6px">Nothing has been written yet. Next you confirm it for '+esc(cur)+' (the current file is backed up first).</div>'+
+      '<div class="dv-big">'+sbsHtml(lineDiff(text,val,path))+'</div><div class="row" style="display:flex;gap:6px;margin-top:10px"><button class="primary" id="pv-go">Looks right, continue</button><button id="pv-back">Back to editing</button></div>');
+    $('box').classList.add('wide');
+    $('pv-back').onclick=()=>editText(side,path,text,val);
+    $('pv-go').onclick=async()=>{try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(name),{method:'POST',body:new Blob([val])});const j=await r.json();if(!r.ok)throw new Error(j.error);
+      closeModal();plan({op:'upload',target:folder,items:[{from:'staged',ref:j.ref}]})}catch(e){alert(e.message)}}}}
+
+/* compare */
+async function compareFiles(a,b){
+  modal('<h3>Comparing…</h3>');$('box').classList.add('wide');
+  try{const j=await postJSON('/api/files/compare',{device:cur,a,b});
+    $('box').innerHTML=`<div class="pv"><h3>${j.same?'The same':'Differences'}</h3><div class="note">${a.side==='mac'?'Mac':'Device'}: ${esc(a.path)} (${size(j.size_a)})<br>${b.side==='mac'?'Mac':'Device'}: ${esc(b.path)} (${size(j.size_b)})</div>
+      <pre>${j.kind==='text'?diffHtml(j.text):esc(j.text)}</pre><div class="row"><button id="cmp-close">Close</button></div></div>`;$('cmp-close').onclick=closeModal}
+  catch(e){$('box').innerHTML='<h3>Couldn\'t compare</h3><div class="msgline bad">'+esc(e.message)+'</div>'}}
+
+/* search the whole device */
+function searchDevice(){
+  modal(`<div class="pv"><h3>Find files on ${esc(cur)}</h3><div class="row"><input id="s-q" placeholder="part of a name, e.g. ftpd" style="flex:1">
+    <input id="s-in" value="/" style="width:150px" title="Where to search"><button class="primary" id="s-go">Search</button></div>
+    <div class="note" id="s-msg"></div><div class="hits" id="s-hits" hidden></div><div class="row"><button id="s-close">Close</button></div></div>`);
+  $('box').classList.add('wide');$('s-q').focus();$('s-close').onclick=()=>{ctl&&ctl.abort();closeModal()};
+  let ctl=null;
+  const go=async()=>{ctl&&ctl.abort();ctl=new AbortController();const hits=$('s-hits');hits.innerHTML='';hits.hidden=false;$('s-msg').textContent='Searching…';
+    try{const r=await fetch('/api/files/search',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+        body:JSON.stringify({device:cur,q:$('s-q').value,folder:$('s-in').value})});
+      const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+      for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
+        while((i=buf.indexOf('\n'))>=0){const ev=JSON.parse(buf.slice(0,i));buf=buf.slice(i+1);
+          if(ev.type==='hit'){const d=document.createElement('div');d.innerHTML=`<span>${ev.kind==='dir'?'📁':'📄'} ${esc(ev.path)}</span><span>${ev.kind==='file'?size(ev.size):''}</span>`;
+            d.onclick=()=>{closeModal();ctl.abort();goTo(ev.path,ev.kind)};hits.appendChild(d)}
+          else if(ev.type==='progress'||ev.type==='answer')$('s-msg').textContent=ev.text;else if(ev.type==='error')$('s-msg').textContent=ev.text}}}
+    catch(e){if(e.name!=='AbortError')$('s-msg').textContent=e.message}};
+  $('s-go').onclick=go;$('s-q').onkeydown=e=>{if(e.key==='Enter')go()}}
+async function goTo(path,kind){const p=panes.dev;
+  if(kind==='dir')return load(p,path);const name=path.split('/').pop();await load(p,path.slice(0,path.length-name.length-1)||'/');
+  const i=p.entries.findIndex(e=>e.name===name);if(i>=0){p.sel.clear();p.sel.add(i);paint(p);
+    const tr=$('pane-dev').querySelector('tr[data-i="'+i+'"]');tr&&tr.scrollIntoView({block:'center'})}}
+
+/* ask the AI about a file or folder */
+async function askAI(side,path,kind){
+  let text;
+  if(side==='mac'){if(kind!=='file')return act('For a folder on the Mac, drop the files into the chat instead.','bad');
+    try{const j=await postJSON('/api/chat/attach_path',{device:cur,path});atts.push(j)}catch(e){return act(e.message,'bad')}
+    text='What is this file, and is anything wrong with it?'}
+  else text='Look at '+path+' on '+cur+(kind==='dir'?' (a folder)':'')+': what is it, and is anything wrong with it?';
+  location.hash='#/d/'+enc(cur)+'/chat';
+  setTimeout(()=>{drawAtts();t.value=text;t.focus();if(!busy)$('f').requestSubmit()},400)}
+
+async function macDo(url,body,okMsg){try{await postJSON(url,body);act(okMsg,'good');load(panes.mac,panes.mac.path)}catch(e){act(e.message,'bad')}}
+async function renameDevice(){
+  const n=prompt('New name for '+cur+' in PatchBay (letters, numbers, spaces, - or _). This changes the name you type to confirm changes, too:',cur);
+  if(!n||n.trim()===cur)return;
+  try{const j=await postJSON('/api/devices/rename',{device:cur,new_name:n.trim()});act('Renamed '+cur+' to '+j.name+'.','good');
+    filesFor=null;location.hash='#/d/'+enc(j.name)+'/'+view}catch(e){act(e.message,'bad');alert(e.message)}}
+function tool(p,a){
+  if(a==='up')return load(p,parentOf(p));if(a==='refresh')return load(p,p.path);if(a==='home')return load(p,'~');
+  if(a==='renamedev')return renameDevice();
+  if(a==='mark')return toggleMark(p);if(a==='search')return searchDevice();
+  if(a==='all'){p.entries.forEach((e,i)=>p.sel.add(i));return paint(p)}
+  if(a==='preview'){const f=picked(p).filter(x=>x.kind==='file');if(!f.length)return act('Select a file first.','bad');return preview(p.side,f[0].path)}
+  if(a==='compare'){const here=picked(p).filter(x=>x.kind==='file'),other=p===panes.mac?panes.dev:panes.mac,there=picked(other).filter(x=>x.kind==='file');
+    if(here.length===2)return compareFiles({side:p.side,path:here[0].path},{side:p.side,path:here[1].path});
+    if(here.length===1&&there.length===1)return compareFiles({side:'mac',path:(p.side==='mac'?here:there)[0].path},{side:'dev',path:(p.side==='dev'?here:there)[0].path});
+    return act('Select two files here, or one file on each side, then press Compare.','bad')}
+  const items=picked(p);
+  if(p.side==='mac'&&a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)macDo('/api/files/mac_mkdir',{folder:p.path,name:n},'Made the folder '+n+'.');return}
+  if(p.side==='mac'&&a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
+    const n=prompt('New name for '+items[0].name+':',items[0].name);
+    if(n&&n!==items[0].name)macDo('/api/files/mac_rename',{path:items[0].path,new_name:n},'Renamed '+items[0].name+' to '+n+'.');return}
+  if(a==='todev'){if(!items.length)return act('Select something on the left first.','bad');
+    return plan({op:'upload',target:panes.dev.path,items:items.map(x=>({from:'mac',path:x.path}))})}
+  if(a==='tomac'){if(!items.length)return act('Select something on the right first.','bad');return copyToMac(items,panes.mac.path)}
+  if(a==='upload'){$('upfile').value='';$('upfile').onchange=()=>uploadFiles([...$('upfile').files],p.path);return $('upfile').click()}
+  if(a==='download'){const fs=items.filter(x=>x.kind==='file');if(!fs.length)return act('Select a file first. (To copy a folder, drag it to the left side.)','bad');
+    return fs.forEach((x,k)=>setTimeout(()=>download(x.path),k*400))}
+  if(a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)plan({op:'mkdir',target:p.path,name:n});return}
+  if(a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
+    const n=prompt('New name for '+items[0].name+':',items[0].name);if(n&&n!==items[0].name)plan({op:'rename',path:items[0].path,new_name:n});return}
+  if(a==='backup')return backupItems(items);
+  if(a==='delete'){if(!items.length)return act('Select what to delete first.','bad');return plan({op:'delete',paths:items.map(x=>x.path)})}
+}
+/* ---------- backups */
+let bkLast=null,bkRate=0;
+async function loadBackups(){
+  const dev=cur;let j;try{j=await getJSON('/api/backup/status?device='+enc(dev))}catch(e){$('bk-msg').textContent=e.message;return}
+  if(dev!==cur)return;
+  $('bk-title').textContent='Back up everything on '+dev;
+  $('bk-folder').textContent=j.device_folder;
+  const job=j.job,running=job&&job.running;
+  $('bk-start').hidden=running;$('bk-stop').hidden=!running;$('bk-change').disabled=running;
+  $('bk-start').textContent=j.unfinished?'Resume the unfinished backup':'Back up now';
+  $('bk-progress').hidden=!running;
+  if(running){
+    if(job.phase==='listing'){$('bk-bar').style.width='2%';$('bk-line').textContent='Listing every folder… '+job.files_total+' files found so far';bkLast=null}
+    else if(job.phase==='compressing'||job.phase==='mirroring'){$('bk-bar').style.width='100%';$('bk-line').textContent=job.message}
+    else{const pct=job.bytes_total?100*job.bytes_done/job.bytes_total:(job.files_total?100*job.files_done/job.files_total:0);
+      $('bk-bar').style.width=Math.max(2,pct).toFixed(1)+'%';
+      const now=Date.now()/1000;if(bkLast&&now>bkLast.t){const r=(job.bytes_done-bkLast.b)/(now-bkLast.t);bkRate=bkRate?bkRate*.8+r*.2:r}
+      bkLast={t:now,b:job.bytes_done};
+      const left=bkRate>0?(job.bytes_total-job.bytes_done)/bkRate:0;
+      $('bk-line').textContent=`${job.files_done} of ${job.files_total} files · ${size(job.bytes_done)} of ${size(job.bytes_total)}`+
+        (bkRate>0?` · ${size(bkRate)}/s · about ${dur(left)} left`:'')+(job.linked?` · ${job.linked} unchanged`:'')+(job.failed?` · ${job.failed} couldn't be read`:'')}
+    $('bk-cur').textContent=job.current||'';$('bk-msg').textContent=job.resumed?'Carrying on the backup that stopped earlier.':''}
+  else if(job&&job.message){$('bk-msg').className='msgline'+(job.phase==='failed'?' bad':'');$('bk-msg').textContent=job.message}
+  if(!bkOptsLoaded&&j.settings){bkOptsLoaded=true;$('bk-keep').value=j.settings.keep;$('bk-zip').checked=j.settings.compress;
+    bkMirror=j.settings.mirror;$('bk-mirror').textContent=bkMirror||'none'}
+  $('bk-list').innerHTML=j.backups.length?j.backups.map(b=>`<div class="bk"><span class="when">${esc(b.name.replace('_',' ').replace(/-(\d\d)-(\d\d)(_\d+)?$/,':$1:$2'))}${b.label?'<br><small style="font-weight:400">'+esc(b.label)+'</small>':''}</span>
+    <span class="badge ${b.complete?'ok':'part'}">${b.complete?'complete':'unfinished'}</span>
+    ${b.verified?`<span class="badge ${b.verified.ok?'ok':'part'}" title="Checked ${esc(b.verified.when)}">${b.verified.ok?'checked OK':'damaged!'}</span>`:''}
+    ${b.compressed?'<span class="badge">zipped</span>':''}${b.mirror?'<span class="badge" title="'+esc(b.mirror)+'">2 copies</span>':''}
+    <span class="meta">${b.partial?'<b>Only '+esc(b.folders.slice(0,3).join(', '))+(b.folders.length>3?' and '+(b.folders.length-3)+' more':'')+'</b> · ':''}${b.files} files · ${size(b.bytes)}${b.linked?' · '+b.linked+' unchanged (no extra space)':''}${b.failed?' · '+b.failed+' couldn\'t be read':''}</span>
+    <span class="row" style="margin:0"><button data-browse="${esc(b.name)}">Browse and restore…</button>
+    <button data-verify="${esc(b.name)}" title="Re-read every file and compare its checksum">Check</button>
+    <button data-label="${esc(b.name)}" data-cur="${esc(b.label)}">Label…</button>
+    ${b.compressed?'':`<button data-path="${esc(b.path)}">Show in Files</button>`}</span></div>`).join(''):'<div class="note">No backups yet.</div>';
+  $('bk-list').querySelectorAll('[data-path]').forEach(x=>x.onclick=()=>showInFiles(x.dataset.path));
+  $('bk-list').querySelectorAll('[data-browse]').forEach(x=>x.onclick=()=>browseBackup(x.dataset.browse,'/'));
+  $('bk-list').querySelectorAll('[data-verify]').forEach(x=>x.onclick=async()=>{try{await postJSON('/api/backup/verify',{device:cur,name:x.dataset.verify});loadBackups()}catch(e){alert(e.message)}});
+  $('bk-list').querySelectorAll('[data-label]').forEach(x=>x.onclick=async()=>{const l=prompt('Label for this backup:',x.dataset.cur);if(l==null)return;
+    try{await postJSON('/api/backup/label',{device:cur,name:x.dataset.label,label:l});loadBackups()}catch(e){alert(e.message)}});
+}
+function dur(s){if(s<90)return Math.round(s)+' s';if(s<5400)return Math.round(s/60)+' min';return (s/3600).toFixed(1)+' h'}
+function showInFiles(path){panes.mac.path=path;if(filesFor===cur)load(panes.mac,path);location.hash='#/d/'+enc(cur)+'/files'}
+$('bk-start').onclick=async()=>{$('bk-msg').className='msgline';$('bk-msg').textContent='Starting…';bkLast=null;bkRate=0;
+  try{await postJSON('/api/backup/start',{device:cur,label:$('bk-label').value});$('bk-label').value='';loadBackups()}catch(e){$('bk-msg').className='msgline bad';$('bk-msg').textContent=e.message}};
+let bkOptsLoaded=false,bkMirror='';
+$('bk-mirror-pick').onclick=()=>chooseFolder(bkMirror||'/Volumes',f=>{bkMirror=f;$('bk-mirror').textContent=f;closeModal()},'Where should the second copy go?');
+$('bk-mirror-off').onclick=()=>{bkMirror='';$('bk-mirror').textContent='none'};
+$('bk-save').onclick=async()=>{try{await postJSON('/api/backup/settings',{device:cur,backup_keep:+$('bk-keep').value||0,backup_mirror:bkMirror,backup_compress:$('bk-zip').checked});
+  $('bk-optmsg').textContent='Saved.'}catch(e){$('bk-optmsg').textContent=e.message}};
+async function browseBackup(name,folder){
+  let j;try{j=await getJSON('/api/backup/browse?device='+enc(cur)+'&name='+enc(name)+'&folder='+enc(folder))}catch(e){return alert(e.message)}
+  const up=folder==='/'?null:(folder.replace(/\/[^/]*$/,'')||'/');
+  modal(`<div class="pv"><h3>Backup ${esc(name)}${j.label?' · '+esc(j.label):''}</h3><div class="note">Inside: <code>${esc(folder)}</code>${j.compressed?' · zipped':''}. Tick what to put back on ${esc(cur)}, or double-click a folder to open it.</div>
+    <div class="row">${up?'<button id="bb-up">↑ Up</button>':''}<button id="bb-all">Tick all</button></div>
+    <div class="hits" id="bb-list">${j.entries.map((e,i)=>`<div data-i="${i}"><span><input type="checkbox" data-i="${i}"> ${e.kind==='dir'?'📁':'📄'} ${esc(e.name)}</span><span>${e.kind==='dir'?e.files+' files · ':''}${size(e.size)}</span></div>`).join('')||'<div>Empty</div>'}</div>
+    <div class="row"><button class="primary" id="bb-sel">Put back the ticked items…</button><button id="bb-every">Put back everything…</button><button id="bb-close">Close</button></div>
+    <div class="note">You'll see exactly what changes first. Files on ${esc(cur)} that get replaced are backed up before they're changed.</div></div>`);
+  $('box').classList.add('wide');$('bb-close').onclick=closeModal;if(up)$('bb-up').onclick=()=>browseBackup(name,up);
+  $('bb-all').onclick=()=>$('bb-list').querySelectorAll('input').forEach(c=>c.checked=true);
+  $('bb-list').querySelectorAll('div[data-i]').forEach(d=>{const e=j.entries[+d.dataset.i];
+    d.onclick=ev=>{if(ev.target.tagName==='INPUT')return;const c=d.querySelector('input');c.checked=!c.checked};
+    d.ondblclick=()=>{if(e.kind==='dir')browseBackup(name,e.path)}});
+  const restore=async paths=>{if(!paths.length)return alert('Tick something first.');
+    try{const p=await postJSON('/api/backup/restore_plan',{device:cur,name,paths});closeModal();showPlan(p)}catch(e){alert(e.message)}};
+  $('bb-sel').onclick=()=>restore([...$('bb-list').querySelectorAll('input:checked')].map(c=>j.entries[+c.dataset.i].path));
+  $('bb-every').onclick=()=>restore(['/'])}
+$('bk-pick').onclick=()=>{location.hash='#/d/'+enc(cur)+'/files';
+  setTimeout(()=>act('Select the files or folders on '+cur+' you want to back up, then press Back up (or right-click > Back up).','good'),300)};
+$('bk-stop').onclick=async()=>{await postJSON('/api/backup/stop',{device:cur});$('bk-msg').textContent='Stopping…'};
+$('bk-change').onclick=()=>chooseFolder($('bk-folder').textContent.replace(/\/[^/]*$/,''));
+async function chooseFolder(start,onPick,title){
+  modal(`<h3>${esc(title||'Where should backups of '+cur+' go?')}</h3>
+    <div class="note">Pick a folder on ${esc(info.computer||'the Mac')}. An external drive or network share shows up under Drives.
+    Each device gets its own folder inside, named after it.</div>
+    <div class="row"><button id="p-up">↑ Up</button><button id="p-home">Home</button><button id="p-vol">Drives</button></div>
+    <div class="row"><code id="p-path"></code></div><div class="picker" id="p-list"></div>
+    <div class="msgline" id="p-msg"></div>
+    <div class="row"><button class="primary" id="p-ok">Use this folder</button><button id="p-no">Cancel</button></div>`);
+  let here=null,parent=null;
+  const go=async path=>{try{const j=await getJSON('/api/files/list?side=mac&path='+enc(path));here=j.path;parent=j.parent;
+      $('p-path').textContent=here;const dirs=j.entries.filter(e=>e.kind==='dir');
+      $('p-list').innerHTML=dirs.length?dirs.map(e=>`<div data-n="${esc(e.name)}">📁 ${esc(e.name)}</div>`).join(''):'<div class="note">No folders inside. You can still use this one.</div>';
+      $('p-list').querySelectorAll('[data-n]').forEach(d=>d.onclick=()=>go(here.replace(/\/$/,'')+'/'+d.dataset.n))}
+    catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
+  $('p-up').onclick=()=>parent&&go(parent);$('p-home').onclick=()=>go('~');$('p-vol').onclick=()=>go('/Volumes');$('p-no').onclick=closeModal;
+  $('p-ok').onclick=async()=>{if(onPick)return onPick(here);try{await postJSON('/api/backup/folder',{device:cur,folder:here});closeModal();loadBackups()}
+    catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
+  go(start||'~');
+}
+
+// Dropping a file outside the drop areas shouldn't open it in the browser.
+window.addEventListener('dragover',e=>e.preventDefault());window.addEventListener('drop',e=>e.preventDefault());
+route();
+</script></body></html>
