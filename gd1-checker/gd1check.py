@@ -71,6 +71,18 @@ def say(msg=""):
     print(msg, flush=True)
 
 
+class Cancelled(Exception):
+    """The user pressed Stop."""
+
+
+should_stop = lambda: False      # the web app replaces this with its Stop button's flag
+
+
+def check_cancel():
+    if should_stop():
+        raise Cancelled()
+
+
 def now_stamp():
     return dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -279,6 +291,7 @@ class GD1:
         stack = [folder]
         seen = set()
         while stack:
+            check_cancel()
             d = stack.pop()
             if d in seen:
                 continue
@@ -340,6 +353,7 @@ class GD1:
         try:
             with open(tmp, "wb") as f:
                 def write(chunk):
+                    check_cancel()        # Stop works in the middle of a big file too
                     if progress:
                         progress(len(chunk))
                     f.write(chunk)
@@ -637,11 +651,18 @@ def cmd_scan(cfg, args):
               "time": stamp, "snapshot": str(snap), "files": [], "skipped": skipped}
     manifest = {}
 
+    stopped = False
     for i, f in enumerate(files, 1):
+        if should_stop():
+            stopped = True
+            break
         local = local_path_for(snap, f["path"])
         say("[%d/%d] %s" % (i, len(files), f["path"]))
         try:
             dev.download(f["path"], local)
+        except Cancelled:
+            stopped = True
+            break
         except (ftplib.Error, OSError, EOFError) as e:
             report["files"].append({"path": f["path"], "problems": [problem("error", "Couldn't download: %s" % e)]})
             continue
@@ -658,7 +679,12 @@ def cmd_scan(cfg, args):
         manifest[f["path"]] = {"size": len(data), "sha256": sha, "modified": f["modified"],
                                "ok": not any(p["level"] == "error" for p in probs)}
         report["files"].append({"path": f["path"], "size": len(data), "sha256": sha, "problems": probs})
-    dev.close()
+    try:
+        dev.close()
+    except Exception:
+        pass
+    if stopped:
+        report["stopped"] = "Stopped after %d of %d files." % (len(report["files"]), len(files))
 
     (snap / "_manifest.json").write_text(json.dumps(manifest, indent=2))
     rpath = root / "reports" / ("%s.json" % stamp)
@@ -765,7 +791,11 @@ def report_text(report):
     if report.get("skipped"):
         lines.append("")
         lines.append("Skipped %d files bigger than max_file_mb." % len(report["skipped"]))
-    if not bad:
+    if report.get("stopped"):
+        lines.append("")
+        lines.append("You stopped this scan. %s The files checked so far are saved; scan again for the rest."
+                     % report["stopped"])
+    elif not bad:
         lines.append("No crash damage found.")
     return "\n".join(lines) + "\n"
 

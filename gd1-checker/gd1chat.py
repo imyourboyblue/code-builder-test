@@ -93,6 +93,11 @@ class Stopped(Exception):
     pass
 
 
+CHAT_THREAD = [None]    # the thread working on the current chat request
+# Stop also halts scans and other long checker jobs, but only the chat's own (never a backup running alongside).
+core.should_stop = lambda: STOP.is_set() and threading.get_ident() == CHAT_THREAD[0]
+
+
 def check_stop():
     if STOP.is_set():
         raise Stopped()
@@ -311,6 +316,8 @@ def run_captured(emit, fn, *args, **kwargs):
         except SystemExit as e:
             if e.code not in (None, 0):
                 print(str(e.code))
+        except core.Cancelled:
+            raise Stopped()
         except (ftplib.Error, OSError, EOFError) as e:
             print("%s stopped answering or refused: %s" % ("The device", e))
     return result, sink.text()
@@ -3408,6 +3415,12 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             job = APP.chat_job
             if job and not job.done:
                 STOP.set()
+                job_emit = getattr(job, "emit", None)
+                if job_emit:
+                    try:
+                        job_emit({"type": "status", "text": "Stopping..."})
+                    except Exception:
+                        pass
             self.json({"ok": True})
         elif path == "/api/library/scan":
             cfg = APP.device(data.get("device")).cfg()
@@ -3751,6 +3764,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
         STOP.clear()
 
         def work():
+            CHAT_THREAD[0] = threading.get_ident()
+
             def emit(ev):
                 st.record(ev)
                 job.emit(ev)
