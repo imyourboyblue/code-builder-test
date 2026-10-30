@@ -3255,7 +3255,7 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             if job and not job.done:
                 raise ToolError("Wait for the chat to finish (or press Stop) first, then update.")
             try:
-                msg = updater.update()
+                msg = updater.update(keep_local=bool(data.get("keep_local")))
             except RuntimeError as e:
                 raise ToolError(str(e))
             restart = msg.startswith("Updated")

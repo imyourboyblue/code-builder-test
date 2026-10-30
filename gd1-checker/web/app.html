@@ -1026,10 +1026,12 @@ async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;
   if(!u.behind){box.innerHTML='✅ Patchbay is up to date'+(u.current?' <span style="color:var(--mute)">(version '+esc(u.current)+')</span>':'')+'.';setUpdBadge(false);return}
   setUpdBadge(true);
   box.innerHTML='<b>An update is ready</b> ('+u.behind+' change'+(u.behind>1?'s':'')+'):<ul style="margin:4px 0;max-height:140px;overflow:auto">'+u.changes.map(c=>'<li>'+esc(c)+'</li>').join('')+'</ul>'+
-    (u.edited.length?'<div style="color:var(--bad)">These Patchbay files were changed on this Mac, so it won\'t update by itself: '+esc(u.edited.join(', '))+'</div>':
-     '<button class="primary" id="sc-update">Update and restart</button> <span style="font-size:12.5px;color:var(--mute)">Your settings, devices, backups and chats stay as they are.</span>');
+    (u.edited.length&&!u.own?'<div class="riskbox" style="border-color:var(--warn)"><b style="color:var(--warn)">Some Patchbay files were changed on this Mac:</b> '+esc(u.edited.map(e=>e.split('/').pop()).join(', '))+'. '+
+       'Patchbay saves a copy of your version first, updates, and then puts your changes back on top. If they clash with the update, the updated version is used and your copy stays saved, so nothing is lost.'+
+       (u.diff?'<details style="margin-top:6px"><summary style="cursor:pointer">See what was changed</summary>'+diffView(u.diff)+'</details>':'')+'</div>':'')+
+    '<button class="primary" id="sc-update">'+(u.edited.length&&!u.own?'Save my changes and update':'Update and restart')+'</button> <span style="font-size:12.5px;color:var(--mute)">Your settings, devices, backups and chats stay as they are.</span>';
   const b=$('sc-update');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Updating…';
-    try{const r=await postJSON('/api/update/apply',{});
+    try{const r=await postJSON('/api/update/apply',{keep_local:!!u.edited.length});
       if(!r.restarting){box.textContent=r.message;return}
       box.textContent='Updated. Restarting Patchbay…';
       await new Promise(ok=>setTimeout(ok,2500));

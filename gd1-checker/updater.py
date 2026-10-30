@@ -53,44 +53,71 @@ def status(fetch=True):
             out["changes"] = _git("log", "HEAD..@{u}", "--format=%s", "-n", "30")[1].splitlines()
         out["edited"] = [line.strip().split(None, 1)[-1] for line in
                          _git("status", "--porcelain", "--untracked-files=no")[1].splitlines() if line.strip()]
+        out["own"] = bool(out["edited"]) and bool(_own_changes(out["edited"]))
+        out["diff"] = local_diff() if out["edited"] else ""
     except RuntimeError as e:
         out["error"] = str(e)
     return out
 
 
-def update():
-    """Get the newer version. Returns a message. Raises RuntimeError with a plain reason if it can't."""
+def update(keep_local=False):
+    """Get the newer version. Returns a message. Raises RuntimeError with a plain reason if it can't.
+    Files changed on this Mac are never thrown away: changes Patchbay made to itself, or (with keep_local) any other
+    change, are first saved to data-cache/local-changes/<time>/ and set aside with git stash, then put back on top
+    of the update. If they clash with the update, the updated files are used and the saved copies stay."""
     st = status()
     if st["error"]:
         raise RuntimeError(st["error"])
     if not st["behind"]:
         return "Patchbay is already up to date."
     mine = _own_changes(st["edited"])
-    if st["edited"] and not mine:
-        raise RuntimeError("These Patchbay files were changed on this Mac, so updating could overwrite your "
-                           "changes: %s. Send me the list and I'll help." % ", ".join(st["edited"][:8]))
-    if mine:
-        # Changes Patchbay made to itself (each one is also saved in data-cache/self-backups): set them aside,
-        # update, then put them back on top.
-        code, out, err = _git("stash", "push", "--quiet", "-m", "Patchbay's own changes before an update")
+    if st["edited"] and not mine and not keep_local:
+        raise RuntimeError("LOCAL_CHANGES: These Patchbay files were changed on this Mac: %s."
+                           % ", ".join(st["edited"][:8]))
+    keep = None
+    if st["edited"]:
+        keep = _save_copies(st["edited"])
+        code, out, err = _git("stash", "push", "--quiet", "-m", "Changes on this Mac before an update")
         if code:
-            raise RuntimeError("Couldn't set Patchbay's own changes aside for the update: " + (err or out))
+            raise RuntimeError("Couldn't set the changes aside for the update: " + (err or out))
     code, out, err = _git("pull", "--ff-only", "--quiet", timeout=120)
     if code:
-        if mine:
+        if st["edited"]:
             _git("stash", "pop", "--quiet")
         raise RuntimeError("The update didn't work: " + ((err or out).splitlines() or ["unknown error"])[-1])
     done = "Updated (%d change%s)." % (st["behind"], "" if st["behind"] == 1 else "s")
-    if mine:
+    if st["edited"]:
+        names = ", ".join(e.split("/")[-1] for e in st["edited"])
         code, out, err = _git("stash", "pop", "--quiet")
         if code:
-            # They clash with the update: keep the updated files, and keep the changes saved in git's stash.
+            # They clash with the update: use the updated files; the changes stay saved (stash + copies).
             _git("reset", "--hard", "--quiet", "HEAD")
-            return (done + " The changes Patchbay made to itself in %s clashed with the update, so the updated "
-                    "version is used. They're saved (in git's stash and in data-cache/self-backups); ask the home "
-                    "chat to make them again if you still want them." % ", ".join(mine))
-        done += " Patchbay's own changes (%s) were kept." % ", ".join(mine)
+            return (done + " Your changes to %s clashed with the update, so the updated version is used. Your "
+                    "version is saved in %s (and in git's stash), so nothing is lost." % (names, keep))
+        done += " Your changes to %s were kept on top of the update (a copy is in %s)." % (names, keep)
     return done
+
+
+def _save_copies(edited):
+    """Copy the changed files and what changed (a diff) into data-cache/local-changes/<time>/."""
+    folder = HERE / "data-cache" / "local-changes" / time.strftime("%Y-%m-%d_%H-%M-%S")
+    folder.mkdir(parents=True, exist_ok=True)
+    top = Path(_git("rev-parse", "--show-toplevel")[1] or HERE)
+    for e in edited:
+        src = top / e.strip().strip('"').split(" -> ")[-1]
+        if src.is_file():
+            (folder / src.name).write_bytes(src.read_bytes())
+    (folder / "changes.diff").write_text(_git("diff", "HEAD")[1] + "\n")
+    return str(folder.relative_to(HERE))
+
+
+def local_diff(limit=6000):
+    """What was changed on this Mac, as a diff (for the page)."""
+    try:
+        d = _git("diff", "HEAD")[1]
+    except RuntimeError:
+        return ""
+    return d if len(d) <= limit else d[:limit] + "\n… (%d more characters)" % (len(d) - limit)
 
 
 def _own_changes(edited):
