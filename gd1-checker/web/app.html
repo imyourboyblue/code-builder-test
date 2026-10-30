@@ -96,6 +96,15 @@ border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 #f{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);max-width:900px;width:100%;margin:0 auto}
 textarea{flex:1;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);
 color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
+.think{align-self:stretch;max-width:520px;font-size:13px;color:var(--mute)}
+.tk-bar{height:4px;border-radius:4px;background:var(--line);overflow:hidden;position:relative;margin:2px 0 6px}
+.tk-bar i{position:absolute;top:0;bottom:0;width:35%;border-radius:4px;background:linear-gradient(90deg,transparent,var(--me),transparent);animation:tk-slide 1.4s ease-in-out infinite}
+@keyframes tk-slide{0%{left:-35%}100%{left:100%}}
+.tk-row{display:flex;gap:8px;align-items:center}.tk-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-meta{font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}
+.tk-dot{width:8px;height:8px;border-radius:50%;background:var(--me);animation:tk-pulse 1s ease-in-out infinite alternate;flex:none}
+@keyframes tk-pulse{from{opacity:.3;transform:scale(.8)}to{opacity:1;transform:scale(1.1)}}
+@media (prefers-reduced-motion:reduce){.tk-bar i{animation:none;left:0;width:100%;opacity:.5}.tk-dot{animation:none}}
 .longmsg summary{cursor:pointer;color:inherit;opacity:.85;font-size:12.5px;margin-top:6px}
 .pr-item{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
 .pr-item .pr-t{flex:1;min-width:0}.pr-item pre{margin:4px 0 0;font-size:12px;color:var(--mute);white-space:pre-wrap;max-height:3.9em;overflow:hidden}
@@ -609,7 +618,7 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
   else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
   else if(ev.type==='tool'){endStream();if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
-    ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
+    ctx.status.step();ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
   else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
     add('step','<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':'✓ ')+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
   else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
@@ -629,9 +638,18 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
     c.querySelectorAll('button[data-i]').forEach(b=>b.onclick=async()=>{if(busy)return;const o=ev.options[+b.dataset.i];
       c.querySelector('.row').innerHTML='<i>'+esc(o.label)+'</i>';add('msg me',esc(o.label),o.label);await chatStream('/api/chat',{text:o.send})});keep()}
 }
+// The "working" line under the chat: a moving bar, what it's doing now, how many steps, and how long so far.
+function thinking(){
+  const el=add('think','<div class="tk-bar"><i></i></div><div class="tk-row"><span class="tk-dot"></span><span class="tk-text">Thinking…</span><span class="tk-meta"></span></div>');
+  const label=el.querySelector('.tk-text'),meta=el.querySelector('.tk-meta'),t0=Date.now();let steps=0;
+  Object.defineProperty(el,'textContent',{get:()=>label.textContent,set:v=>{label.textContent=v}});
+  const tick=()=>{const s=Math.floor((Date.now()-t0)/1000),m=Math.floor(s/60);
+    meta.textContent=(steps?'step '+steps+' · ':'')+(m?m+'m '+String(s%60).padStart(2,'0')+'s':s+'s')+(s>=90&&!steps?' · big models can take a minute or two':'')};
+  tick();const timer=setInterval(tick,1000);
+  el.step=()=>{steps++;tick()};el.stop=()=>clearInterval(timer);return el}
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
-  const dev=cur;busy=true;setSend(true);const ctx={status:add('live','Working...'),live:null,stream:null};
+  const dev=cur;busy=true;setSend(true);const ctx={status:thinking(),live:null,stream:null};
   let n=since||0,finished=false,tries=0;
   const on=ev=>{if(ev.type==='ping')return;if(ev.type==='done'){finished=true;return}n++;
     if(cur===dev&&(view==='chat'||dev===HOMECHAT))show(ev,ctx)};
@@ -641,7 +659,7 @@ async function chatStream(url,body,since){
     await new Promise(r=>setTimeout(r,Math.min(10000,1500*tries)));
     try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
   if(!finished&&!restarting)add('msg err','Can\'t reach Patchbay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
-  ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
+  ctx.status.stop();ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
   if(dev===cur)loadChatBar()}
 function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
