@@ -213,6 +213,9 @@ SETTINGS = {
     "backup_folder": ("text", "where full backups go"),
     "backup_folders": ("list", "folders a full backup copies"),
     "backup_exclude": ("list", "patterns a full backup skips"),
+    "backup_keep": ("count", "how many backups to keep (older ones are deleted; 0 = keep all)"),
+    "backup_mirror": ("text", "a second folder each backup is also copied to (empty = none)"),
+    "backup_compress": ("bool", "zip each finished backup to save space"),
     "ollama_model": ("text", "which AI model to use (shared)"),
     "chat_context": ("int", "how much the AI remembers at once (shared)"),
     "data_folder": ("text", "where scans and backups of changes are kept (shared)"),
@@ -236,6 +239,11 @@ def coerce(key, value):
                     raise ValueError
                 return v in ("true", "on", "yes", "1")
             return bool(value)
+        if kind == "count":
+            v = int(value)
+            if v < 0:
+                raise ValueError
+            return v
         if kind == "int":
             v = int(value)
             if v <= 0:

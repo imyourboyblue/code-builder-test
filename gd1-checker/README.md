@@ -62,7 +62,16 @@ Each device has a **Chat** tab. Things you can say:
 - "Change the flush setting in app.conf to always"
 - "Undo the last change"
 
-The AI can look at anything on the device without asking. To change a file, it shows you a card with the exact change, and nothing is written until you type the device's name (like `GD1`) and press **Confirm**. The chat is kept while the app runs, so you can switch devices or computers and pick up where you left off.
+The AI can look at anything on the device without asking. To change a file, it shows you a card with the exact change, and nothing is written until you type the device's name (like `GD1`) and press **Confirm**.
+
+- **Live replies and Stop:** the answer appears as the AI writes it. While it works, the Send button turns into **Stop**.
+- **Steps in plain words:** each thing it did shows as one line, like "Looked in /switch: 3 folders and 12 files". Click a line to see the details.
+- **Past chats:** every chat is saved on the Mac Studio by itself. **Past chats** at the top lists them, to reopen or delete. **New chat** starts a fresh one.
+- **Add files:** drop files onto the chat, or click 📎. Logs and text files, .nro files and pictures all work. Pictures need a model that can see images (like qwen2.5vl).
+- **Quick buttons** above the message box for common jobs.
+- **AI model** picker at the top: switch between your fast model and your deeper one at any time.
+- **Plan first:** for a big job, the AI shows a numbered plan. Approve it once (typing the device's name if it changes files on the device) and it does all the steps without stopping. The folders it will change on the device are backed up first.
+- **Copy** buttons on every message and code block, and links you can click.
 
 ### .nro programs and source code
 
@@ -128,6 +137,15 @@ Each device has a **Files** tab. The left side is the Mac Studio's folders, the 
 - **Rename** anything: click the ✎ pencil at the end of a row, or right-click a file or folder for a menu (Open, Rename, Download, Copy, Delete, New folder). This works on both sides. On the Mac side it happens straight away. On the device side you type the device's name to confirm, as with every device change.
 - **Rename the device:** click **✎ Rename device** next to its name on the right side. Its scans, history, picture and backups move to the new name, and from then on you type the new name to confirm changes.
 
+- **Preview:** double-click a file (or right-click > Preview) to look inside: text, pictures, a hex view for other files, or an .nro's details and damage checks.
+- **Edit in place:** in the preview of a text file, click **Edit**, change it, and **Save**. On the device you then type its name to confirm, and the old file is backed up first. On the Mac the old version is backed up too.
+- **Search:** 🔍 Search on the device side finds files and folders by name anywhere on the device. Click a result to go there.
+- **Transfer queue:** copies show below the panes with a progress bar, speed and time left, plus **Pause**, **Resume** and **Cancel**. (Some devices drop a transfer that stays paused for a long time; just start it again.)
+- **Select many:** click, Cmd+click, Shift+click, **Select all** or Cmd+A. The count shows next to the buttons.
+- **Ask AI about this:** right-click any file or folder and the chat opens with a question about it.
+- **Compare:** select two files (two on one side, or one on each side, like the device's copy and a backup) and press **Compare**, or right-click > Compare with…
+- **Bookmarks:** ☆ next to the folder path saves the folder you're in. Your bookmarks show under the path; click one to jump there.
+
 Anything that changes the device (upload, move, rename, new folder, delete) first shows you a list of exactly what will happen, and only goes ahead after you type the device's name. Every file that gets replaced or deleted is backed up to the Mac Studio first, and every change is in the device's history, so the AI (or `python3 gd1check.py undo <number>`) can put it back.
 
 Writing to a device still needs `"allow_writes": true` in that device's settings file.
@@ -147,6 +165,13 @@ Each backup is a dated folder, like `GD1/2026-10-30_02-10-00/`, holding every fi
 Backing up only reads the device. Before it starts copying, it checks there's enough free space. Files that can't be read are skipped and listed in that backup's `_backup.json`.
 
 To put files back, click **Show in Files** next to a backup, then drag files from the left side to the device. As always, you type the device's name to confirm, and the device's current file is backed up first.
+
+**More backup tools:**
+- **Browse and restore:** open any backup like a folder. Tick files or folders and press **Put back**, or put back everything. You see exactly what will change first, type the device's name, and anything on the device that gets replaced is backed up before it changes.
+- **Labels:** type a label before you start (like "before the Atmosphère 1.8 update"), or click **Label…** on a backup later.
+- **Check:** re-reads every file in a backup and compares it with the fingerprint (checksum) taken when it was made, so you know it isn't damaged.
+- **Options:** keep only the newest N backups (older ones are deleted after each backup), zip each finished backup to save space, and save a second copy of each backup somewhere else, like your unRAID share or an external drive.
+- **Safety backups:** when you approve a plan in the chat that changes files on the device, Patchbay first backs up the folders it will change. These show as "Before: …" in the list.
 
 For a very long backup you can also run it in Terminal (it resumes the same way):
 ```

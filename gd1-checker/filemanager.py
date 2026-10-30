@@ -13,10 +13,16 @@ drag files between them, and drop files from Finder onto the device.
 Only uses Python's built-in parts.
 """
 
+import base64
+import difflib
 import ftplib
+import hashlib
+import io
 import json
 import os
+import re
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
@@ -28,6 +34,53 @@ MAX_PLAN_ITEMS = 20000
 
 class FileError(Exception):
     pass
+
+
+class Cancelled(Exception):
+    pass
+
+
+class Transfer:
+    """One copy in the transfer queue: its progress, and Pause / Cancel."""
+
+    def __init__(self, device, title, kind):
+        self.id = uuid.uuid4().hex[:8]
+        self.device, self.title, self.kind = device, title, kind
+        self.paused, self.cancelled = threading.Event(), threading.Event()
+        self.lock = threading.Lock()
+        self.st = {"files_total": 0, "files_done": 0, "bytes_total": 0, "bytes_done": 0, "current": "",
+                   "state": "waiting", "message": "", "started": time.time(), "finished": None}
+        self.recent = []   # (time, bytes_done) for the speed
+
+    def set(self, **kw):
+        with self.lock:
+            self.st.update(kw)
+
+    def chunk(self, n):
+        while self.paused.is_set() and not self.cancelled.is_set():
+            time.sleep(0.2)
+        if self.cancelled.is_set():
+            raise Cancelled()
+        with self.lock:
+            self.st["bytes_done"] += n
+            now = time.time()
+            if not self.recent or now - self.recent[-1][0] > 0.5:
+                self.recent.append((now, self.st["bytes_done"]))
+                del self.recent[:-12]
+
+    def emit(self, ev):
+        if ev.get("type") == "progress":
+            self.set(current=ev.get("text", "")[:200])
+
+    def status(self):
+        with self.lock:
+            d = dict(self.st, id=self.id, title=self.title, kind=self.kind, device=self.device,
+                     paused=self.paused.is_set())
+            speed = 0
+            if len(self.recent) > 1 and self.recent[-1][0] > self.recent[0][0]:
+                speed = (self.recent[-1][1] - self.recent[0][1]) / (self.recent[-1][0] - self.recent[0][0])
+            d["speed"] = speed if d["state"] == "running" and not d["paused"] else 0
+            return d
 
 
 def safe_remote(path):
@@ -134,7 +187,7 @@ def unique_local(path):
         n += 1
 
 
-def copy_to_mac(cfg, items, mac_folder, emit):
+def copy_to_mac(cfg, items, mac_folder, emit, tr=None):
     """items: [{"path": "/data/x", "kind": "file"|"dir"}]. Returns how many files were copied."""
     dest = Path(os.path.expanduser(mac_folder)).resolve()
     if not dest.is_dir():
@@ -142,6 +195,8 @@ def copy_to_mac(cfg, items, mac_folder, emit):
     dev = connect(cfg)
     copied = 0
     try:
+        # List everything first, so the queue knows how big the job is.
+        todo = []
         for it in items:
             remote = safe_remote(it.get("path"))
             name = PurePosixPath(remote).name or cfg["device_name"]
@@ -149,16 +204,20 @@ def copy_to_mac(cfg, items, mac_folder, emit):
                 top = unique_local(dest / name)
                 top.mkdir(parents=True)
                 for path, size, _ in dev.walk(remote):
+                    if tr and tr.cancelled.is_set():
+                        raise Cancelled()
                     rel = PurePosixPath(path).relative_to(remote)
-                    local = top.joinpath(*rel.parts)
-                    emit({"type": "progress", "text": "Copying %s (%s)" % (path, core.human_size(size))})
-                    dev.download(path, local)
-                    copied += 1
+                    todo.append((path, top.joinpath(*rel.parts), size or 0))
             else:
-                local = unique_local(dest / name)
-                emit({"type": "progress", "text": "Copying %s" % remote})
-                dev.download(remote, local)
-                copied += 1
+                todo.append((remote, unique_local(dest / name), dev.size(remote) or 0))
+        if tr:
+            tr.set(files_total=len(todo), bytes_total=sum(t[2] for t in todo), state="running")
+        for path, local, size in todo:
+            emit({"type": "progress", "text": "Copying %s (%s)" % (path, core.human_size(size))})
+            dev.download(path, local, tr.chunk if tr else None)
+            copied += 1
+            if tr:
+                tr.set(files_done=copied)
     finally:
         dev.close()
     return copied
@@ -328,6 +387,43 @@ def plan(cfg, op, a):
 
 # ----------------------------------------------------------------- doing the writes (after you confirmed)
 
+def restore_plan(cfg, mapping, title):
+    """Steps to put backed-up files back: {device path: local copy}. Nothing is written here."""
+    dev = connect(cfg)
+    steps, lines, listed = [], [], {}
+    try:
+        def there(folder):
+            if folder not in listed:
+                try:
+                    listed[folder] = {e[0] for e in dev._list(folder)}
+                except ftplib.Error:
+                    listed[folder] = None   # the folder itself is missing
+            return listed[folder]
+        made = set()
+        for remote in sorted(mapping):
+            remote = safe_remote(remote)
+            parent = str(PurePosixPath(remote).parent)
+            if there(parent) is None:
+                chain = []
+                p = PurePosixPath(parent)
+                while str(p) != "/" and str(p) not in made and there(str(p)) is None:
+                    chain.append(str(p))
+                    p = p.parent
+                for d in reversed(chain):
+                    steps.append(("mkdir", d))
+                    made.add(d)
+                    lines.append("Make the missing folder %s" % d)
+            local = Path(mapping[remote])
+            exists = (there(parent) or set()) and PurePosixPath(remote).name in (there(parent) or set())
+            lines.append(("Replace %s (%s). The current one is backed up first." if exists else "Put back %s (%s)")
+                         % (remote, core.human_size(local.stat().st_size)))
+            steps.append(("put", str(local), remote))
+    finally:
+        dev.close()
+    n = sum(1 for x in steps if x[0] == "put")
+    return "%s: put back %d file%s on %s" % (title, n, "" if n == 1 else "s", cfg["device_name"]), lines, steps
+
+
 def remote_exists(dev, remote):
     if dev.size(remote) is not None:
         return True
@@ -338,7 +434,7 @@ def remote_exists(dev, remote):
         return False
 
 
-def apply(cfg, steps, note, emit):
+def apply(cfg, steps, note, emit, tr=None):
     if not cfg.get("allow_writes"):
         raise FileError("Writing to %s is turned off. Set \"allow_writes\": true in its settings file to allow it."
                         % cfg["device_name"])
@@ -368,9 +464,16 @@ def apply(cfg, steps, note, emit):
         core.history_path(cfg).write_text(json.dumps(hist, indent=2))
         done.append(entry)
 
+    if tr:
+        tr.set(files_total=len(steps), state="running",
+               bytes_total=sum(Path(st[1]).stat().st_size for st in steps if st[0] == "put" and Path(st[1]).exists()))
     try:
         for i, step in enumerate(steps, 1):
             kind = step[0]
+            if tr:
+                if tr.cancelled.is_set():
+                    raise Cancelled()
+                tr.set(files_done=i - 1)
             emit({"type": "progress", "text": "(%d of %d) %s %s" % (i, len(steps), kind, step[-1])})
             if kind == "mkdir":
                 try:
@@ -382,7 +485,7 @@ def apply(cfg, steps, note, emit):
                 local, remote = Path(step[1]), step[2]
                 backup = backup_of(remote, must_exist=True) if remote_exists(dev, remote) else None
                 with open(local, "rb") as f:
-                    dev.upload(f, remote)
+                    dev.upload(f, remote, tr.chunk if tr else None)
                 after = dev.size(remote)
                 record("upload", remote, local, backup, after is None or after == local.stat().st_size)
             elif kind == "delete":
@@ -395,6 +498,9 @@ def apply(cfg, steps, note, emit):
             elif kind == "rename":
                 dev.call("rename", step[1], step[2])
                 record("rename", step[2], extra=" (was %s)" % step[1])
+    except Cancelled:
+        raise FileError("Cancelled after %d of %d steps. Everything done so far is in the history and backed up."
+                        % (len(done), len(steps)))
     except (ftplib.Error, OSError, EOFError) as e:
         raise FileError("Stopped after %d of %d steps: %s. Everything done so far is in the history and backed up."
                         % (len(done), len(steps), e))
@@ -424,3 +530,154 @@ def mac_mkdir(folder, name):
         raise FileError("%s already exists." % d)
     d.mkdir()
     return str(d)
+
+
+# ----------------------------------------------------------------- preview, compare, search, bookmarks
+
+PREVIEW_TEXT = 2 * 1024 * 1024
+PREVIEW_IMAGE = 15 * 1024 * 1024
+IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+              ".webp": "image/webp", ".bmp": "image/bmp"}
+
+
+def read_any(cfg, side, path, limit):
+    """Up to limit bytes of a file on the Mac or the device. Returns (bytes, full size)."""
+    if side == "mac":
+        p = Path(os.path.expanduser(path or "")).resolve()
+        if not p.is_file():
+            raise FileError("%s isn't a file on the Mac." % p)
+        size = p.stat().st_size
+        with open(p, "rb") as f:
+            return f.read(limit), size
+    remote = safe_remote(path)
+    dev = connect(cfg)
+    try:
+        size = dev.size(remote)
+        buf = io.BytesIO()
+
+        def take(chunk):
+            buf.write(chunk)
+            if buf.tell() >= limit:
+                raise Cancelled()
+        try:
+            dev.call("retrbinary", "RETR " + remote, take)
+        except Cancelled:
+            dev.close()    # stop the download part-way
+        except ftplib.error_perm as e:
+            raise FileError("Couldn't read %s (%s)." % (remote, e))
+        return buf.getvalue()[:limit], size if size is not None else buf.tell()
+    finally:
+        dev.close()
+
+
+def preview(cfg, side, path):
+    import nro
+    ext = Path(path or "").suffix.lower()
+    if ext in IMAGE_MIME:
+        data, size = read_any(cfg, side, path, PREVIEW_IMAGE)
+        if size > PREVIEW_IMAGE:
+            return {"kind": "too_big", "size": size}
+        return {"kind": "image", "size": size, "src": "data:%s;base64,%s" % (IMAGE_MIME[ext], base64.b64encode(data).decode())}
+    if ext == ".nro":
+        data, size = read_any(cfg, side, path, 512 * 1024 * 1024)
+        info, probs, desc = nro.describe(data)
+        return {"kind": "nro", "size": size, "text": desc, "problems": [x["text"] for x in probs]}
+    data, size = read_any(cfg, side, path, PREVIEW_TEXT)
+    probs = [x["text"] for x in core.check_bytes(path, data, size) if x["level"] in ("error", "warning")] \
+        if size <= PREVIEW_TEXT else []
+    if core.looks_like_text(data[:8192]):
+        return {"kind": "text", "size": size, "text": data.decode("utf-8", "replace"), "editable": size <= PREVIEW_TEXT,
+                "cut": size > PREVIEW_TEXT, "problems": probs}
+    head = data[:4096]
+    rows = ["%08x  %-48s  %s" % (i, " ".join("%02x" % b for b in head[i:i + 16]),
+                                 "".join(chr(b) if 32 <= b < 127 else "." for b in head[i:i + 16]))
+            for i in range(0, len(head), 16)]
+    return {"kind": "hex", "size": size, "text": "\n".join(rows), "problems": probs}
+
+
+def compare(cfg_a, a, cfg_b, b):
+    """Differences between two files (each on the Mac or a device)."""
+    limit = 8 * 1024 * 1024
+    da, sa = read_any(cfg_a, a["side"], a["path"], limit)
+    db, sb = read_any(cfg_b, b["side"], b["path"], limit)
+    out = {"a": a["path"], "b": b["path"], "size_a": sa, "size_b": sb, "same": sa == sb and da == db}
+    if out["same"]:
+        return dict(out, text="The two files are exactly the same (%s)." % core.human_size(sa))
+    if core.looks_like_text(da[:8192]) and core.looks_like_text(db[:8192]):
+        diff = "".join(difflib.unified_diff(da.decode("utf-8", "replace").splitlines(True),
+                                            db.decode("utf-8", "replace").splitlines(True), a["path"], b["path"], n=3))
+        return dict(out, kind="text", text=diff[:400000] or "Only the line endings differ.")
+    first = next((i for i in range(min(len(da), len(db))) if da[i] != db[i]), min(len(da), len(db)))
+    differ = sum(1 for x, y in zip(da, db) if x != y)
+    lines = ["%s: %s, sha256 %s" % (a["path"], core.human_size(sa), hashlib.sha256(da).hexdigest()[:16]),
+             "%s: %s, sha256 %s" % (b["path"], core.human_size(sb), hashlib.sha256(db).hexdigest()[:16]),
+             "First difference at byte %d (0x%x)." % (first, first),
+             "%d of the first %d bytes differ." % (differ, min(len(da), len(db)))]
+    zeros = [n for n, d in ((a["path"], da), (b["path"], db)) if len(d) > 64 and d[-64:] == bytes(64)]
+    if zeros:
+        lines.append("Ends in zero bytes (a sign of a cut-off save): %s" % ", ".join(zeros))
+    return dict(out, kind="binary", text="\n".join(lines))
+
+
+def search(cfg, folder, words, emit, max_dirs=20000, max_hits=500):
+    """Find files and folders whose names contain the words. Calls emit for progress and each hit."""
+    want = [w for w in re.split(r"\s+", (words or "").lower()) if w]
+    if not want:
+        raise FileError("Type part of a name to search for.")
+    dev = connect(cfg)
+    hits, listed = 0, 0
+    try:
+        queue = [safe_remote(folder or "/")]
+        while queue and listed < max_dirs and hits < max_hits:
+            d = queue.pop(0)
+            try:
+                entries = dev._list(d)
+            except (ftplib.Error, OSError, EOFError):
+                continue
+            listed += 1
+            if listed % 25 == 0 and not emit({"type": "progress", "text": "Searched %d folders..." % listed}):
+                return
+            for name, kind, size, modified in entries:
+                if name in (".", "..") or kind == "skip":
+                    continue
+                full = join(d, name)
+                if all(w in name.lower() for w in want):
+                    hits += 1
+                    if not emit({"type": "hit", "path": full, "kind": kind, "size": size,
+                                 "modified": pretty_ftp_time(modified)}):
+                        return
+                if kind == "dir":
+                    queue.append(full)
+    finally:
+        dev.close()
+    emit({"type": "answer", "text": "Found %d match%s in %d folders%s." % (
+        hits, "" if hits == 1 else "es", listed, " (stopped at %d)" % max_hits if hits >= max_hits else
+        " (stopped after %d folders)" % max_dirs if listed >= max_dirs else "")})
+
+
+def mac_save(cfg, path, text):
+    """Save an edited text file on the Mac. The old version is backed up first."""
+    p = Path(os.path.expanduser(path or "")).resolve()
+    if not p.is_file():
+        raise FileError("%s isn't a file on the Mac." % p)
+    backup = core.local_path_for(core.unique_dir(core.data_dir(cfg) / "mac-edit-backups", core.now_stamp()), str(p))
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(p, backup)
+    tmp = p.with_name(p.name + ".saving")
+    tmp.write_text(text, "utf-8")
+    tmp.replace(p)
+    return backup
+
+
+def bookmarks(cfg):
+    f = core.data_dir(cfg) / "bookmarks.json"
+    try:
+        return json.loads(f.read_text())
+    except (OSError, ValueError):
+        return {"mac": [], "dev": []}
+
+
+def save_bookmarks(cfg, marks):
+    clean = {side: [str(x)[:500] for x in (marks.get(side) or [])][:40] for side in ("mac", "dev")}
+    (core.data_dir(cfg) / "bookmarks.json").write_text(json.dumps(clean, indent=2))
+    return clean

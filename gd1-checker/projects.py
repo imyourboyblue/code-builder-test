@@ -175,7 +175,7 @@ def build_env():
     return env
 
 
-def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT):
+def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
     """Run one command in a folder on the Mac, showing its output live. Returns (exit code, output)."""
     shell = os.environ.get("SHELL") or "/bin/zsh"
     if not Path(shell).exists():
@@ -192,6 +192,10 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT):
             del lines[:-400]
             if line.strip():
                 emit({"type": "progress", "text": line[:300]})
+            if stop is not None and stop.is_set():
+                proc.kill()
+                lines.append("(stopped: you pressed Stop)")
+                break
             if time.time() - started > timeout:
                 proc.kill()
                 lines.append("(stopped: it took longer than %d minutes)" % (timeout // 60))
@@ -203,9 +207,9 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT):
     return code, "\n".join(lines)
 
 
-def run_build(pr, emit):
+def run_build(pr, emit, stop=None):
     """Run the project's build command in its folder."""
-    code, out = run_shell(folder_of(pr), pr["build"], emit)
+    code, out = run_shell(folder_of(pr), pr["build"], emit, stop=stop)
     built = None
     if pr.get("output"):
         _, built = inside(pr, pr["output"])

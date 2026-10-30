@@ -293,12 +293,17 @@ class GD1:
 
     # ---- transfer
 
-    def download(self, remote, local):
+    def download(self, remote, local, progress=None):
+        """progress(n) is called for each piece that arrives (it may pause, or raise to cancel)."""
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp = local.with_name(local.name + ".downloading")
         try:
             with open(tmp, "wb") as f:
-                self.call("retrbinary", "RETR " + remote, f.write)
+                def write(chunk):
+                    if progress:
+                        progress(len(chunk))
+                    f.write(chunk)
+                self.call("retrbinary", "RETR " + remote, write)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
@@ -320,24 +325,51 @@ class GD1:
             except ftplib.error_perm:
                 pass
 
-    def upload(self, data, remote):
+    def upload(self, data, remote, progress=None):
         """Upload bytes (or an open file) to a temporary name, then swap it in, so a
         dropped upload never leaves a half-written file in place of the real one."""
         tmp_remote = remote + ".gd1check-upload"
         src = io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data
+        if progress:
+            src = _Counted(src, progress)
         try:
-            self.call("storbinary", "STOR " + tmp_remote, src)
-        except ftplib.error_perm:
-            # Maybe the folder doesn't exist (e.g. undoing a deleted folder). Make it and retry once.
-            self.make_dirs(str(PurePosixPath(remote).parent))
-            src.seek(0)
-            self.call("storbinary", "STOR " + tmp_remote, src)
+            try:
+                self.call("storbinary", "STOR " + tmp_remote, src)
+            except ftplib.error_perm:
+                # Maybe the folder doesn't exist (e.g. undoing a deleted folder). Make it and retry once.
+                self.make_dirs(str(PurePosixPath(remote).parent))
+                src.seek(0)
+                self.call("storbinary", "STOR " + tmp_remote, src)
+        except BaseException:
+            try:     # don't leave the half-sent temporary file behind
+                self.close()
+                self.connect(quiet=True)
+                self.ftp.delete(tmp_remote)
+            except (Exception, SystemExit):
+                pass
+            raise
         try:
             self.call("rename", tmp_remote, remote)
         except ftplib.error_perm:
             # Some servers won't rename over an existing file.
             self.call("delete", remote)
             self.call("rename", tmp_remote, remote)
+
+
+class _Counted:
+    """Wraps a file being uploaded so each piece read is reported (to show progress, pause or cancel)."""
+
+    def __init__(self, f, progress):
+        self.f, self.progress = f, progress
+
+    def read(self, n=-1):
+        data = self.f.read(n)
+        if data:
+            self.progress(len(data))
+        return data
+
+    def seek(self, *a):
+        return self.f.seek(*a)
 
 
 # ----------------------------------------------------------------- checks

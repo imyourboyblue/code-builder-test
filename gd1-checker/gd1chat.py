@@ -57,7 +57,9 @@ import filemanager as fm
 import webauth
 
 TOOL_RESULT_LIMIT = 12000   # characters of tool output the AI sees at once
-MAX_TOOL_ROUNDS = 12        # stop runaway tool loops
+MAX_TOOL_ROUNDS = 25        # stop runaway tool loops
+PLAN_TOOL_ROUNDS = 80       # an approved plan may take many steps
+ATTACH_TEXT_LIMIT = 15000   # characters of a dropped-in text file the AI sees straight away
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 NRO_LIMIT = 512 * 1024 * 1024   # .nro programs with built-in files can be big
 
@@ -68,6 +70,16 @@ BUSY = threading.Lock()     # one chat job at a time (scans print to stdout, whi
 BUSY_WITH = [""]
 WRITES = threading.Lock()   # one write to a device at a time, so the history list stays in order
 TRANSCRIPT_LIMIT = 400
+STOP = threading.Event()    # set by the Stop button; checked while the AI writes and between steps
+
+
+class Stopped(Exception):
+    pass
+
+
+def check_stop():
+    if STOP.is_set():
+        raise Stopped()
 
 
 class State:
@@ -79,6 +91,82 @@ class State:
         self.pending = {}       # chat changes waiting for you to confirm
         self.file_pending = {}  # Files-screen changes waiting for you to confirm
         self.transcript = []    # what the page shows, so a reload or another computer sees the same chat
+        self.plan = None        # an approved plan: {"steps": [...], "writes": [device paths]}
+        self.chat_id = None
+        self.title = ""
+        self.loaded = False
+
+    # ---- saved conversations (one JSON file per chat, on the Mac)
+
+    def chats_dir(self):
+        cfg = self.cfg()
+        d = (Path(os.path.expanduser(cfg["data_folder"])) / "_home" if getattr(self, "home", False)
+             else core.data_dir(cfg)) / "chats"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def ensure_loaded(self):
+        """The first time a chat is opened, carry on the newest saved conversation."""
+        if self.loaded:
+            return
+        self.loaded = True
+        try:
+            chats = self.list_chats()
+            if chats:
+                self.open_chat(chats[0]["id"])
+        except (ToolError, OSError, ValueError):
+            pass
+
+    def save_chat(self):
+        if not self.transcript:
+            return
+        if not self.chat_id:
+            self.chat_id = core.now_stamp()
+        if not self.title:
+            first = next((e.get("text") for e in self.transcript if e.get("type") == "user"), "") or "Chat"
+            self.title = re.sub(r"\s+", " ", first).strip()[:70]
+        f = self.chats_dir() / (self.chat_id + ".json")
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"id": self.chat_id, "title": self.title, "updated": time.strftime("%Y-%m-%d %H:%M"),
+                                   "messages": self.messages[-300:], "transcript": self.transcript}))
+        tmp.replace(f)
+
+    def list_chats(self):
+        out = []
+        for f in sorted(self.chats_dir().glob("*.json"), reverse=True):
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            out.append({"id": d.get("id") or f.stem, "title": d.get("title") or "Chat", "updated": d.get("updated"),
+                        "count": sum(1 for e in d.get("transcript", []) if e.get("type") == "user")})
+        return out
+
+    def open_chat(self, chat_id):
+        if not re.match(r"^[\w.-]{1,60}$", chat_id or ""):
+            raise ToolError("No such chat.")
+        f = self.chats_dir() / (chat_id + ".json")
+        if not f.exists():
+            raise ToolError("That chat isn't saved any more.")
+        d = json.loads(f.read_text())
+        self.chat_id, self.title = d.get("id") or chat_id, d.get("title") or ""
+        self.messages, self.transcript = d.get("messages", []), d.get("transcript", [])
+        self.pending, self.plan = {}, None
+
+    def new_chat(self):
+        self.save_chat()
+        self.messages, self.pending, self.transcript, self.plan = [], {}, [], None
+        self.chat_id, self.title = None, ""
+
+    def delete_chat(self, chat_id):
+        if not re.match(r"^[\w.-]{1,60}$", chat_id or ""):
+            raise ToolError("No such chat.")
+        f = self.chats_dir() / (chat_id + ".json")
+        if f.exists():
+            f.unlink()
+        if chat_id == self.chat_id:
+            self.messages, self.pending, self.transcript, self.plan = [], {}, [], None
+            self.chat_id, self.title = None, ""
 
     def record(self, ev):
         if ev.get("type") in ("user", "answer", "note", "error", "confirm", "tool_result"):
@@ -96,6 +184,79 @@ class State:
 
 class ToolError(Exception):
     pass
+
+
+ATTACH_LIMIT = 512 * 1024 * 1024
+IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def attach_dir(st):
+    d = st.chats_dir().parent / "chat-files"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_attachment(st, name, rfile, n):
+    """A file dropped into the chat: saved on the Mac next to the chats."""
+    name = re.sub(r"[^\w .()+-]", "_", Path(name or "file").name).strip() or "file"
+    if n > ATTACH_LIMIT:
+        raise ToolError("That file is bigger than %s." % core.human_size(ATTACH_LIMIT))
+    ref = "%s-%s" % (core.now_stamp(), name[:80])
+    f = attach_dir(st) / ref
+    left = n
+    with open(f, "wb") as out:
+        while left > 0:
+            chunk = rfile.read(min(left, 1024 * 1024))
+            if not chunk:
+                break
+            out.write(chunk)
+            left -= len(chunk)
+    return {"ref": ref, "name": name, "size": n - left}
+
+
+def attachment_name(ref):
+    """The file's own name, without the date Patchbay put in front of it."""
+    return re.sub(r"^\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d-", "", Path(ref or "").name)
+
+
+def find_attachment(st, ref_or_name):
+    v = Path(ref_or_name or "").name
+    d = attach_dir(st)
+    if v and (d / v).is_file():
+        return d / v
+    hits = sorted(d.glob("*-" + v)) if v and "*" not in v and "?" not in v else []
+    if hits:
+        return hits[-1]
+    raise ToolError("There's no attached file called %s." % ref_or_name)
+
+
+def attachment_message(st, text, refs):
+    """The user's message plus what's in the files they dropped in (pictures go to the AI as pictures)."""
+    parts, images = [text or "(see the attached files)"], []
+    for ref in refs[:10]:
+        f = find_attachment(st, ref)
+        name = attachment_name(f.name)
+        data = f.read_bytes()
+        if f.suffix.lower() in IMAGE_TYPES and len(data) <= 20 * 1024 * 1024:
+            images.append(base64.b64encode(data).decode())
+            parts.append("[Picture attached: %s]" % name)
+        elif f.suffix.lower() == ".nro" or nro.looks_like_nro(data):
+            info, probs, desc = nro.describe(data)
+            parts.append("[Attached .nro %s]\n%s\nChecks: %s" % (name, desc, "; ".join(x["text"] for x in probs) or
+                                                                 "no problems found"))
+        elif core.looks_like_text(data[:4096]):
+            body = data.decode("utf-8", "replace")
+            parts.append("[Attached file %s, %d lines]\n%s%s" % (
+                name, body.count("\n") + 1, body[:ATTACH_TEXT_LIMIT],
+                "\n... (more: read_attachment %s)" % f.name if len(body) > ATTACH_TEXT_LIMIT else ""))
+        else:
+            probs = core.check_bytes(name, data)
+            parts.append("[Attached binary file %s, %s] Checks: %s. First bytes: %s" % (
+                name, core.human_size(len(data)), "; ".join(x["text"] for x in probs) or "none", data[:48].hex(" ")))
+    msg = {"role": "user", "content": "\n\n".join(parts)}
+    if images:
+        msg["images"] = images
+    return msg
 
 
 HOME = "__home__"
@@ -406,6 +567,12 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
               "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
         return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must press Confirm. "
                 "Tell the user what it does and ask them to confirm it on the card.")
+    if st.plan and remote in st.plan.get("writes", []) and cfg.get("allow_writes") and kind != "helper":
+        # Covered by the plan the user approved (they typed the device name for it). Still backed up first.
+        emit({"type": "note", "text": "Approved in the plan: %s" % summary})
+        entry, result = device_write(cfg, {"kind": kind, "remote": remote, "source": str(source), "note": note}, emit)
+        emit({"type": "note", "text": result})
+        return "Done without a card (approved in the plan). " + result
     if not cfg.get("allow_writes"):
         extra = (" Writing is turned off right now, so even after you confirm it will be refused until "
                  "\"allow_writes\" is true in config.json.")
@@ -816,7 +983,7 @@ def clean_items(items):
     return out or None
 
 
-def start_backup(cfg, items=None):
+def start_backup(cfg, items=None, label=""):
     """Start a backup (everything, or just the picked items) in the background. Only reads the device."""
     with APP.lock:
         job = APP.backups.get(cfg["device_name"])
@@ -830,7 +997,7 @@ def start_backup(cfg, items=None):
             backup.check_folder(folder)
         except backup.BackupError as e:
             raise ToolError(str(e))
-        job = APP.backups[cfg["device_name"]] = backup.Job(cfg, clean_items(items))
+        job = APP.backups[cfg["device_name"]] = backup.Job(cfg, clean_items(items), label)
         job.start()
     return job
 
@@ -839,7 +1006,8 @@ def start_backup(cfg, items=None):
       "Back up files from the device to the user's backup folder on the Mac: give paths for just those files or "
       "folders, or nothing for a full backup. Only reads the device, so no card is needed. Runs in the background; "
       "progress shows on the Backups tab.",
-      {"paths": {"type": "array", "items": S, "description": "Files or folders on the device; leave out for everything"}})
+      {"paths": {"type": "array", "items": S, "description": "Files or folders on the device; leave out for everything"},
+       "label": dict(S, description="Optional name, e.g. 'before the Atmosphère 1.8 update'")})
 def t_backup(st, emit, a):
     cfg = st.cfg()
     paths = a.get("paths") or []
@@ -864,7 +1032,7 @@ def t_backup(st, emit, a):
         run_captured(emit, kinds)
         if len(items) != len(paths):
             raise ToolError("Couldn't look at those paths on %s." % cfg["device_name"])
-    start_backup(cfg, items or None)
+    start_backup(cfg, items or None, a.get("label") or "")
     return ("Started backing up %s to %s. It runs in the background; the Backups tab shows progress." % (
         ", ".join(i["path"] for i in items) if items else "everything on " + cfg["device_name"],
         backup.backup_root(cfg)))
@@ -898,6 +1066,47 @@ def t_save_platform(st, emit, a):
     except ValueError as e:
         raise ToolError(str(e))
     return "Saved notes for %s (%s). platform_notes will show them from now on." % (k, f)
+
+
+@tool("propose_plan",
+      "For a job with several steps (more than 3), first show the user a short numbered plan to approve once. "
+      "After approval you carry it out without stopping to ask. List any device files the plan will write in "
+      "device_writes: approving the plan (the user types the device name) covers those writes, each backed up "
+      "first. Does NOT run anything by itself.",
+      {"title": S, "steps": {"type": "array", "items": S, "description": "Plain steps, in order"},
+       "device_writes": {"type": "array", "items": S, "description": "Device paths the plan will change, if any"}},
+      ["title", "steps"])
+def t_plan(st, emit, a):
+    cfg = st.cfg()
+    steps = [str(x).strip() for x in (a.get("steps") or []) if str(x).strip()][:30]
+    if not steps:
+        raise ToolError("Give the steps of the plan.")
+    writes = [norm(x) for x in (a.get("device_writes") or []) if str(x).strip()][:50]
+    text = "\n".join("%d. %s" % (i + 1, x) for i, x in enumerate(steps))
+    if writes:
+        text += "\n\nChanges to %s (each backed up first):\n" % cfg["device_name"] + "\n".join("- " + w for w in writes)
+    return add_pending(st, emit, "plan", cfg, "plan", "", a.get("title") or "",
+                       "Plan: %s" % (a.get("title") or "what I'll do"), text, on_mac=True,
+                       extra_fields={"steps": steps, "writes": writes, "needs_typing": bool(writes)})
+
+
+@tool("read_attachment",
+      "Read more of a file the user dropped into the chat (text files page by page).",
+      {"name": dict(S, description="The attached file's name"), "start": dict(I, description="First line, from 1")},
+      ["name"])
+def t_attachment(st, emit, a):
+    f = find_attachment(st, a.get("name"))
+    data = f.read_bytes()
+    if f.suffix.lower() == ".nro" or nro.looks_like_nro(data):
+        return nro.describe(data)[2] + "\nChecks: " + "; ".join(x["text"] for x in nro.inspect(data)[1])
+    if not core.looks_like_text(data[:4096]):
+        probs = core.check_bytes(f.name, data)
+        return "%s is a binary file (%s). First bytes: %s\nChecks: %s" % (
+            f.name, core.human_size(len(data)), data[:64].hex(" "), "; ".join(x["text"] for x in probs) or "none")
+    lines = data.decode("utf-8", "replace").splitlines()
+    start = max(1, int(a.get("start") or 1))
+    end = min(len(lines), start + 399)
+    return "%s (%d lines), lines %d to %d:\n%s" % (f.name, len(lines), start, end, "\n".join(lines[start - 1:end]))
 
 
 @tool("device_firmware",
@@ -1278,6 +1487,11 @@ are the usual cause on Switch; look up the library's changelog); build again unt
 the console for a background program).
   Downloading, project edits, builds and simple setup commands on the Mac may run by themselves (the tool result \
 says "Done automatically"); then just keep going. Writing to the device always needs the user's card.
+- For a job with more than 3 steps, first use propose_plan: a short numbered plan, plus the device files it will \
+change. The user approves it once; then do every step without stopping to ask (approved device writes go through \
+without another card).
+- The user can drop files into the chat (logs, pictures, .nro files); their contents come with the message. \
+read_attachment reads more of a long one.
 - If something fails, say what failed in one line and what to try next.
 
 Scanning settings: folders %(folders)s. Writing to the device is currently %(writes)s."""
@@ -1291,18 +1505,68 @@ def ollama_url(cfg):
     return url
 
 
-def ask_model(cfg, messages, tools=None):
-    body = json.dumps({"model": cfg["ollama_model"], "stream": False, "messages": messages, "tools": tools or TOOLS,
+class ThinkFilter:
+    """Drops the model's <think>...</think> notes from the live text, even when a tag is split over two pieces."""
+
+    def __init__(self):
+        self.buf, self.inside = "", False
+
+    def feed(self, piece):
+        self.buf += piece
+        out = ""
+        while True:
+            tag = "</think>" if self.inside else "<think>"
+            i = self.buf.find(tag)
+            if i >= 0:
+                if not self.inside:
+                    out += self.buf[:i]
+                self.buf, self.inside = self.buf[i + len(tag):], not self.inside
+                continue
+            keep = next((k for k in range(min(len(tag) - 1, len(self.buf)), 0, -1) if tag.startswith(self.buf[-k:])), 0)
+            if not self.inside:
+                out += self.buf[:len(self.buf) - keep]
+            self.buf = self.buf[len(self.buf) - keep:]
+            return out
+
+
+def ask_model(cfg, messages, tools=None, emit=None, model=None):
+    """Ask the AI. Its words are passed to emit as they arrive ("delta" events), so the page shows them live."""
+    model = model or cfg["ollama_model"]
+    body = json.dumps({"model": model, "stream": True, "messages": messages, "tools": tools or TOOLS,
                        "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=900) as r:
-            return json.loads(r.read())["message"]
+            content, calls, think = "", [], ThinkFilter()
+            for line in r:
+                check_stop()
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise ToolError("Ollama said: %s" % chunk["error"])
+                m = chunk.get("message") or {}
+                piece = m.get("content") or ""
+                if piece:
+                    content += piece
+                    shown = think.feed(piece)
+                    if shown and emit:
+                        emit({"type": "delta", "text": shown})
+                calls.extend(m.get("tool_calls") or [])
+                if chunk.get("done"):
+                    break
+            return {"content": content, "tool_calls": calls}
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         if "not found" in detail:
-            raise ToolError("Ollama doesn't have the model %s yet. In Terminal run: ollama pull %s"
-                            % (cfg["ollama_model"], cfg["ollama_model"]))
+            raise ToolError("Ollama doesn't have the model %s yet. In Terminal run: ollama pull %s" % (model, model))
+        if any(m.get("images") for m in messages):
+            # This model can't look at pictures: try again without them.
+            plain = [dict({k: v for k, v in m.items() if k != "images"},
+                          content=(m.get("content") or "") + "\n[A picture was attached, but this AI model can't see "
+                                                             "pictures. A model with vision, e.g. qwen2.5vl, can.]")
+                     if m.get("images") else m for m in messages]
+            return ask_model(cfg, plain, tools, emit, model)
         raise ToolError("Ollama said: %s" % detail)
     except OSError as e:
         raise ToolError("Couldn't reach Ollama (%s). Is the Ollama app running?" % e)
@@ -1312,22 +1576,29 @@ def clean_answer(text):
     return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
 
 
-def chat_turn(st, user_text, emit):
+def chat_turn(st, user_text, emit, user_msg=None):
     cfg = st.cfg()
     if getattr(st, "home", False):
-        return chat_loop(st, user_text, emit, cfg, home_system(), HOME_TOOLS, HOME_HANDLERS)
+        return chat_loop(st, user_text, emit, cfg, home_system(), HOME_TOOLS, HOME_HANDLERS, user_msg)
     system = SYSTEM % {"device": cfg["device_name"], "host": cfg["host"], "about": devices.about_text(cfg),
                        "folders": ", ".join(cfg["remote_folders"]),
                        "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"}
-    return chat_loop(st, user_text, emit, cfg, system, TOOLS, HANDLERS)
+    return chat_loop(st, user_text, emit, cfg, system, TOOLS, HANDLERS, user_msg)
 
 
-def chat_loop(st, user_text, emit, cfg, system, tools, handlers):
-    if user_text:
+def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
+    if user_msg:
+        st.messages.append(user_msg)
+    elif user_text:
         st.messages.append({"role": "user", "content": user_text})
-    for _ in range(MAX_TOOL_ROUNDS):
+    if st.plan:
+        system += ("\n\nThe user approved this plan. Carry it out now, step by step, without stopping to ask. "
+                   "Say in one short line what each step does.\n" + "\n".join(
+                       "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
+    for _ in range(PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS):
+        check_stop()
         emit({"type": "status", "text": "Thinking..."})
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, tools)
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, tools, emit)
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
                            if calls else {"role": "assistant", "content": msg.get("content") or ""})
@@ -1338,6 +1609,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers):
         if said:
             emit({"type": "note", "text": said})
         for c in calls:
+            check_stop()
             fn = c.get("function", {})
             name, args = fn.get("name"), fn.get("arguments") or {}
             if isinstance(args, str):
@@ -1345,21 +1617,75 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers):
                     args = json.loads(args)
                 except ValueError:
                     args = {}
-            emit({"type": "tool", "name": name, "args": args})
+            emit({"type": "tool", "name": name, "args": args, "text": step_doing(name, args)})
             try:
                 if name not in handlers:
                     raise ToolError("There's no tool called %s." % name)
                 result = handlers[name](st, emit, args)
             except ToolError as e:
                 result = "Error: %s" % e
+            except Stopped:
+                raise
             except Exception as e:  # keep the chat alive and let the AI explain
                 traceback.print_exc()
                 result = "Error: %s: %s" % (type(e).__name__, e)
             result = clip(result or "(no output)")
-            emit({"type": "tool_result", "name": name, "text": result})
+            emit({"type": "tool_result", "name": name, "text": result, "summary": step_summary(name, args, result)})
             st.messages.append({"role": "tool", "content": result, "tool_name": name})
     emit({"type": "answer", "text": "I stopped after %d steps so I don't loop forever. Tell me how to continue."
-          % MAX_TOOL_ROUNDS})
+          % (PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS)})
+
+
+# What each step is doing / did, in plain words for the page. {x} is filled from the step's arguments.
+STEP_WORDS = {
+    "test_connection": "Checking the connection", "list_folder": "Looking in {path}", "read_file": "Reading {path}",
+    "scan_device": "Scanning for damage", "last_report": "Reading the last scan report",
+    "find_good_copies": "Looking for good copies of {path}", "search_snapshot": "Searching saved copies for {text}",
+    "change_history": "Reading the change history", "set_scan_folders": "Saving which folders to scan",
+    "propose_restore": "Preparing to put back {path}", "propose_edit": "Preparing a change to {path}",
+    "propose_undo": "Preparing to undo a change", "propose_nro_info_change": "Preparing a name/version change",
+    "propose_nro_icon": "Preparing a new icon", "set_project": "Saving project {name}", "list_projects": "Listing projects",
+    "project_files": "Listing the files of {project}", "project_read": "Reading {path} in {project}",
+    "project_search": "Searching {project} for {text}", "propose_project_edit": "Changing {path} in {project}",
+    "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
+    "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
+    "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
+    "identify_firmware": "Working out the firmware", "save_firmware_name": "Saving the firmware name",
+    "web_search": "Searching the web for {query}", "device_firmware": "Reading the firmware versions",
+    "latest_release": "Checking the newest release of {repo}", "check_build_tools": "Checking the build tools",
+    "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
+    "read_web_page": "Reading {url}", "setup_firmware_helper": "Preparing the helper app",
+    "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
+    "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
+    "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
+    "propose_plan": "Writing a plan", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+}
+
+
+def step_doing(name, args):
+    words = STEP_WORDS.get(name) or ("Using " + (name or "a tool").replace("_", " "))
+    try:
+        return words.format(**{k: str(v)[:60] for k, v in (args or {}).items()}) if "{" in words else words
+    except (KeyError, IndexError, ValueError):
+        return re.sub(r"\s*\{\w+\}", "", words)
+
+
+def step_summary(name, args, result):
+    """One plain line for a finished step: what it did, and the first line of what it found."""
+    first = next((l.strip() for l in (result or "").splitlines() if l.strip()), "")
+    doing = step_doing(name, args)
+    w, _, rest = doing.partition(" ")
+    if w.endswith("ing"):
+        stem = w[:-3].lower()
+        w = PAST.get(stem, stem.capitalize() + "ed")
+    doing = (w + " " + rest).strip()
+    return "%s: %s" % (doing, first[:140]) if first else doing
+
+
+PAST = {"check": "Checked", "look": "Looked", "read": "Read", "scann": "Scanned", "search": "Searched",
+        "sav": "Saved", "prepar": "Prepared", "list": "Listed", "chang": "Changed", "build": "Built",
+        "add": "Added", "work": "Worked", "gett": "Got", "runn": "Ran", "start": "Started", "writ": "Wrote",
+        "open": "Opened", "us": "Used"}
 
 
 def do_confirm(st, pid, typed, emit):
@@ -1369,7 +1695,7 @@ def do_confirm(st, pid, typed, emit):
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
     if getattr(st, "home", False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
-    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings"):
+    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan"):
         if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
             raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
         del st.pending[pid]
@@ -1377,16 +1703,7 @@ def do_confirm(st, pid, typed, emit):
     if typed.strip() != cfg["device_name"]:
         raise ToolError("You need to type %s exactly to confirm." % cfg["device_name"])
     del st.pending[pid]
-    with WRITES:
-        entry, out = run_captured(emit, core.put_back, cfg, p["remote"], Path(p["source"]), p["kind"], p["note"],
-                                  ask=lambda c, what: print(what))
-    if entry and entry.get("verified"):
-        result = "Done: change #%d. %s on %s was replaced, and the old file was backed up." % (
-            entry["id"], p["remote"], cfg["device_name"])
-    elif entry:
-        result = "Uploaded as change #%d, but the size on the device doesn't match. Check the file." % entry["id"]
-    else:
-        result = "The change was NOT made. " + (out.strip().splitlines() or ["Unknown error."])[-1]
+    entry, result = device_write(cfg, p, emit)
     emit({"type": "answer", "text": result})
     st.messages.append({"role": "user", "content": "[I confirmed the %s of %s on the card. Result: %s]"
                                                    % (p["kind"], p["remote"], result)})
@@ -1417,7 +1734,9 @@ def wait_for_helper(st, cfg, emit):
                                     "it again afterwards.)"})
     start = time.time()
     while time.time() - start < HELPER_WAIT:
-        time.sleep(4)
+        for _ in range(8):
+            time.sleep(0.5)
+            check_stop()
         now = read_helper(cfg)
         if now and now != before:
             kv = dict(re.findall(r"(?m)^\s*([a-z_]+)\s*=\s*(.*?)\s*$", now.decode("utf-8", "replace")))
@@ -1435,7 +1754,45 @@ def wait_for_helper(st, cfg, emit):
                                     "me \"done\"."})
 
 
+def device_write(cfg, p, emit):
+    """Put a file on the device (the current one is backed up first). Returns (history entry or None, result text)."""
+    with WRITES:
+        entry, out = run_captured(emit, core.put_back, cfg, p["remote"], Path(p["source"]), p["kind"], p["note"],
+                                  ask=lambda c, what: print(what))
+    if entry and entry.get("verified"):
+        result = "Done: change #%d. %s on %s was written, and any old file was backed up first." % (
+            entry["id"], p["remote"], cfg["device_name"])
+    elif entry:
+        result = "Uploaded as change #%d, but the size on the device doesn't match. Check the file." % entry["id"]
+    else:
+        result = "The change was NOT made. " + (out.strip().splitlines() or ["Unknown error."])[-1]
+    return entry, result
+
+
 def confirm_on_mac(st, cfg, p, emit, typed=""):
+    if p["kind"] == "plan":
+        if p["writes"]:
+            # Back up the folders the plan will change, before anything is touched.
+            folders = sorted({str(PurePosixPath(w).parent) for w in p["writes"]})
+            emit({"type": "status", "text": "Backing up %s first..." % ", ".join(folders)})
+            job = backup.Job(cfg, [{"path": f, "kind": "dir"} for f in folders], "Before: " + (p.get("note") or "plan"))
+            APP.backups[cfg["device_name"]] = job
+            job._run_safe()
+            done = job.status()
+            if done["phase"] != "done":
+                emit({"type": "answer", "text": "I couldn't back up %s first, so I haven't started the plan: %s"
+                                                % (", ".join(folders), done["message"])})
+                st.messages.append({"role": "user", "content": "[The safety backup before the plan failed: %s]"
+                                                               % done["message"]})
+                return
+            emit({"type": "note", "text": "Backed up %s first (Backups tab)." % ", ".join(folders)})
+        st.plan = {"steps": p["steps"], "writes": p["writes"]}
+        emit({"type": "answer", "text": "Plan approved. Working through it now; press Stop any time."})
+        st.messages.append({"role": "user", "content": "[I approved the plan. Carry it out now without asking me again."
+                                                       "%s]" % (" These device changes are approved too: " +
+                                                                ", ".join(p["writes"]) if p["writes"] else "")})
+        chat_turn(st, None, emit)
+        return
     if p["kind"] == "settings":
         try:
             folder = devices.apply_changes(cfg, p["planned"])
@@ -1475,7 +1832,7 @@ def run_mac_step(st, cfg, p, emit):
     if p["kind"] == "command":
         emit({"type": "status", "text": "Running %s..." % p["command"][:60]})
         try:
-            code, out = projects.run_shell(projects.folder_of(pr), p["command"], emit)
+            code, out = projects.run_shell(projects.folder_of(pr), p["command"], emit, stop=STOP)
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't run it: %s" % e)
         result = "The command %s %s (exit code %d)." % (p["command"][:80], "worked" if code == 0 else "failed", code)
@@ -1490,7 +1847,7 @@ def run_mac_step(st, cfg, p, emit):
         return result, "Result: " + result
     emit({"type": "status", "text": "Building %s..." % pr["name"]})
     try:
-        code, out, built = projects.run_build(pr, emit)
+        code, out, built = projects.run_build(pr, emit, STOP)
     except (OSError, projects.ProjectError) as e:
         raise ToolError("Couldn't start the build: %s" % e)
     if code == 0:
@@ -1528,6 +1885,7 @@ class App:
         self.backups = {}       # device name -> the backup running (or last run) for it
         self.home = HomeState(config_path)
         self.chat_job = None
+        self.transfers = {}     # transfer id -> fm.Transfer (copies shown in the Files transfer queue)
         self.lock = threading.Lock()
         self.computer = computer_name()
 
@@ -1687,8 +2045,42 @@ class Handler(BaseHTTPRequestHandler):
             st = APP.device(q.get("device"))
             job = APP.chat_job
             running = bool(job and not job.done and job.device == q.get("device"))
+            if not running:
+                st.ensure_loaded()
             self.json({"events": st.transcript, "pending": list(st.pending), "running": running,
-                       "job_at": len(job.events) if running else 0})
+                       "job_at": len(job.events) if running else 0, "chat_id": st.chat_id, "title": st.title})
+        elif path == "/api/transfers":
+            dev = q.get("device")
+            for t in list(APP.transfers.values()):
+                fin = t.status()["finished"]
+                if fin and time.time() - fin > 900:
+                    APP.transfers.pop(t.id, None)   # finished more than 15 minutes ago
+            self.json({"transfers": [t.status() for t in list(APP.transfers.values()) if not dev or t.device == dev]})
+        elif path == "/api/files/preview":
+            cfg = APP.device(q.get("device")).cfg()
+            try:
+                self.json(fm.preview(cfg, q.get("side"), q.get("path")))
+            except (fm.FileError, ftplib.Error, OSError, EOFError) as e:
+                self.json({"error": str(e)}, 400)
+        elif path == "/api/bookmarks":
+            self.json(fm.bookmarks(APP.device(q.get("device")).cfg()))
+        elif path == "/api/chats":
+            st = APP.device(q.get("device"))
+            st.ensure_loaded()
+            self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
+        elif path == "/api/models":
+            cfg = APP.home.cfg()
+            try:
+                req = urllib.request.Request(ollama_url(cfg) + "/api/tags")
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    tags = json.loads(r.read()).get("models", [])
+                models = [{"name": m.get("name"), "size": core.human_size(m.get("size") or 0)} for m in tags]
+                err = None
+            except (OSError, ValueError, ToolError) as e:
+                models, err = [], "Couldn't ask Ollama for its models (%s). Is the Ollama app running?" % e
+            if cfg["ollama_model"] not in [m["name"] for m in models]:
+                models.insert(0, {"name": cfg["ollama_model"], "size": ""})
+            self.json({"current": cfg["ollama_model"], "models": models, "error": err})
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()
             f = APP.registry.portrait_file(cfg)
@@ -1700,8 +2092,15 @@ class Handler(BaseHTTPRequestHandler):
             cfg = APP.device(q.get("device")).cfg()
             job = APP.backups.get(cfg["device_name"])
             self.json({"job": job.status() if job else None, "backups": backup.list_backups(cfg)[:50],
+                       "settings": {"keep": int(cfg.get("backup_keep") or 0), "mirror": cfg.get("backup_mirror") or "",
+                                    "compress": bool(cfg.get("backup_compress"))},
                        "folder": str(backup.backup_root(cfg).parent), "device_folder": str(backup.backup_root(cfg)),
                        "unfinished": bool(backup.unfinished(cfg)), "computer": APP.computer})
+        elif path == "/api/backup/browse":
+            try:
+                self.json(backup.browse(APP.device(q.get("device")).cfg(), q.get("name"), q.get("folder")))
+            except backup.BackupError as e:
+                self.json({"error": str(e)}, 400)
         elif path == "/api/files/list":
             if q.get("side") == "mac":
                 self.json(fm.list_mac(q.get("path") or str(fm.mac_home()), q.get("hidden") == "1"))
@@ -1737,6 +2136,16 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = APP.device(q.get("device")).cfg()
                 self.json({"ref": fm.stage_upload(cfg, q.get("name"), self.rfile, n)})
             except (ToolError, fm.FileError, OSError) as e:
+                self.json({"error": str(e)}, 400)
+            return
+        if url.path == "/api/chat/attach":
+            # A file dropped into the chat: the body is the file itself.
+            if not self.signed_in():
+                self.json({"error": "Sign in first."}, 401)
+                return
+            try:
+                self.json(save_attachment(APP.device(q.get("device")), q.get("name"), self.rfile, n))
+            except (ToolError, OSError) as e:
                 self.json({"error": str(e)}, 400)
             return
         if n > 8 * 1024 * 1024:
@@ -1796,8 +2205,37 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"ok": True})
         elif path == "/api/reset":
             st = APP.device(data.get("device"))
-            st.messages, st.pending, st.transcript = [], {}, []
+            if self.busy_for(data.get("device")):
+                raise ToolError("Wait for the current request to finish (or press Stop) first.")
+            st.ensure_loaded()
+            st.new_chat()
             self.json({"ok": True})
+        elif path == "/api/chats/open":
+            st = APP.device(data.get("device"))
+            if self.busy_for(data.get("device")):
+                raise ToolError("Wait for the current request to finish (or press Stop) first.")
+            st.ensure_loaded()
+            st.save_chat()
+            st.open_chat(data.get("id"))
+            self.json({"ok": True})
+        elif path == "/api/chats/delete":
+            st = APP.device(data.get("device"))
+            if self.busy_for(data.get("device")) and data.get("id") == st.chat_id:
+                raise ToolError("Wait for the current request to finish first.")
+            st.delete_chat(data.get("id"))
+            self.json({"ok": True})
+        elif path == "/api/stop":
+            job = APP.chat_job
+            if job and not job.done:
+                STOP.set()
+            self.json({"ok": True})
+        elif path == "/api/model":
+            name = (data.get("model") or "").strip()
+            if not re.match(r"^[\w.:/-]{1,100}$", name):
+                raise ToolError("That isn't a model name.")
+            planned = devices.plan_changes(APP.registry, APP.config_path, {"ollama_model": name})
+            devices.apply_changes(APP.home.cfg(), planned)
+            self.json({"ok": True, "model": name})
         elif path in ("/api/chat", "/api/confirm", "/api/cancel"):
             self.chat(path, data)
         elif path == "/api/follow":
@@ -1817,8 +2255,36 @@ class Handler(BaseHTTPRequestHandler):
                        "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
         elif path == "/api/backup/start":
             cfg = APP.device(data.get("device")).cfg()
-            start_backup(cfg, data.get("items"))
+            start_backup(cfg, data.get("items"), data.get("label"))
             self.json({"ok": True})
+        elif path == "/api/backup/settings":
+            st = APP.device(data.get("device"))
+            changes = {k: data[k] for k in ("backup_keep", "backup_mirror", "backup_compress") if k in data}
+            planned = devices.plan_changes(APP.registry, st.config_path, changes)
+            if planned:
+                devices.apply_changes(st.cfg(), planned)
+            self.json({"ok": True})
+        elif path == "/api/backup/label":
+            backup.set_label(APP.device(data.get("device")).cfg(), data.get("name"), data.get("label"))
+            self.json({"ok": True})
+        elif path == "/api/backup/verify":
+            cfg = APP.device(data.get("device")).cfg()
+            with APP.lock:
+                job = APP.backups.get(cfg["device_name"])
+                if job and job.status()["running"]:
+                    raise ToolError("Wait for the current backup or check to finish.")
+                job = APP.backups[cfg["device_name"]] = backup.VerifyJob(cfg, data.get("name"))
+                job.start()
+            self.json({"ok": True})
+        elif path == "/api/backup/restore_plan":
+            st = APP.device(data.get("device"))
+            cfg = st.cfg()
+            mapping, _ = backup.extract(cfg, data.get("name"), data.get("paths") or ["/"])
+            title, lines, steps = fm.restore_plan(cfg, mapping, "From the backup " + (data.get("name") or ""))
+            pid = uuid.uuid4().hex[:10]
+            st.file_pending = {pid: {"title": title, "steps": steps}}
+            self.json({"id": pid, "title": title, "lines": lines[:200], "more": max(0, len(lines) - 200),
+                       "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
         elif path == "/api/backup/stop":
             job = APP.backups.get(APP.device(data.get("device")).cfg()["device_name"])
             if job:
@@ -1852,16 +2318,60 @@ class Handler(BaseHTTPRequestHandler):
             self.files_apply(data)
         elif path == "/api/files/copy_to_mac":
             st = APP.device(data.get("device"))
+            cfg, items, folder = st.cfg(), data.get("items") or [], data.get("mac_folder") or "~"
+            names = ", ".join(PurePosixPath(i.get("path") or "").name for i in items[:3]) + (
+                " and %d more" % (len(items) - 3) if len(items) > 3 else "")
+            tr = fm.Transfer(cfg["device_name"], "Copy %s to %s" % (names, folder), "download")
+
+            def go():
+                n = fm.copy_to_mac(cfg, items, folder, tr.emit, tr)
+                return "Copied %d file%s to %s on %s." % (n, "" if n == 1 else "s", folder, APP.computer)
+            self.json({"id": run_transfer(tr, go)})
+        elif path == "/api/transfers/control":
+            tr = APP.transfers.get(data.get("id") or "")
+            if not tr:
+                raise ToolError("That transfer is gone.")
+            act = data.get("action")
+            if act == "pause":
+                tr.paused.set()
+            elif act == "resume":
+                tr.paused.clear()
+            elif act == "cancel":
+                tr.cancelled.set()
+                tr.paused.clear()
+            elif act == "clear":
+                if tr.status()["state"] in ("done", "failed", "cancelled"):
+                    APP.transfers.pop(tr.id, None)
+            self.json({"ok": True})
+        elif path == "/api/files/compare":
+            a, b = data.get("a") or {}, data.get("b") or {}
+            cfg = APP.device(data.get("device")).cfg()
+            self.json(fm.compare(cfg, a, cfg, b))
+        elif path == "/api/files/search":
+            cfg = APP.device(data.get("device")).cfg()
             emit = self.start_stream()
             try:
-                n = fm.copy_to_mac(st.cfg(), data.get("items") or [], data.get("mac_folder") or "~", emit)
-                emit({"type": "answer", "text": "Copied %d file%s to %s on %s." % (
-                    n, "" if n == 1 else "s", data.get("mac_folder"), APP.computer)})
-            except (fm.FileError, ToolError) as e:
+                fm.search(cfg, data.get("folder") or "/", data.get("q"), emit)
+            except fm.FileError as e:
                 emit({"type": "error", "text": str(e)})
             except (ftplib.Error, OSError, EOFError) as e:
-                emit({"type": "error", "text": "Copy stopped: %s" % e})
+                emit({"type": "error", "text": "The search stopped: %s" % e})
             emit({"type": "done"})
+        elif path == "/api/files/mac_save":
+            cfg = APP.device(data.get("device")).cfg()
+            bk = fm.mac_save(cfg, data.get("path"), data.get("text") or "")
+            self.json({"ok": True, "backup": str(bk)})
+        elif path == "/api/bookmarks":
+            cfg = APP.device(data.get("device")).cfg()
+            self.json(fm.save_bookmarks(cfg, data.get("marks") or {}))
+        elif path == "/api/chat/attach_path":
+            # "Ask AI about this" on a Mac file: copy it in as a chat attachment.
+            st = APP.device(data.get("device"))
+            src = Path(os.path.expanduser(data.get("path") or "")).resolve()
+            if not src.is_file():
+                raise ToolError("%s isn't a file on the Mac." % src)
+            with open(src, "rb") as f:
+                self.json(save_attachment(st, src.name, f, src.stat().st_size))
         else:
             self.send_error(404)
 
@@ -1897,6 +2407,10 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=look, daemon=True).start()
         self.json({"ok": True, "settings_file": str(f.relative_to(core.HERE))})
 
+    def busy_for(self, device):
+        job = APP.chat_job
+        return bool(job and not job.done and job.device == device)
+
     def chat(self, path, data):
         """Chat work runs in the background. This request only follows along, so if the page loses its
         connection (Wi-Fi blip, laptop asleep, a very slow AI answer) the work carries on and the page
@@ -1911,27 +2425,42 @@ class Handler(BaseHTTPRequestHandler):
         BUSY_WITH[0] = "the home chat" if getattr(st, "home", False) else st.cfg()["device_name"]
         job = ChatJob(data.get("device"))
         APP.chat_job = job
+        STOP.clear()
 
         def work():
             def emit(ev):
                 st.record(ev)
                 job.emit(ev)
             try:
+                st.ensure_loaded()
                 if path == "/api/chat":
                     text = (data.get("text") or "").strip()
-                    if text:
-                        st.record({"type": "user", "text": text})
-                    chat_turn(st, text, emit)
+                    refs = [str(r) for r in (data.get("attachments") or [])][:10]
+                    st.plan = None    # a new message ends any plan approved earlier
+                    if text or refs:
+                        st.record({"type": "user", "text": text, "files": [attachment_name(r) for r in refs]})
+                    if refs:
+                        chat_turn(st, text, emit, attachment_message(st, text, refs))
+                    else:
+                        chat_turn(st, text, emit)
                 elif path == "/api/confirm":
                     do_confirm(st, data.get("id", ""), data.get("typed", ""), emit)
                 else:
                     do_cancel(st, data.get("id", ""), emit)
+            except Stopped:
+                st.plan = None
+                emit({"type": "answer", "text": "Stopped."})
+                st.messages.append({"role": "user", "content": "[I pressed Stop. Don't carry on with that unless I ask.]"})
             except ToolError as e:
                 emit({"type": "error", "text": str(e)})
             except Exception as e:
                 traceback.print_exc()
                 emit({"type": "error", "text": "Something went wrong: %s" % e})
             finally:
+                try:
+                    st.save_chat()
+                except (OSError, ToolError) as e:
+                    print("Couldn't save the chat: %s" % e)
                 BUSY.release()
                 job.finish()
         threading.Thread(target=work, daemon=True).start()
@@ -1960,28 +2489,46 @@ class Handler(BaseHTTPRequestHandler):
     def files_apply(self, data):
         st = APP.device(data.get("device"))
         cfg = st.cfg()
-        emit = self.start_stream()
         p = st.file_pending.get(data.get("id") or "")
-        try:
-            if not p:
-                raise fm.FileError("That change is no longer waiting. Try it again.")
-            if (data.get("typed") or "").strip() != cfg["device_name"]:
-                raise fm.FileError("You need to type %s exactly to confirm." % cfg["device_name"])
-            st.file_pending.pop(data.get("id"), None)
+        if not p:
+            raise fm.FileError("That change is no longer waiting. Try it again.")
+        if (data.get("typed") or "").strip() != cfg["device_name"]:
+            raise fm.FileError("You need to type %s exactly to confirm." % cfg["device_name"])
+        st.file_pending.pop(data.get("id"), None)
+        tr = fm.Transfer(cfg["device_name"], p["title"], "upload")
+
+        def go():
             with WRITES:
-                done = fm.apply(cfg, p["steps"], "from the Files screen", emit)
+                done = fm.apply(cfg, p["steps"], "from the Files screen", tr.emit, tr)
             first, last = (done[0]["id"], done[-1]["id"]) if done else (0, 0)
             result = "Done: %s. %s" % (p["title"], "Logged as change #%d." % first if first == last and first else
                                        "Logged as changes #%d to #%d." % (first, last) if done else "")
-            emit({"type": "answer", "text": result})
             st.messages.append({"role": "user", "content": "[On the Files screen I confirmed: %s. Result: %s]"
                                                            % (p["title"], result)})
-        except fm.FileError as e:
-            emit({"type": "error", "text": str(e)})
+            return result
+        self.json({"id": run_transfer(tr, go)})
+
+
+def run_transfer(tr, work):
+    """Run a copy in the background so the transfer queue can show it, pause it or cancel it."""
+    APP.transfers[tr.id] = tr
+    tr.set(state="running")
+
+    def go():
+        try:
+            tr.set(state="done", message=work(), finished=time.time())
+        except fm.Cancelled:
+            tr.set(state="cancelled", message="Cancelled. Anything already copied stays where it is.",
+                   finished=time.time())
+        except (fm.FileError, ToolError) as e:
+            tr.set(state="cancelled" if tr.cancelled.is_set() else "failed", message=str(e), finished=time.time())
+        except (ftplib.Error, OSError, EOFError) as e:
+            tr.set(state="failed", message="It stopped: %s" % e, finished=time.time())
         except Exception as e:
             traceback.print_exc()
-            emit({"type": "error", "text": "Something went wrong: %s" % e})
-        emit({"type": "done"})
+            tr.set(state="failed", message="Something went wrong: %s" % e, finished=time.time())
+    threading.Thread(target=go, daemon=True).start()
+    return tr.id
 
 
 class ChatJob:

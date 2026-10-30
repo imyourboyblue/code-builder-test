@@ -64,6 +64,7 @@ pre{position:relative}pre>.cp{top:4px;bottom:auto;right:4px}pre:hover>.cp{opacit
 .step summary{cursor:pointer}.step pre{max-height:300px}
 pre{background:var(--code);padding:8px 10px;border-radius:8px;overflow:auto;font:12.5px/1.45 ui-monospace,Menlo,monospace;
 white-space:pre;margin:6px 0}
+.msg a{color:inherit;text-decoration:underline;word-break:break-all}.ai a{color:var(--me)}
 code{background:var(--code);padding:1px 4px;border-radius:4px;font:13px ui-monospace,Menlo,monospace}
 .card{align-self:stretch;border:2px solid var(--warn);border-radius:12px;padding:12px 14px;background:var(--card)}
 .card h3{margin:0 0 6px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
@@ -75,6 +76,27 @@ border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 #f{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);max-width:900px;width:100%;margin:0 auto}
 textarea{flex:1;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);
 color:var(--ink);resize:none;min-height:46px;max-height:200px}
+
+.chatbar{display:flex;gap:8px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;
+  max-width:900px;width:100%;margin:0 auto}
+.chatbar .ttl{flex:1;min-width:0;color:var(--mute);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chatbar select{font:13px inherit;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:220px}
+.chatbar button{font-size:13px;padding:3px 10px}
+#chatlist{position:absolute;z-index:15;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 6px 24px rgba(0,0,0,.18);width:min(380px,92vw);max-height:60vh;overflow:auto;padding:6px;display:none}
+#chatlist .it{display:flex;gap:6px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:14px}
+#chatlist .it:hover{background:var(--sel)}#chatlist .it.on{background:var(--sel);font-weight:600}
+#chatlist .it .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#chatlist .it small{color:var(--mute);font-weight:400}#chatlist .it button{font-size:12px;padding:1px 7px}
+.quick{display:flex;gap:6px;flex-wrap:wrap;padding:6px 16px 0;max-width:900px;width:100%;margin:0 auto}
+.quick button{font-size:13px;padding:3px 10px;border-radius:14px}
+#atts{display:flex;gap:6px;flex-wrap:wrap;padding:6px 16px 0;max-width:900px;width:100%;margin:0 auto}
+#atts:empty{display:none}
+.chip{font-size:12.5px;padding:2px 4px 2px 10px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.chip button{border:0;background:none;padding:0 6px;font-size:12.5px}
+#chat.dropping #log{outline:3px dashed var(--drop);outline-offset:-6px}
+.msg .files{font-size:12.5px;opacity:.85;margin-top:4px}
+.stream{white-space:pre-wrap}
 
 /* files */
 #files{flex-direction:column;padding:10px 16px 0;gap:10px}
@@ -107,6 +129,22 @@ box-shadow:0 6px 24px rgba(0,0,0,.18);display:none;min-width:170px}
 #ctx button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 10px;border-radius:6px;font-size:14px}
 #ctx button:hover{background:var(--sel)}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
 .list .hint{padding:16px;color:var(--mute);font-size:13px}
+.marks{display:flex;gap:4px;flex-wrap:wrap}.marks:empty{display:none}
+.mark{font-size:12px;padding:1px 2px 1px 8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);cursor:pointer}
+.mark button{border:0;background:none;padding:0 5px;font-size:12px;color:var(--mute)}
+.selcount{font-weight:400;color:var(--me);font-size:12.5px}
+#queue{display:flex;flex-direction:column;gap:6px}#queue:empty{display:none}
+.tq{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 10px;font-size:13px}
+.tq .h{display:flex;gap:8px;align-items:center}.tq .h b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tq .h button{font-size:12px;padding:1px 8px}.tq .bar{margin:5px 0 3px;height:7px}
+.tq .sub{color:var(--mute);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tq.done .bar div{background:var(--ok)}.tq.failed .bar div,.tq.cancelled .bar div{background:var(--bad)}
+.modal .box.wide{max-width:900px}
+.pv pre{max-height:60vh}.pv img{max-width:100%;max-height:60vh;display:block;margin:8px auto;border-radius:8px}
+.pv textarea{width:100%;min-height:50vh;font:12.5px/1.45 ui-monospace,Menlo,monospace;white-space:pre;overflow:auto}
+.hits{max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+.hits div{padding:5px 10px;border-bottom:1px solid var(--line);font:12.5px ui-monospace,Menlo,monospace;cursor:pointer;display:flex;gap:8px}
+.hits div:hover{background:var(--sel)}.hits div span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 #activity{font:12.5px/1.45 ui-monospace,Menlo,monospace;color:var(--mute);max-height:110px;overflow-y:auto;
 padding:6px 2px 10px;white-space:pre-wrap}
 #activity .bad{color:var(--bad)}#activity .good{color:var(--ok)}
@@ -161,10 +199,18 @@ border:2px solid var(--line)}
 <aside id="homechat"><div class="hc-head">Ask Patchbay<small>About all your devices. Click a picture to chat about one device.</small></div></aside>
 </div></main>
 
-<main class="view" id="chat">
+<main class="view" id="chat" style="position:relative">
+  <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
+    <span class="ttl" id="chat-title"></span>
+    <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select></label></div>
+  <div id="chatlist"></div>
   <div id="log"></div>
-  <form id="f"><textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
+  <div class="quick" id="quick"></div>
+  <div id="atts"></div>
+  <form id="f"><button type="button" id="attach" title="Add files to your message (or drop them here)">📎</button>
+  <textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
   <button class="primary" id="send">Send</button></form>
+  <input type="file" id="chatfile" multiple hidden>
 </main>
 
 <main class="view" id="files">
@@ -173,6 +219,7 @@ border:2px solid var(--line)}
     <section class="pane" id="pane-mac"></section>
     <section class="pane" id="pane-dev"></section>
   </div>
+  <div id="queue"></div>
   <div id="activity"></div>
 </main>
 
@@ -181,10 +228,16 @@ border:2px solid var(--line)}
     <h2 id="bk-title">Back up everything</h2>
     <div class="note">Copies every file on the device to a folder you choose. This only reads the device.</div>
     <div class="row">Saved to: <code id="bk-folder">…</code><button id="bk-change">Change…</button></div>
+    <div class="row"><input id="bk-label" placeholder="Label (optional), e.g. before the 1.8 update" style="flex:1;min-width:220px"></div>
     <div class="row"><button class="primary" id="bk-start">Back up now</button><button id="bk-pick">Back up only some files or folders…</button><button id="bk-stop" hidden>Stop</button></div>
     <div id="bk-progress" hidden><div class="bar"><div id="bk-bar"></div></div><div id="bk-line"></div><div id="bk-cur"></div></div>
     <div id="bk-msg" class="msgline" style="margin-top:8px"></div>
   </section>
+  <section class="panel" style="margin-top:14px"><h2>Options</h2>
+    <div class="row">Keep the newest <input id="bk-keep" type="number" min="0" style="width:70px"> backups <span class="note">(0 = keep all; older ones are deleted after each backup)</span></div>
+    <div class="row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bk-zip"> Compress (zip) each finished backup to save space</label></div>
+    <div class="row">Second copy to: <code id="bk-mirror">none</code><button id="bk-mirror-pick">Choose…</button><button id="bk-mirror-off">Turn off</button></div>
+    <div class="row"><button id="bk-save">Save options</button><span class="note" id="bk-optmsg"></span></div></section>
   <h3>Past backups</h3><div id="bk-list"></div>
   <p class="note">Files that didn't change since the last backup aren't copied again, so each new backup only takes
   the space of what changed, yet every backup folder still holds a full copy. To put files back on the device, click
@@ -238,7 +291,7 @@ function route(){
   const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
   $(view).classList.add('on');$('tabs').hidden=false;$('reset').hidden=view!=='chat';
   for(const v of ['chat','files','backups']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
-  if(changed){loadInfo();loadChat()}
+  if(changed){loadInfo();loadChat();bkOptsLoaded=false}
   if(view==='files')openFiles(changed);
   else if(view==='backups'){loadBackups();bkTimer=setInterval(loadBackups,1500)}
   else $('t').focus();
@@ -315,8 +368,12 @@ $('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});locatio
 
 /* ---------- chat */
 const log=$('log'),t=$('t'),send=$('send');
-function md(s){return esc(s).replace(/```[\w-]*\n?([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>')
-  .replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')}
+function md(s){const keep=[];return esc(s).replace(/```[\w-]*\n?([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>')
+  .replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')
+  .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)"<]+)\)/g,(m,l,u)=>{keep.push(link(u,l));return '\u0000'+(keep.length-1)+'\u0000'})
+  .replace(/\bhttps?:\/\/[^\s<"\u0000]+/g,u=>{const m=u.match(/^(.*?)([.,;:!?)\]']*)$/);return link(m[1],m[1])+m[2]})
+  .replace(/\u0000(\d+)\u0000/g,(m,i)=>keep[+i])}
+function link(u,label){return '<a href="'+u+'" target="_blank" rel="noopener noreferrer">'+label+'</a>'}
 function add(cls,html,raw){const d=document.createElement('div');d.className=cls;d.innerHTML=html;
   d.querySelectorAll('pre').forEach(pr=>copyBtn(pr,pr.textContent));
   if(/\bmsg\b/.test(cls))copyBtn(d,raw!=null?raw:d.textContent);
@@ -336,19 +393,15 @@ async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
   $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
   $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${info.model} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
   catch(e){$('info').textContent=e.message}}
-async function loadChat(){log.innerHTML='';
+async function loadChat(){log.innerHTML='';drawQuick();loadChatBar();loadModels();
   try{const h=await getJSON('/api/history?device='+enc(cur));
     if(!h.events.length&&cur===HOMECHAT){add('msg ai','Hi! I\'m Patchbay. Ask me about any of your devices, find or add a device by its address, '+
       'or change a setting. To work on one device, click its picture.');
-      const st=add('row','');st.style.alignSelf='flex-start';
-      ['Which of my devices are on the network?','Search 192.168.50.203 port 8080','Add a new device'].forEach(q=>{
-        const b=document.createElement('button');b.textContent=q;b.onclick=()=>{if(busy)return;st.remove();t.value=q;$('f').requestSubmit()};st.appendChild(b)})}
+}
     else if(!h.events.length){add('msg ai','Hi! I can check '+esc(cur)+' for crash damage, look through its folders, read and explain files, and suggest fixes. '+
       'I can also update a homebrew program for newer firmware by rebuilding it from its source code. '+
       'I never change anything unless you confirm on a card here.');
-      const st=add('row','');st.style.alignSelf='flex-start';
-      ['Check '+cur+' for crash damage','Update a homebrew app so it works with my firmware','What firmware is '+cur+' running?'].forEach(q=>{
-        const b=document.createElement('button');b.textContent=q;b.onclick=()=>{if(busy)return;st.remove();t.value=q;$('f').requestSubmit()};st.appendChild(b)})}
+}
     for(const ev of h.events)show(ev,null,h.pending);
     if(h.running&&!busy)chatStream('/api/follow',{since:h.job_at},h.job_at)}
   catch(e){add('msg err',reachMsg(e))}}
@@ -356,16 +409,19 @@ function reachMsg(e){return location.protocol==='file:'?'This page was opened as
   'Can\'t reach Patchbay ('+esc(e.message)+'). Is python3 patchbay.py running in Terminal on the Mac Studio?'}
 function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
   const keep=()=>{if(ctx)log.appendChild(ctx.status)};
-  if(ev.type==='user')add('msg me',esc(ev.text),ev.text);
+  const endStream=()=>{if(ctx&&ctx.stream){ctx.stream.remove();ctx.stream=null}};
+  if(ev.type==='user')add('msg me',esc(ev.text)+(ev.files&&ev.files.length?'<div class="files">📎 '+ev.files.map(esc).join(', ')+'</div>':''),ev.text);
+  else if(ev.type==='delta'){if(ctx){if(!ctx.stream){ctx.stream=add('msg ai stream','')}
+    ctx.stream.firstChild&&ctx.stream.firstChild.nodeType===3?ctx.stream.firstChild.nodeValue+=ev.text:ctx.stream.prepend(document.createTextNode(ev.text));
+    log.scrollTop=log.scrollHeight;keep()}}
   else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
   else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
-  else if(ev.type==='tool'){if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
-    const a=Object.entries(ev.args||{}).filter(([k])=>!['new_content','find','replace'].includes(k))
-      .map(([k,v])=>k+': '+String(v).slice(0,80)).join(', ');ctx.status.textContent='Using '+ev.name+(a?' ('+a+')':'')+'...'}}
+  else if(ev.type==='tool'){endStream();if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
+    ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
   else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
-    add('step','<details><summary>✓ '+esc(ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
-  else if(ev.type==='note'){add('msg ai',md(ev.text),ev.text);keep()}
-  else if(ev.type==='answer')add('msg ai',md(ev.text||'(no answer)'),ev.text||'');
+    add('step','<details><summary>✓ '+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+  else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
+  else if(ev.type==='answer'){endStream();add('msg ai',md(ev.text||'(no answer)'),ev.text||'')}
   else if(ev.type==='error')add('msg err',esc(ev.text),ev.text);
   else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
   else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
@@ -373,7 +429,7 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
 }
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
-  const dev=cur;busy=true;send.disabled=true;const ctx={status:add('live','Working...'),live:null};
+  const dev=cur;busy=true;setSend(true);const ctx={status:add('live','Working...'),live:null,stream:null};
   let n=since||0,finished=false,tries=0;
   const on=ev=>{if(ev.type==='ping')return;if(ev.type==='done'){finished=true;return}n++;
     if(cur===dev&&(view==='chat'||dev===HOMECHAT))show(ev,ctx)};
@@ -383,7 +439,10 @@ async function chatStream(url,body,since){
     await new Promise(r=>setTimeout(r,Math.min(10000,1500*tries)));
     try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
   if(!finished)add('msg err','Can\'t reach Patchbay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
-  ctx.status.remove();if(ctx.live)ctx.live.remove();busy=false;send.disabled=false;t.focus()}
+  ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
+  if(dev===cur)loadChatBar()}
+function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
+  send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
 function card(ev,closed){
   if(ev.on_mac)return macCard(ev,closed);
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
@@ -400,7 +459,8 @@ function card(ev,closed){
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
   const build=/^(In folder|Run:)/.test(ev.diff||'');
-  const sets=ev.title.startsWith('Change settings');
+  const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
+  if(plan)return planCard(ev,closed);
   const label=ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
     '<div>'+(sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
@@ -415,11 +475,74 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
     const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
-$('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if(!s||busy)return;
-  t.value='';add('msg me',esc(s));await chatStream('/api/chat',{text:s})};
+function planCard(ev,closed){
+  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>Approve this once and Patchbay does every step without stopping to ask. '+
+    'Changes on '+esc(ev.computer)+' happen by themselves'+(ev.typing?'; the changes to '+esc(ev.device)+' listed below go through too, each backed up first':
+    '; anything else that writes to '+esc(ev.device)+' still asks you')+'. You can press Stop any time.</div>'+
+    '<pre>'+esc(ev.diff||'')+'</pre><div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to approve: <input autocomplete="off">':'')+
+    '<button class="primary">Approve plan</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const typed=inp?inp.value:'';close('Approved.');await chatStream('/api/confirm',{id:ev.id,typed})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
+
+/* attachments: drop files into the chat, or the 📎 button */
+let atts=[];
+function drawAtts(){$('atts').innerHTML=atts.map((a,i)=>`<span class="chip">📎 ${esc(a.name)} <small>${size(a.size)}</small><button data-i="${i}" title="Remove">×</button></span>`).join('');
+  $('atts').querySelectorAll('button').forEach(b=>b.onclick=()=>{atts.splice(+b.dataset.i,1);drawAtts()})}
+async function attachFiles(files){
+  for(const f of files){
+    if(!f.size&&!f.type&&f.name.indexOf('.')<0){add('msg err','Folders can\'t be added. Add the files inside it.');continue}
+    const chip=document.createElement('span');chip.className='chip';chip.textContent='Adding '+f.name+'…';$('atts').appendChild(chip);
+    try{const r=await fetch('/api/chat/attach?device='+enc(cur)+'&name='+enc(f.name),{method:'POST',body:f});const j=await r.json();
+      if(!r.ok)throw new Error(j.error);atts.push(j)}catch(e){add('msg err','Couldn\'t add '+esc(f.name)+': '+esc(e.message))}
+    chip.remove();drawAtts()}}
+$('attach').onclick=()=>{$('chatfile').value='';$('chatfile').click()};
+$('chatfile').onchange=()=>attachFiles([...$('chatfile').files]);
+['dragover','dragenter'].forEach(n=>$('chat').addEventListener(n,e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();$('chat').classList.add('dropping')}}));
+$('chat').addEventListener('dragleave',e=>{if(!$('chat').contains(e.relatedTarget))$('chat').classList.remove('dropping')});
+$('chat').addEventListener('drop',e=>{if(![...e.dataTransfer.types].includes('Files'))return;e.preventDefault();$('chat').classList.remove('dropping');attachFiles([...e.dataTransfer.files])});
+
+/* quick buttons */
+function drawQuick(){
+  const home=cur===HOMECHAT;
+  const q=home?[['Which devices are online?',1],['Add a new device',1],['Search an address and port…','Search 192.168.1.'],['Change a setting…','Change ']]
+    :[['Check for crash damage','Check '+cur+' for crash damage',1],['Update an app…','Update the app '],['Back up now','Back up everything on '+cur,1],
+      ['What firmware?','What firmware is '+cur+' running?',1],['Find an app…','Find the app '],['Plan a big job…','Make a plan to ']];
+  $('quick').innerHTML='';
+  for(const [label,text,go] of q.map(x=>x.length===2&&x[1]===1?[x[0],x[0],1]:x)){const b=document.createElement('button');b.type='button';b.textContent=label;
+    b.onclick=()=>{if(busy)return;t.value=text;if(go)$('f').requestSubmit();else{t.focus();t.setSelectionRange(t.value.length,t.value.length)}};$('quick').appendChild(b)}}
+
+/* past chats and the model picker */
+async function loadChatBar(){
+  try{const j=await getJSON('/api/chats?device='+enc(cur));const c=j.chats.find(x=>x.id===j.current);
+    $('chat-title').textContent=c?c.title:'New chat';$('chats-btn').textContent='Past chats ('+j.chats.length+') ▾';chatsCache=j}catch(e){}}
+let chatsCache=null;
+$('chats-btn').onclick=async e=>{e.stopPropagation();const l=$('chatlist');if(l.style.display==='block'){l.style.display='none';return}
+  await loadChatBar();const j=chatsCache||{chats:[]};
+  l.innerHTML=j.chats.length?j.chats.map(c=>`<div class="it${c.id===j.current?' on':''}" data-id="${esc(c.id)}"><span class="t">${esc(c.title)}<br><small>${esc(c.updated||'')} · ${c.count} message${c.count===1?'':'s'}</small></span><button data-del="${esc(c.id)}" title="Delete this chat">Delete</button></div>`).join('')
+    :'<div class="note" style="padding:8px">No saved chats yet. Every chat is saved by itself.</div>';
+  const r=$('chats-btn').getBoundingClientRect(),pr=$('chat').getBoundingClientRect();l.style.left=(r.left-pr.left)+'px';l.style.top=(r.bottom-pr.top+4)+'px';l.style.display='block';
+  l.querySelectorAll('.it').forEach(it=>it.onclick=async ev=>{ev.stopPropagation();if(ev.target.dataset.del){
+      if(!confirm('Delete this saved chat?'))return;try{await postJSON('/api/chats/delete',{device:cur,id:ev.target.dataset.del})}catch(x){alert(x.message)}
+      l.style.display='none';if(ev.target.dataset.del===j.current)loadChat();else loadChatBar();return}
+    if(busy)return;try{await postJSON('/api/chats/open',{device:cur,id:it.dataset.id});l.style.display='none';loadChat()}catch(x){alert(x.message)}})};
+document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('chatlist').style.display='none'});
+async function loadModels(){try{const j=await getJSON('/api/models');const s=$('model');
+  s.innerHTML=j.models.map(m=>`<option value="${esc(m.name)}"${m.name===j.current?' selected':''}>${esc(m.name)}${m.size?' ('+esc(m.size)+')':''}</option>`).join('');
+  s.title=j.error||'Which AI model answers. Bigger models are slower but think harder.'}catch(e){}}
+$('model').onchange=async()=>{try{await postJSON('/api/model',{model:$('model').value});info.model=$('model').value;if(cur!==HOMECHAT)loadInfo();
+  add('msg ai','From now on '+esc($('model').value)+' answers (for every device).')}catch(e){alert(e.message);loadModels()}};
+
+$('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
+  const files=atts;atts=[];drawAtts();
+  t.value='';add('msg me',esc(s)+(files.length?'<div class="files">📎 '+files.map(f=>esc(f.name)).join(', ')+'</div>':''),s);
+  await chatStream('/api/chat',{text:s,attachments:files.map(f=>f.ref)})};
 t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('f').requestSubmit()}});
-$('reset').onclick=async()=>{if(busy)return;await postJSON('/api/reset',{device:cur});log.innerHTML='';
-  add('msg ai','New chat started. What would you like to do?')};
+$('reset').onclick=async()=>{if(busy)return;try{await postJSON('/api/reset',{device:cur})}catch(e){return alert(e.message)}log.innerHTML='';
+  add('msg ai','New chat started. What would you like to do? (The last one is saved under Past chats.)');loadChatBar()};
 
 /* ---------- files: the Mac Studio on the left, the device on the right */
 const panes={mac:{side:'mac',path:null,entries:[],sel:new Set(),last:null},dev:{side:'dev',path:'/',entries:[],sel:new Set(),last:null}};
@@ -431,15 +554,20 @@ function paneShell(p){
   el.innerHTML=`<div class="top">
     <div class="title">${isDev?'':'🖥️ '}${esc(isDev?cur:info.computer||'Mac')} <small>${isDev?'the device':'this computer runs the agent'}</small>
       ${isDev?'<button data-a="renamedev" class="pen" title="Give this device a new name in Patchbay">✎ Rename device</button>':''}</div>
-    <div class="path"><button data-a="up" title="Up one folder">↑</button><input data-a="path" spellcheck="false"><button data-a="refresh" title="Refresh">⟳</button></div>
+    <div class="path"><button data-a="up" title="Up one folder">↑</button><input data-a="path" spellcheck="false"><button data-a="refresh" title="Refresh">⟳</button>
+      <button data-a="mark" title="Bookmark this folder">☆</button>${isDev?'<button data-a="search" title="Find files by name on the whole device">🔍 Search</button>':''}</div>
+    <div class="marks"></div>
     <div class="tools">${isDev?`
       <button data-a="tomac" title="Copy the selected items to the folder open on the left">← Copy to ${esc(info.computer||'Mac')}</button>
       <button data-a="upload">Upload from this computer…</button><button data-a="download">Download</button>
       <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>
-      <button data-a="backup" title="Copy the selected files or folders to your backup folder">Back up</button>`:`
+      <button data-a="backup" title="Copy the selected files or folders to your backup folder">Back up</button>
+      <button data-a="preview" title="Look inside the selected file">Preview</button><button data-a="compare" title="Compare two selected files (one here and one on the other side, or two here)">Compare</button>
+      <button data-a="all" title="Select everything in this folder">Select all</button><span class="selcount"></span>`:`
       <button data-a="home">Home</button><button data-a="todev" title="Copy the selected items to the folder open on the right">Copy to ${esc(cur)} →</button>
       <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button>
-      <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label>`}</div></div>
+      <button data-a="preview">Preview</button><button data-a="compare">Compare</button><button data-a="all">Select all</button>
+      <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label><span class="selcount"></span>`}</div></div>
     <div class="list"></div>`;
   el.querySelectorAll('[data-a]').forEach(b=>{const a=b.dataset.a;
     if(a==='path')b.onkeydown=e=>{if(e.key==='Enter')load(p,b.value)};
@@ -452,14 +580,15 @@ async function openFiles(changed){
     if(!info.computer)await loadInfo();paneShell(panes.mac);paneShell(panes.dev);
     $('vp-mac').textContent=(info.computer||'Mac')+' only';$('vp-dev').textContent=cur+' only';
     act('Drag files between the two sides, or drop files from Finder onto '+cur+'. Double-click a folder to open it.');
-    load(panes.mac,panes.mac.path||'~');load(panes.dev,'/')}
+    load(panes.mac,panes.mac.path||'~');load(panes.dev,'/');loadMarks()}
+  pollQueue();
 }
 async function load(p,path){
   const list=$('pane-'+p.side).querySelector('.list');list.innerHTML='<div class="hint">Loading…</div>';
   try{const j=await getJSON('/api/files/list?side='+p.side+'&device='+enc(cur)+'&path='+enc(path)+(p.hidden?'&hidden=1':''));
     p.path=j.path;p.parent=j.parent;p.entries=j.entries;p.sel.clear();p.last=null;render(p)}
   catch(e){list.innerHTML='<div class="hint" style="color:var(--bad)">'+esc(e.message)+'</div>'}
-  $('pane-'+p.side).querySelector('[data-a=path]').value=p.path||path}
+  $('pane-'+p.side).querySelector('[data-a=path]').value=p.path||path;drawMarks()}
 function full(p,name){return p.side==='mac'?(p.path.replace(/\/$/,'')+'/'+name):((p.path==='/'?'':p.path)+'/'+name)}
 function parentOf(p){if(p.side==='mac')return p.parent||p.path;const s=p.path.replace(/\/[^/]*$/,'');return s||'/'}
 function render(p){
@@ -472,15 +601,16 @@ function render(p){
   list.querySelectorAll('tr').forEach(tr=>{const i=+tr.dataset.i,e=p.entries[i];
     tr.onclick=ev=>{if(ev.shiftKey&&p.last!=null){const [a,b]=[Math.min(p.last,i),Math.max(p.last,i)];for(let k=a;k<=b;k++)p.sel.add(k)}
       else if(ev.metaKey||ev.ctrlKey){p.sel.has(i)?p.sel.delete(i):p.sel.add(i);p.last=i}
-      else{p.sel.clear();p.sel.add(i);p.last=i}paint(p)};
+      else{p.sel.clear();p.sel.add(i);p.last=i}paint(p);lastPane=p};
     const pen=tr.querySelector('.pen');if(pen)pen.onclick=ev=>{ev.stopPropagation();p.sel.clear();p.sel.add(i);paint(p);tool(p,'rename')};
     tr.oncontextmenu=ev=>{ev.preventDefault();if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)}menu(ev,p,e)};
-    tr.ondblclick=()=>{if(e.kind==='dir')load(p,full(p,e.name));else if(p.side==='dev'&&e.kind==='file')download(full(p,e.name))};
+    tr.ondblclick=()=>{if(e.kind==='dir')load(p,full(p,e.name));else if(e.kind==='file')preview(p.side,full(p,e.name))};
     tr.ondragstart=ev=>{if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)} // never rebuild the list mid-drag
       ev.dataTransfer.setData('application/x-devagent',JSON.stringify({side:p.side,items:picked(p)}));ev.dataTransfer.effectAllowed='copyMove'};
     if(e.kind==='dir')dropZone(tr,()=>full(p,e.name),p,true)});
 }
-function paint(p){$('pane-'+p.side).querySelectorAll('.list tr').forEach(tr=>tr.classList.toggle('sel',p.sel.has(+tr.dataset.i)))}
+function paint(p){$('pane-'+p.side).querySelectorAll('.list tr').forEach(tr=>tr.classList.toggle('sel',p.sel.has(+tr.dataset.i)));
+  const n=p.sel.size;$('pane-'+p.side).querySelector('.selcount').textContent=n>1?n+' selected':''}
 function picked(p){return [...p.sel].map(i=>p.entries[i]).filter(e=>e.kind!=='link').map(e=>({path:full(p,e.name),kind:e.kind,name:e.name}))}
 function dropZone(el,where,p,row){
   const ok=ev=>[...ev.dataTransfer.types].some(x=>x==='application/x-devagent'||x==='Files');
@@ -513,14 +643,16 @@ async function uploadFiles(files,target){
     catch(e){act('Couldn\'t send '+f.name+': '+e.message,'bad')}}
   if(refs.length)plan({op:'upload',target,items:refs})}
 async function copyToMac(items,folder){
-  act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'…');
-  await stream('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder},fileEvent);load(panes.mac,panes.mac.path)}
+  act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'. Progress is in the queue below.');
+  try{await postJSON('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder});pollQueue()}catch(e){act(e.message,'bad')}}
 function fileEvent(ev){if(ev.type==='progress')act(ev.text);else if(ev.type==='answer')act(ev.text,'good');else if(ev.type==='error')act(ev.text,'bad')}
 function download(path){const a=document.createElement('a');a.href='/api/files/download?device='+enc(cur)+'&path='+enc(path);
   a.download='';document.body.appendChild(a);a.click();a.remove();act('Downloading '+path+' to this computer\'s Downloads folder.')}
 async function plan(req){
   act('Working out what this would change…');
   let j;try{j=await postJSON('/api/files/plan',Object.assign({device:cur},req))}catch(e){return act(e.message,'bad')}
+  showPlan(j)}
+function showPlan(j){
   modal(`<h3>${esc(j.title)}</h3>
     <div class="msgline">Nothing has been written yet. Every file that gets replaced or deleted is backed up to ${esc(info.computer)} first, and you can undo it.</div>
     <ul>${j.lines.map(l=>'<li>'+esc(l)+'</li>').join('')}${j.more?'<li>…and '+j.more+' more</li>':''}</ul>
@@ -528,7 +660,8 @@ async function plan(req){
     <div class="row confirm">Type <b>${esc(j.device)}</b> to confirm: <input id="c-typed" autocomplete="off"><button class="primary" id="c-ok">Confirm</button><button id="c-no">Cancel</button></div>`,true);
   $('c-typed').focus();$('c-no').onclick=()=>{closeModal();act('Cancelled. Nothing was written.')};
   const go=async()=>{if($('c-typed').value.trim()!==j.device){$('c-typed').style.borderColor='var(--bad)';$('c-typed').focus();return}
-    closeModal();await stream('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value},fileEvent);load(panes.dev,panes.dev.path)};
+    closeModal();try{await postJSON('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value});
+      if(view!=='files'){location.hash='#/d/'+enc(cur)+'/files'}pollQueue()}catch(e){act(e.message,'bad');alert(e.message)}};
   $('c-ok').onclick=go;$('c-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
 function menu(ev,p,e){ // right-click menu on a file or folder
   const c=$('ctx'),dev=p.side==='dev',acts=[];
@@ -538,6 +671,10 @@ function menu(ev,p,e){ // right-click menu on a file or folder
     acts.push(['Copy to '+(info.computer||'the Mac'),()=>tool(p,'tomac')],['Back up',()=>tool(p,'backup')],['Delete…',()=>tool(p,'delete')])}
   else acts.push(['Copy to '+cur,()=>tool(p,'todev')]);
   acts.push(['New folder here…',()=>tool(p,'mkdir')]);
+  if(e.kind==='file')acts.unshift(['Preview',()=>preview(p.side,full(p,e.name))]);
+  acts.push(['Ask AI about this',()=>askAI(p.side,full(p,e.name),e.kind)]);
+  if(e.kind==='file'){if(compareA&&compareA.path!==full(p,e.name))acts.push(['Compare with '+compareA.path.split('/').pop(),()=>{const a=compareA;compareA=null;compareFiles(a,{side:p.side,path:full(p,e.name)})}]);
+    acts.push(['Compare with… (pick this first)',()=>{compareA={side:p.side,path:full(p,e.name)};act('Now right-click the second file and choose "Compare with '+e.name+'".')}])}
   c.innerHTML='';acts.forEach(([l,f])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>{c.style.display='none';f()};c.appendChild(b)});
   c.style.display='block';c.style.left=Math.min(ev.clientX,innerWidth-190)+'px';c.style.top=Math.min(ev.clientY,innerHeight-c.offsetHeight-8)+'px'}
 document.addEventListener('click',()=>{$('ctx').style.display='none'});
@@ -553,6 +690,103 @@ function setFilesView(v){let ok=['both','mac','dev'].includes(v)?v:'both';
   $('viewpick').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v===ok))}
 $('viewpick').querySelectorAll('button').forEach(b=>b.onclick=()=>setFilesView(b.dataset.v));
 {let v='both';try{v=localStorage.getItem('pb-files-view')||'both'}catch(e){}setFilesView(v)}
+let lastPane=null,compareA=null,marks={mac:[],dev:[]};
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='a'&&view==='files'&&lastPane&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){
+  e.preventDefault();lastPane.entries.forEach((x,i)=>lastPane.sel.add(i));paint(lastPane)}});
+
+/* bookmarks */
+async function loadMarks(){try{marks=await getJSON('/api/bookmarks?device='+enc(cur))}catch(e){marks={mac:[],dev:[]}}drawMarks()}
+function drawMarks(){for(const p of [panes.mac,panes.dev]){const el=$('pane-'+p.side);if(!el.querySelector('.marks'))continue;
+  const list=marks[p.side]||[];el.querySelector('[data-a=mark]').textContent=list.includes(p.path)?'★':'☆';
+  el.querySelector('.marks').innerHTML=list.map((m,i)=>`<span class="mark" data-i="${i}" title="${esc(m)}">${esc(m.replace(/\/$/,'').split('/').pop()||m)}<button title="Remove bookmark">×</button></span>`).join('');
+  el.querySelectorAll('.mark').forEach(x=>x.onclick=ev=>{const m=list[+x.dataset.i];if(ev.target.tagName==='BUTTON'){list.splice(+x.dataset.i,1);saveMarks()}else load(p,m)})}}
+function toggleMark(p){const list=marks[p.side]=marks[p.side]||[];const i=list.indexOf(p.path);if(i>=0)list.splice(i,1);else list.push(p.path);saveMarks()}
+async function saveMarks(){try{marks=await postJSON('/api/bookmarks',{device:cur,marks})}catch(e){act(e.message,'bad')}drawMarks()}
+
+/* transfer queue */
+let qTimer=null,qSeen={};
+async function pollQueue(){clearTimeout(qTimer);if(view!=='files')return;
+  let j;try{j=await getJSON('/api/transfers?device='+enc(cur))}catch(e){return}
+  const q=$('queue');q.innerHTML=j.transfers.map(x=>{const pct=x.bytes_total?100*x.bytes_done/x.bytes_total:(x.files_total?100*x.files_done/x.files_total:(x.state==='done'?100:2));
+    const left=x.speed>0?(x.bytes_total-x.bytes_done)/x.speed:0;
+    const state={running:x.paused?'Paused':'Copying',done:'Done',failed:'Stopped',cancelled:'Cancelled',waiting:'Waiting'}[x.state]||x.state;
+    return `<div class="tq ${x.state}"><div class="h"><b>${esc(x.title)}</b><span>${state}</span>
+      ${x.state==='running'?`<button data-id="${x.id}" data-act="${x.paused?'resume':'pause'}">${x.paused?'Resume':'Pause'}</button><button data-id="${x.id}" data-act="cancel">Cancel</button>`:
+        `<button data-id="${x.id}" data-act="clear">Clear</button>`}</div>
+      <div class="bar"><div style="width:${Math.max(2,Math.min(100,pct)).toFixed(1)}%"></div></div>
+      <div class="sub">${x.state==='running'?`${x.files_done} of ${x.files_total} files · ${size(x.bytes_done)} of ${size(x.bytes_total)}`+
+        (x.speed>0?` · ${size(x.speed)}/s · about ${dur(left)} left`:'')+(x.current?' · '+esc(x.current):''):esc(x.message||'')}</div></div>`}).join('');
+  q.querySelectorAll('button').forEach(b=>b.onclick=async()=>{try{await postJSON('/api/transfers/control',{id:b.dataset.id,action:b.dataset.act})}catch(e){}pollQueue()});
+  let refresh=false;for(const x of j.transfers){if(x.state!=='running'&&qSeen[x.id]==='running'){refresh=true;act(x.message,x.state==='done'?'good':'bad')}qSeen[x.id]=x.state}
+  if(refresh){load(panes.mac,panes.mac.path);load(panes.dev,panes.dev.path)}
+  if(j.transfers.some(x=>x.state==='running'))qTimer=setTimeout(pollQueue,1000)}
+
+/* preview and edit */
+async function preview(side,path){
+  modal('<div class="pv"><h3>'+esc(path)+'</h3><div class="note">Loading…</div></div>');$('box').classList.add('wide');
+  let j;try{j=await getJSON('/api/files/preview?device='+enc(cur)+'&side='+side+'&path='+enc(path))}catch(e){$('box').querySelector('.note').textContent=e.message;return}
+  const probs=(j.problems||[]).length?'<div class="msgline bad">'+j.problems.map(esc).join('<br>')+'</div>':'';
+  const body=j.kind==='image'?'<img src="'+j.src+'" alt="">':j.kind==='too_big'?'<div class="note">Too big to preview ('+size(j.size)+').</div>':
+    '<pre id="pv-text"></pre>';
+  $('box').innerHTML=`<div class="pv"><h3>${esc(path)}</h3><div class="note">${side==='mac'?esc(info.computer||'Mac'):esc(cur)} · ${size(j.size)}${j.kind==='hex'?' · binary file, first 4 KB shown':''}${j.cut?' · only the first 2 MB shown':''}</div>
+    ${probs}${body}<div class="row">${j.kind==='text'&&j.editable?'<button id="pv-edit">Edit</button>':''}
+    ${side==='dev'?'<button id="pv-dl">Download</button>':''}<button id="pv-ai">Ask AI about this</button><button id="pv-close">Close</button></div></div>`;
+  if($('pv-text'))$('pv-text').textContent=j.text||'';
+  $('pv-close').onclick=closeModal;$('pv-ai').onclick=()=>{closeModal();askAI(side,path,'file')};
+  if($('pv-dl'))$('pv-dl').onclick=()=>download(path);
+  if($('pv-edit'))$('pv-edit').onclick=()=>editText(side,path,j.text)}
+function editText(side,path,text){
+  $('box').innerHTML=`<div class="pv"><h3>Edit ${esc(path)}</h3><div class="note">${side==='dev'?'Saving shows you exactly what changes on '+esc(cur)+', and the old file is backed up first.':'The old version is backed up on '+esc(info.computer||'the Mac')+' first.'}</div>
+    <textarea id="pv-area" spellcheck="false"></textarea><div class="row"><button class="primary" id="pv-save">Save</button><button id="pv-cancel">Cancel</button></div></div>`;
+  $('pv-area').value=text;$('pv-area').focus();$('pv-cancel').onclick=closeModal;
+  $('pv-save').onclick=async()=>{const val=$('pv-area').value;if(val===text){closeModal();return}
+    const name=path.split('/').pop(),folder=path.slice(0,path.length-name.length).replace(/\/$/,'')||'/';
+    if(side==='mac'){if(!confirm('Save the changes to '+path+'?'))return;
+      try{const r=await postJSON('/api/files/mac_save',{device:cur,path,text:val});closeModal();act('Saved '+path+'. The old version is in '+r.backup,'good');load(panes.mac,panes.mac.path)}catch(e){alert(e.message)}return}
+    try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(name),{method:'POST',body:new Blob([val])});const j=await r.json();if(!r.ok)throw new Error(j.error);
+      closeModal();plan({op:'upload',target:folder,items:[{from:'staged',ref:j.ref}]})}catch(e){alert(e.message)}}}
+
+/* compare */
+async function compareFiles(a,b){
+  modal('<h3>Comparing…</h3>');$('box').classList.add('wide');
+  try{const j=await postJSON('/api/files/compare',{device:cur,a,b});
+    $('box').innerHTML=`<div class="pv"><h3>${j.same?'The same':'Differences'}</h3><div class="note">${a.side==='mac'?'Mac':'Device'}: ${esc(a.path)} (${size(j.size_a)})<br>${b.side==='mac'?'Mac':'Device'}: ${esc(b.path)} (${size(j.size_b)})</div>
+      <pre>${j.kind==='text'?diffHtml(j.text):esc(j.text)}</pre><div class="row"><button id="cmp-close">Close</button></div></div>`;$('cmp-close').onclick=closeModal}
+  catch(e){$('box').innerHTML='<h3>Couldn\'t compare</h3><div class="msgline bad">'+esc(e.message)+'</div>'}}
+
+/* search the whole device */
+function searchDevice(){
+  modal(`<div class="pv"><h3>Find files on ${esc(cur)}</h3><div class="row"><input id="s-q" placeholder="part of a name, e.g. ftpd" style="flex:1">
+    <input id="s-in" value="/" style="width:150px" title="Where to search"><button class="primary" id="s-go">Search</button></div>
+    <div class="note" id="s-msg"></div><div class="hits" id="s-hits" hidden></div><div class="row"><button id="s-close">Close</button></div></div>`);
+  $('box').classList.add('wide');$('s-q').focus();$('s-close').onclick=()=>{ctl&&ctl.abort();closeModal()};
+  let ctl=null;
+  const go=async()=>{ctl&&ctl.abort();ctl=new AbortController();const hits=$('s-hits');hits.innerHTML='';hits.hidden=false;$('s-msg').textContent='Searching…';
+    try{const r=await fetch('/api/files/search',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+        body:JSON.stringify({device:cur,q:$('s-q').value,folder:$('s-in').value})});
+      const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+      for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
+        while((i=buf.indexOf('\n'))>=0){const ev=JSON.parse(buf.slice(0,i));buf=buf.slice(i+1);
+          if(ev.type==='hit'){const d=document.createElement('div');d.innerHTML=`<span>${ev.kind==='dir'?'📁':'📄'} ${esc(ev.path)}</span><span>${ev.kind==='file'?size(ev.size):''}</span>`;
+            d.onclick=()=>{closeModal();ctl.abort();goTo(ev.path,ev.kind)};hits.appendChild(d)}
+          else if(ev.type==='progress'||ev.type==='answer')$('s-msg').textContent=ev.text;else if(ev.type==='error')$('s-msg').textContent=ev.text}}}
+    catch(e){if(e.name!=='AbortError')$('s-msg').textContent=e.message}};
+  $('s-go').onclick=go;$('s-q').onkeydown=e=>{if(e.key==='Enter')go()}}
+async function goTo(path,kind){const p=panes.dev;
+  if(kind==='dir')return load(p,path);const name=path.split('/').pop();await load(p,path.slice(0,path.length-name.length-1)||'/');
+  const i=p.entries.findIndex(e=>e.name===name);if(i>=0){p.sel.clear();p.sel.add(i);paint(p);
+    const tr=$('pane-dev').querySelector('tr[data-i="'+i+'"]');tr&&tr.scrollIntoView({block:'center'})}}
+
+/* ask the AI about a file or folder */
+async function askAI(side,path,kind){
+  let text;
+  if(side==='mac'){if(kind!=='file')return act('For a folder on the Mac, drop the files into the chat instead.','bad');
+    try{const j=await postJSON('/api/chat/attach_path',{device:cur,path});atts.push(j)}catch(e){return act(e.message,'bad')}
+    text='What is this file, and is anything wrong with it?'}
+  else text='Look at '+path+' on '+cur+(kind==='dir'?' (a folder)':'')+': what is it, and is anything wrong with it?';
+  location.hash='#/d/'+enc(cur)+'/chat';
+  setTimeout(()=>{drawAtts();t.value=text;t.focus();if(!busy)$('f').requestSubmit()},400)}
+
 async function macDo(url,body,okMsg){try{await postJSON(url,body);act(okMsg,'good');load(panes.mac,panes.mac.path)}catch(e){act(e.message,'bad')}}
 async function renameDevice(){
   const n=prompt('New name for '+cur+' in Patchbay (letters, numbers, spaces, - or _). This changes the name you type to confirm changes, too:',cur);
@@ -562,6 +796,13 @@ async function renameDevice(){
 function tool(p,a){
   if(a==='up')return load(p,parentOf(p));if(a==='refresh')return load(p,p.path);if(a==='home')return load(p,'~');
   if(a==='renamedev')return renameDevice();
+  if(a==='mark')return toggleMark(p);if(a==='search')return searchDevice();
+  if(a==='all'){p.entries.forEach((e,i)=>p.sel.add(i));return paint(p)}
+  if(a==='preview'){const f=picked(p).filter(x=>x.kind==='file');if(!f.length)return act('Select a file first.','bad');return preview(p.side,f[0].path)}
+  if(a==='compare'){const here=picked(p).filter(x=>x.kind==='file'),other=p===panes.mac?panes.dev:panes.mac,there=picked(other).filter(x=>x.kind==='file');
+    if(here.length===2)return compareFiles({side:p.side,path:here[0].path},{side:p.side,path:here[1].path});
+    if(here.length===1&&there.length===1)return compareFiles({side:'mac',path:(p.side==='mac'?here:there)[0].path},{side:'dev',path:(p.side==='dev'?here:there)[0].path});
+    return act('Select two files here, or one file on each side, then press Compare.','bad')}
   const items=picked(p);
   if(p.side==='mac'&&a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)macDo('/api/files/mac_mkdir',{folder:p.path,name:n},'Made the folder '+n+'.');return}
   if(p.side==='mac'&&a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
@@ -592,6 +833,7 @@ async function loadBackups(){
   $('bk-progress').hidden=!running;
   if(running){
     if(job.phase==='listing'){$('bk-bar').style.width='2%';$('bk-line').textContent='Listing every folder… '+job.files_total+' files found so far';bkLast=null}
+    else if(job.phase==='compressing'||job.phase==='mirroring'){$('bk-bar').style.width='100%';$('bk-line').textContent=job.message}
     else{const pct=job.bytes_total?100*job.bytes_done/job.bytes_total:(job.files_total?100*job.files_done/job.files_total:0);
       $('bk-bar').style.width=Math.max(2,pct).toFixed(1)+'%';
       const now=Date.now()/1000;if(bkLast&&now>bkLast.t){const r=(job.bytes_done-bkLast.b)/(now-bkLast.t);bkRate=bkRate?bkRate*.8+r*.2:r}
@@ -601,22 +843,55 @@ async function loadBackups(){
         (bkRate>0?` · ${size(bkRate)}/s · about ${dur(left)} left`:'')+(job.linked?` · ${job.linked} unchanged`:'')+(job.failed?` · ${job.failed} couldn't be read`:'')}
     $('bk-cur').textContent=job.current||'';$('bk-msg').textContent=job.resumed?'Carrying on the backup that stopped earlier.':''}
   else if(job&&job.message){$('bk-msg').className='msgline'+(job.phase==='failed'?' bad':'');$('bk-msg').textContent=job.message}
-  $('bk-list').innerHTML=j.backups.length?j.backups.map(b=>`<div class="bk"><span class="when">${esc(b.name.replace('_',' ').replace(/-(\d\d)-(\d\d)$/,':$1:$2'))}</span>
+  if(!bkOptsLoaded&&j.settings){bkOptsLoaded=true;$('bk-keep').value=j.settings.keep;$('bk-zip').checked=j.settings.compress;
+    bkMirror=j.settings.mirror;$('bk-mirror').textContent=bkMirror||'none'}
+  $('bk-list').innerHTML=j.backups.length?j.backups.map(b=>`<div class="bk"><span class="when">${esc(b.name.replace('_',' ').replace(/-(\d\d)-(\d\d)(_\d+)?$/,':$1:$2'))}${b.label?'<br><small style="font-weight:400">'+esc(b.label)+'</small>':''}</span>
     <span class="badge ${b.complete?'ok':'part'}">${b.complete?'complete':'unfinished'}</span>
+    ${b.verified?`<span class="badge ${b.verified.ok?'ok':'part'}" title="Checked ${esc(b.verified.when)}">${b.verified.ok?'checked OK':'damaged!'}</span>`:''}
+    ${b.compressed?'<span class="badge">zipped</span>':''}${b.mirror?'<span class="badge" title="'+esc(b.mirror)+'">2 copies</span>':''}
     <span class="meta">${b.partial?'<b>Only '+esc(b.folders.slice(0,3).join(', '))+(b.folders.length>3?' and '+(b.folders.length-3)+' more':'')+'</b> · ':''}${b.files} files · ${size(b.bytes)}${b.linked?' · '+b.linked+' unchanged (no extra space)':''}${b.failed?' · '+b.failed+' couldn\'t be read':''}</span>
-    <button data-path="${esc(b.path)}">Show in Files</button></div>`).join(''):'<div class="note">No backups yet.</div>';
-  $('bk-list').querySelectorAll('button').forEach(x=>x.onclick=()=>showInFiles(x.dataset.path));
+    <span class="row" style="margin:0"><button data-browse="${esc(b.name)}">Browse and restore…</button>
+    <button data-verify="${esc(b.name)}" title="Re-read every file and compare its checksum">Check</button>
+    <button data-label="${esc(b.name)}" data-cur="${esc(b.label)}">Label…</button>
+    ${b.compressed?'':`<button data-path="${esc(b.path)}">Show in Files</button>`}</span></div>`).join(''):'<div class="note">No backups yet.</div>';
+  $('bk-list').querySelectorAll('[data-path]').forEach(x=>x.onclick=()=>showInFiles(x.dataset.path));
+  $('bk-list').querySelectorAll('[data-browse]').forEach(x=>x.onclick=()=>browseBackup(x.dataset.browse,'/'));
+  $('bk-list').querySelectorAll('[data-verify]').forEach(x=>x.onclick=async()=>{try{await postJSON('/api/backup/verify',{device:cur,name:x.dataset.verify});loadBackups()}catch(e){alert(e.message)}});
+  $('bk-list').querySelectorAll('[data-label]').forEach(x=>x.onclick=async()=>{const l=prompt('Label for this backup:',x.dataset.cur);if(l==null)return;
+    try{await postJSON('/api/backup/label',{device:cur,name:x.dataset.label,label:l});loadBackups()}catch(e){alert(e.message)}});
 }
 function dur(s){if(s<90)return Math.round(s)+' s';if(s<5400)return Math.round(s/60)+' min';return (s/3600).toFixed(1)+' h'}
 function showInFiles(path){panes.mac.path=path;if(filesFor===cur)load(panes.mac,path);location.hash='#/d/'+enc(cur)+'/files'}
 $('bk-start').onclick=async()=>{$('bk-msg').className='msgline';$('bk-msg').textContent='Starting…';bkLast=null;bkRate=0;
-  try{await postJSON('/api/backup/start',{device:cur});loadBackups()}catch(e){$('bk-msg').className='msgline bad';$('bk-msg').textContent=e.message}};
+  try{await postJSON('/api/backup/start',{device:cur,label:$('bk-label').value});$('bk-label').value='';loadBackups()}catch(e){$('bk-msg').className='msgline bad';$('bk-msg').textContent=e.message}};
+let bkOptsLoaded=false,bkMirror='';
+$('bk-mirror-pick').onclick=()=>chooseFolder(bkMirror||'/Volumes',f=>{bkMirror=f;$('bk-mirror').textContent=f;closeModal()},'Where should the second copy go?');
+$('bk-mirror-off').onclick=()=>{bkMirror='';$('bk-mirror').textContent='none'};
+$('bk-save').onclick=async()=>{try{await postJSON('/api/backup/settings',{device:cur,backup_keep:+$('bk-keep').value||0,backup_mirror:bkMirror,backup_compress:$('bk-zip').checked});
+  $('bk-optmsg').textContent='Saved.'}catch(e){$('bk-optmsg').textContent=e.message}};
+async function browseBackup(name,folder){
+  let j;try{j=await getJSON('/api/backup/browse?device='+enc(cur)+'&name='+enc(name)+'&folder='+enc(folder))}catch(e){return alert(e.message)}
+  const up=folder==='/'?null:(folder.replace(/\/[^/]*$/,'')||'/');
+  modal(`<div class="pv"><h3>Backup ${esc(name)}${j.label?' · '+esc(j.label):''}</h3><div class="note">Inside: <code>${esc(folder)}</code>${j.compressed?' · zipped':''}. Tick what to put back on ${esc(cur)}, or double-click a folder to open it.</div>
+    <div class="row">${up?'<button id="bb-up">↑ Up</button>':''}<button id="bb-all">Tick all</button></div>
+    <div class="hits" id="bb-list">${j.entries.map((e,i)=>`<div data-i="${i}"><span><input type="checkbox" data-i="${i}"> ${e.kind==='dir'?'📁':'📄'} ${esc(e.name)}</span><span>${e.kind==='dir'?e.files+' files · ':''}${size(e.size)}</span></div>`).join('')||'<div>Empty</div>'}</div>
+    <div class="row"><button class="primary" id="bb-sel">Put back the ticked items…</button><button id="bb-every">Put back everything…</button><button id="bb-close">Close</button></div>
+    <div class="note">You'll see exactly what changes first. Files on ${esc(cur)} that get replaced are backed up before they're changed.</div></div>`);
+  $('box').classList.add('wide');$('bb-close').onclick=closeModal;if(up)$('bb-up').onclick=()=>browseBackup(name,up);
+  $('bb-all').onclick=()=>$('bb-list').querySelectorAll('input').forEach(c=>c.checked=true);
+  $('bb-list').querySelectorAll('div[data-i]').forEach(d=>{const e=j.entries[+d.dataset.i];
+    d.onclick=ev=>{if(ev.target.tagName==='INPUT')return;const c=d.querySelector('input');c.checked=!c.checked};
+    d.ondblclick=()=>{if(e.kind==='dir')browseBackup(name,e.path)}});
+  const restore=async paths=>{if(!paths.length)return alert('Tick something first.');
+    try{const p=await postJSON('/api/backup/restore_plan',{device:cur,name,paths});closeModal();showPlan(p)}catch(e){alert(e.message)}};
+  $('bb-sel').onclick=()=>restore([...$('bb-list').querySelectorAll('input:checked')].map(c=>j.entries[+c.dataset.i].path));
+  $('bb-every').onclick=()=>restore(['/'])}
 $('bk-pick').onclick=()=>{location.hash='#/d/'+enc(cur)+'/files';
   setTimeout(()=>act('Select the files or folders on '+cur+' you want to back up, then press Back up (or right-click > Back up).','good'),300)};
 $('bk-stop').onclick=async()=>{await postJSON('/api/backup/stop',{device:cur});$('bk-msg').textContent='Stopping…'};
 $('bk-change').onclick=()=>chooseFolder($('bk-folder').textContent.replace(/\/[^/]*$/,''));
-async function chooseFolder(start){
-  modal(`<h3>Where should backups of ${esc(cur)} go?</h3>
+async function chooseFolder(start,onPick,title){
+  modal(`<h3>${esc(title||'Where should backups of '+cur+' go?')}</h3>
     <div class="note">Pick a folder on ${esc(info.computer||'the Mac')}. An external drive or network share shows up under Drives.
     Each device gets its own folder inside, named after it.</div>
     <div class="row"><button id="p-up">↑ Up</button><button id="p-home">Home</button><button id="p-vol">Drives</button></div>
@@ -630,7 +905,7 @@ async function chooseFolder(start){
       $('p-list').querySelectorAll('[data-n]').forEach(d=>d.onclick=()=>go(here.replace(/\/$/,'')+'/'+d.dataset.n))}
     catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
   $('p-up').onclick=()=>parent&&go(parent);$('p-home').onclick=()=>go('~');$('p-vol').onclick=()=>go('/Volumes');$('p-no').onclick=closeModal;
-  $('p-ok').onclick=async()=>{try{await postJSON('/api/backup/folder',{device:cur,folder:here});closeModal();loadBackups()}
+  $('p-ok').onclick=async()=>{if(onPick)return onPick(here);try{await postJSON('/api/backup/folder',{device:cur,folder:here});closeModal();loadBackups()}
     catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
   go(start||'~');
 }
