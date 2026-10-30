@@ -144,6 +144,52 @@ def _scan_data(app):
                 "Delete old scan copies", "scans")
 
 
+PULL = {"model": None, "state": None, "done": 0, "total": 0, "error": ""}
+
+
+def _pull(url, model):
+    """Download a model with Ollama, in the background. Progress goes to PULL for 🩺 Setup."""
+    PULL.update(model=model, state="downloading", done=0, total=0, error="")
+    try:
+        req = urllib.request.Request(url + "/api/pull", data=json.dumps({"model": model, "stream": True}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            for line in r:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("error"):
+                    raise OSError(ev["error"])
+                if ev.get("total"):
+                    PULL.update(done=ev.get("completed") or 0, total=ev["total"])
+                if ev.get("status") == "success":
+                    PULL["state"] = "done"
+        if PULL["state"] != "done":
+            raise OSError("the download stopped before it finished")
+    except Exception as e:
+        PULL.update(state="failed", error=str(e))
+
+
+def _second_opinion(app):
+    import model_labels
+    import server
+    name = "Second opinion AI model"
+    cfg = app.home.cfg()
+    names = model_labels.installed(server.ollama_url(cfg))
+    if model_labels.second(names):
+        return ok("second", name, "Installed (%s). Automatic asks it when the usual models fail the same step twice."
+                  % model_labels.second(names))
+    if PULL["state"] == "downloading":
+        pct = (" %d%%" % (100 * PULL["done"] / PULL["total"])) if PULL["total"] else ""
+        return ok("second", name, "Downloading %s...%s It keeps going if you close this. Check again later."
+                  % (PULL["model"], pct))
+    extra = " The last download didn't finish: %s." % PULL["error"] if PULL["state"] == "failed" else ""
+    return dict(ok("second", name, "Not installed. Gemma 4 (26B, from Google) gives a second opinion from a different "
+                                   "maker when the usual models get stuck. About 18 GB to download.%s" % extra),
+                fix="Download it (18 GB)", fix_id="second")
+
+
 def _renamed(app):
     import migrate
     try:
@@ -171,7 +217,7 @@ def _claude(app):
     return warn("claude", "Claude (cloud AI)", st["text"], "Check the internet connection, then look again.")
 
 
-CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _scan_data, _secrets, _claude, _renamed]
+CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _scan_data, _secrets, _second_opinion, _claude, _renamed]
 
 
 def migrate_secrets(app):
@@ -204,6 +250,16 @@ def fix(app, check_id, emit):
         moved = migrate_secrets(app)
         return ("Moved into the Mac's Keychain: %s." % ", ".join(moved)) if moved else \
             "Nothing more to move (or the Keychain said no)."
+    if check_id == "second":
+        import model_labels
+        import server
+        import threading
+        if PULL["state"] == "downloading":
+            return "It's already downloading."
+        url = server.ollama_url(app.home.cfg())
+        threading.Thread(target=_pull, args=(url, model_labels.SECOND_OPINION_MODEL), daemon=True).start()
+        return ("Started downloading %s (about 18 GB) through Ollama. It keeps going in the background; press Check "
+                "again to see how far it is." % model_labels.SECOND_OPINION_MODEL)
     if check_id == "scans":
         import server
         gone = sum(server.clear_old_snapshots(cfg) for _, cfg in app.registry.all())

@@ -3296,8 +3296,10 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             fast, strong = model_labels.picks([m["name"] for m in models])
             if fast:
                 lab = dict((m["name"], m["label"]) for m in models)
+                sec = model_labels.second([m["name"] for m in models])
                 why = model_labels.AUTO_LABEL[1] + (" Fast: %s. Stronger: %s." % (lab.get(fast), lab.get(strong))
-                                                     if strong != fast else "")
+                                                     if strong != fast else "") + (
+                    " When both are stuck: %s." % lab.get(sec) if sec else "")
                 models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],
                                   "why": why})
             self.json({"current": cfg["ollama_model"], "models": models, "error": err})

@@ -15,6 +15,8 @@ import urllib.request
 LOCAL = [
     ("35b-a3b", "Everyday help", "Fast and smart. Good for most questions, checks and fixes."),
     ("27b", "Hard problems and building", "Slower, but thinks harder. Use it for tricky crashes and building apps."),
+    ("gemma", "Second opinion", "A different maker's model (Google). Automatic asks it when the usual models get "
+                                "stuck on the same step twice."),
     ("coder", "Writing code", "Made for reading and writing code."),
     ("vl", "Reading pictures", "Can look at screenshots and photos."),
     ("vision", "Reading pictures", "Can look at screenshots and photos."),
@@ -73,6 +75,8 @@ AUTO_LABEL = ("Automatic", "Uses the fast model for questions and lookups, and t
 # Which local model does which job, by text in its name (first one installed wins). Edit to change the picks.
 FAST = ["35b-a3b", "30b-a3b", "a3b", "14b", "12b", "8b", "7b"]
 STRONG = ["27b", "32b", "70b", "35b", "30b", "coder"]
+SECOND = ["gemma4:26b", "gemma4", "gemma"]      # a different maker, for when the usual models are stuck
+SECOND_OPINION_MODEL = "gemma4:26b"             # what 🩺 Setup offers to download (about 18 GB)
 HARD_WORDS = re.compile(r"(?i)\b(build|compile|rebuild|crash|debug|fix|repair|broken|error|fail|plan|update|"
                         r"upgrade|install|source|code|makefile|cmake|patch)\w*")
 
@@ -101,9 +105,18 @@ def _first(names, wants, avoid=()):
     return None
 
 
+def second(names):
+    """The second-opinion model, if one is installed."""
+    for w in SECOND:
+        for n in names:
+            if w in n.lower():
+                return n
+    return None
+
+
 def picks(names):
-    """(fast model, strong model) from what's installed."""
-    chat = [n for n in names if not any(x in n.lower() for x in ("embed",))]
+    """(fast model, strong model) from what's installed. The second-opinion model is kept for when they're stuck."""
+    chat = [n for n in names if not any(x in n.lower() for x in ("embed",)) and n != second(names)]
     fast = _first(chat, FAST) or (chat[0] if chat else None)
     strong = _first(chat, STRONG, avoid=(fast,)) or fast
     return fast, strong
@@ -120,7 +133,10 @@ def needs_strong(messages):
             break
         if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
             return True, "carrying out a plan"
-    if any(re.search(r"(?i)\b(failed|error)\b", t[:400]) for t in tools[:4]):
+    fails = sum(1 for t in tools[:6] if re.search(r"(?i)\b(failed|error)\b", t[:400]))
+    if fails >= 2:
+        return "second", "stuck: a second opinion"
+    if fails:
         return True, "a step failed"
     m = HARD_WORDS.search(last_user)
     if m:
@@ -130,9 +146,14 @@ def needs_strong(messages):
 
 def choose(ollama_url, messages):
     """The model to use with Automatic on, and a short label like "Everyday help: a quick question"."""
-    fast, strong = picks(installed(ollama_url))
+    names = installed(ollama_url)
+    fast, strong = picks(names)
     hard, why = needs_strong(messages)
     model = strong if hard else fast
+    if hard == "second":
+        model = second(names) or strong
+        if model == strong:
+            why = "a step failed twice"
     if not model:
         return None, ""
     return model, "%s model (%s)" % (local(model)[0], why)

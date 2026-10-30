@@ -212,6 +212,9 @@ new, the AI researches it and saves what it learned, so next time it already kno
 - **Automatic** (recommended): uses the fast model (Everyday help) for questions and lookups, and switches to the
   stronger one (Hard problems and building) for builds, fixes, updates, plans, or after a step fails. The progress
   bar shows which one it picked and why.
+- **Second opinion** (Gemma 4 from Google, about 18 GB): when the usual models fail the same step twice, Automatic
+  asks this one, since a model from a different maker often sees the problem differently. Download it with one
+  button in 🩺 Setup, or in Terminal with `ollama pull gemma4:26b`.
 - Or pick a model yourself, for example **Everyday help** or **Hard problems and building**. A short line under the
   menu says what it's good for.
 
