@@ -291,12 +291,16 @@ border:2px solid var(--line)}
 .att-probs{margin:6px 0;padding-left:18px;font-size:13.5px}.att-probs li.error b{color:var(--bad)}.att-probs li.warning b{color:var(--warn)}
 .att-src{font-size:12.5px;color:var(--mute);margin-bottom:8px}.att-acts{gap:6px;display:flex;flex-wrap:wrap}
 button.danger{color:var(--bad);border-color:var(--bad)}
+.cd-list{margin:8px 0}.cd-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px;color:inherit;margin:0}
+.cd-row input{width:auto;margin-top:3px}.cd-size{color:var(--mute);font-weight:400;font-size:12.5px}.cd-what{color:var(--mute);font-size:12.5px}
+button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
 </style></head><body>
 <header>
   <a href="#/" title="All devices"><h1>Patchbay</h1></a>
   <span id="crumb"></span>
   <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a><a id="tab-attention">Needs attention <span id="att-n" class="att-n" hidden></span></a></nav>
   <span id="info"></span>
+  <button id="clear-btn" type="button" hidden title="Delete what Patchbay keeps on this Mac for this device">🗑 Clear data</button>
   <button id="activity-btn" type="button" title="Everything Patchbay did, with Undo">🕘 Activity</button>
   <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
   <button id="reset" type="button" hidden>New chat</button>
@@ -414,13 +418,13 @@ function route(){
   clearInterval(bkTimer);
   clearInterval(homeTimer);
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
-  if(!m){view='home';const was=cur;cur=HOMECHAT;$('home').classList.add('on');$('tabs').hidden=true;$('reset').hidden=false;
+  if(!m){view='home';const was=cur;cur=HOMECHAT;$('clear-btn').hidden=true;$('home').classList.add('on');$('tabs').hidden=true;$('reset').hidden=false;
     $('homechat').appendChild($('chat'));$('chat').classList.add('on');
     $('crumb').innerHTML='';$('info').textContent='';loadHome(false);homeTimer=setInterval(()=>loadHome(false),15000);
     if(was!==HOMECHAT)loadChat();return}
   document.body.insertBefore($('chat'),$('files'));
   const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
-  $(view).classList.add('on');$('tabs').hidden=false;$('reset').hidden=view!=='chat';
+  $(view).classList.add('on');$('tabs').hidden=false;$('clear-btn').hidden=false;$('reset').hidden=view!=='chat';
   for(const v of ['chat','files','backups','apps','attention']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
   if(changed){loadInfo();loadChat();bkOptsLoaded=false;attCount()}
   if(view==='files')openFiles(changed);
@@ -430,6 +434,32 @@ function route(){
   else $('t').focus();
 }
 window.addEventListener('hashchange',route);
+
+/* ---------- Clear data: what Patchbay keeps on the Mac for a device (never the device itself) */
+async function clearData(all){
+  let j;try{j=await getJSON('/api/cleardata?'+(all?'all=1':'device='+enc(cur)))}catch(e){return alert(e.message)}
+  const word=all?'Clear everything':cur, devs=j.devices;
+  const tot=k=>devs.reduce((s,d)=>s+(d.parts.find(p=>p.id===k)||{bytes:0}).bytes,0);
+  const anyPw=devs.some(d=>d.password.saved), canRemove=devs.some(d=>d.can_remove);
+  modal('<h3>🗑 '+(all?'Clear everything Patchbay keeps on this Mac':'Clear '+esc(cur)+'\'s data on this Mac')+'</h3>'+
+    '<div class="msgline">This deletes files on '+esc(info.computer||'this Mac')+' only. Nothing on '+(all?'your devices':esc(cur))+' is touched. It can\'t be undone.</div>'+
+    (all?'<div style="font-size:13px;margin:4px 0 8px">Devices: '+devs.map(d=>esc(d.device)+' ('+esc(d.total)+')').join(', ')+'</div>':'')+
+    '<div class="cd-list">'+j.parts.map(p=>'<label class="cd-row"><input type="checkbox" class="cd-part" value="'+p.id+'"'+(p.default?' checked':'')+'>'+
+      '<span><b>'+esc(p.label)+'</b> <span class="cd-size">'+esc(size(tot(p.id)))+'</span><br><span class="cd-what">'+esc(p.what)+'</span></span></label>').join('')+
+    (anyPw?'<label class="cd-row"><input type="checkbox" id="cd-pw"><span><b>Saved password</b><br><span class="cd-what">Removes the login password Patchbay saved (in the Mac\'s Keychain). Leave it unticked to keep it.</span></span></label>':'')+
+    (canRemove?'<label class="cd-row"><input type="checkbox" id="cd-rm"><span><b>Remove '+(all?'the devices':'the device')+' from Patchbay</b><br><span class="cd-what">'+(all?'Each device':'It')+' disappears from the home screen. Leave unticked to keep '+(all?'them':'it')+' and start fresh.'+(devs.some(d=>!d.can_remove)?' (Your first device stays, since Patchbay\'s main settings belong to it.)':'')+'</span></span></label>':'')+
+    '</div><div class="row confirm">Type <b>'+esc(word)+'</b> to confirm: <input id="cd-typed" autocomplete="off"><button class="primary danger-bg" id="cd-ok">Delete</button><button id="cd-no">Cancel</button></div><div id="cd-msg" class="msgline"></div>',true);
+  $('cd-no').onclick=closeModal;$('cd-typed').focus();
+  const go=async()=>{if($('cd-typed').value.trim()!==word){$('cd-typed').style.borderColor='var(--bad)';return}
+    const parts=[...document.querySelectorAll('.cd-part')].filter(x=>x.checked).map(x=>x.value);
+    const pw=!!($('cd-pw')&&$('cd-pw').checked), rm=!!($('cd-rm')&&$('cd-rm').checked);
+    if(!parts.length&&!pw&&!rm){$('cd-msg').textContent='Tick at least one thing to delete.';return}
+    $('cd-ok').disabled=true;$('cd-ok').textContent='Deleting…';
+    try{const r=await postJSON('/api/cleardata',{all:!!all,device:cur,parts,password:pw,remove:rm,typed:$('cd-typed').value});
+      closeModal();alert(r.message);if(rm||all)location.hash='#/';else{loadChat();attCount()}}
+    catch(e){$('cd-ok').disabled=false;$('cd-ok').textContent='Delete';$('cd-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}};
+  $('cd-ok').onclick=go;$('cd-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
+$('clear-btn').onclick=()=>clearData(false);
 
 /* ---------- Needs attention: files a scan found problems in */
 let ATT=[];
@@ -962,9 +992,12 @@ async function openSetup(msg){
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
     '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
     '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
+    '<h3 style="margin-top:14px">Start over</h3><div style="font-size:13.5px">Delete what Patchbay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
+    '<div class="row" style="margin-top:6px"><button id="sc-clearall" class="danger">Clear everything…</button></div>'+
     '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
   const say=t=>$('sc-msg').innerHTML=t;
+  $('sc-clearall').onclick=()=>{closeModal();clearData(true)};
   document.querySelectorAll('.sc-fix').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='Working…';
     try{const r=await postJSON('/api/selfcheck/fix',{id:b.dataset.id});openSetup(r.message)}catch(e){b.disabled=false;b.textContent='Try again';say('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}});
   const ap=$('sc-app');if(ap)ap.onclick=async()=>{ap.disabled=true;ap.textContent='Building the app… (about a minute)';

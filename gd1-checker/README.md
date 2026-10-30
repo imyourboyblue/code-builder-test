@@ -461,3 +461,11 @@ what to do on the device's **Needs attention** tab:
 Since there are no spare copies, run a backup (Backups tab) when you want something to restore from. Old scan copies
 from before this change are listed in 🩺 Setup with a **Delete old scan copies** button. It keeps a good copy of any
 file that's on Needs attention.
+
+## Clear a device's data (or everything)
+
+**🗑 Clear data** (at the top of a device's page) deletes what Patchbay keeps on the Mac for that device. Nothing on
+the device is touched. Tick what goes: backups, scan results, change history and Undo, chats, device info and picture.
+Two choices start unticked and you pick them each time: **Saved password** (removes it from the Keychain) and
+**Remove the device from Patchbay**. Type the device name to confirm. 🩺 Setup → **Clear everything…** does the
+same for all devices at once; type "Clear everything" to confirm.

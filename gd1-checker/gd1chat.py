@@ -53,6 +53,7 @@ import tlsfix  # https certificates for python.org Python on a Mac (must come fi
 import gd1check as core
 import backup
 import claude
+import cleardata
 import collections
 import mac_app
 import netscan
@@ -3256,6 +3257,15 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
             self.json(APP.claude.public())
+        elif path == "/api/cleardata":
+            names = ([cfg["device_name"] for _, cfg in APP.registry.all()] if q.get("all") == "1"
+                     else [APP.device(q.get("device")).cfg()["device_name"]])
+            out = []
+            for n in names:
+                f = APP.registry.path_for(n)
+                out.append(cleardata.summary(APP.device(n).cfg(), f, APP.config_path))
+            self.json({"devices": out, "parts": [{"id": k, "label": v[0], "what": v[1], "default": v[2]}
+                                                 for k, v in cleardata.PARTS.items()]})
         elif path == "/api/attention":
             cfg = APP.device(q.get("device")).cfg()
             items = []
@@ -3452,6 +3462,38 @@ value="1"><button>Restart Patchbay</button></form>""" % (
                 raise ToolError("Wait for the current request to finish first.")
             st.delete_chat(data.get("id"))
             self.json({"ok": True})
+        elif path == "/api/cleardata":
+            everything = bool(data.get("all"))
+            names = ([cfg["device_name"] for _, cfg in APP.registry.all()] if everything
+                     else [APP.device(data.get("device")).cfg()["device_name"]])
+            want = "Clear everything" if everything else names[0]
+            if (data.get("typed") or "").strip() != want:
+                raise ToolError("Type %s exactly to confirm." % want)
+            if BUSY.locked():
+                raise ToolError("Wait for the chat to finish what it's doing (or press Stop) first.")
+            for n in names:
+                job = APP.backups.get(n)
+                if job and job.status().get("running"):
+                    raise ToolError("A backup or check of %s is running. Stop it first." % n)
+            parts = [p for p in (data.get("parts") or []) if p in cleardata.PARTS]
+            report = []
+            for n in names:
+                f = APP.registry.path_for(n)
+                cfg = APP.device(n).cfg()
+                done = cleardata.clear(cfg, f, APP.config_path, parts, bool(data.get("password")),
+                                       bool(data.get("remove")))
+                with APP.lock:
+                    APP.states.pop(str(f), None)      # forget the open chat and anything waiting
+                    APP.backups.pop(n, None)
+                report.append("%s: %s" % (n, ", ".join(done) or "nothing"))
+            if everything and "chats" in parts:
+                home = Path(os.path.expanduser(APP.home.cfg()["data_folder"])) / "_home" / "chats"
+                shutil.rmtree(str(home), ignore_errors=True)
+                APP.home.messages = []
+                report.append("Home chats")
+            activity_note = "Cleared on the Mac: " + "; ".join(report)
+            print(activity_note)
+            self.json({"ok": True, "message": activity_note})
         elif path == "/api/attention/keep":
             cfg = APP.device(data.get("device")).cfg()
             try:
