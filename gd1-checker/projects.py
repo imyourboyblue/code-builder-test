@@ -220,9 +220,41 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
     return code, "\n".join(lines)
 
 
+def cmake_build_dirs(command):
+    """The build folders a command configures with cmake (-B dir or -Bdir)."""
+    return [m.group(1) for m in re.finditer(r"-B\s*([^\s;&|]+)", command or "")]
+
+
+def clear_cmake_cache(root, command):
+    """Remove the saved cmake settings in the build folders, so the next configure starts fresh. Returns what went."""
+    gone = []
+    for d in cmake_build_dirs(command):
+        b = (root / d).resolve()
+        if b == root or root not in b.parents:
+            continue
+        for name in ("CMakeCache.txt", "CMakeFiles"):
+            f = b / name
+            if f.is_dir():
+                shutil.rmtree(str(f), ignore_errors=True)
+                gone.append(str(f))
+            elif f.exists():
+                f.unlink()
+                gone.append(str(f))
+    return gone
+
+
 def run_build(pr, emit, stop=None):
-    """Run the project's build command in its folder."""
-    code, out = run_shell(folder_of(pr), pr["build"], emit, stop=stop)
+    """Run the project's build command in its folder. If cmake's setup step fails, the build folder's old saved
+    settings (often from an earlier try with different tools) are cleared and it's tried once more."""
+    root = folder_of(pr)
+    code, out = run_shell(root, pr["build"], emit, stop=stop)
+    if code != 0 and "Configuring incomplete" in out and not (stop is not None and stop.is_set()):
+        gone = clear_cmake_cache(root, pr["build"])
+        if gone:
+            emit({"type": "note", "text": "The setup step failed, so I cleared the build folder's old cmake settings "
+                                          "and I'm trying once more."})
+            code, out2 = run_shell(root, pr["build"], emit, stop=stop)
+            out = ("(First try failed; cleared %s and tried again. Second try:)\n" % ", ".join(gone)) + out2
     built = None
     if pr.get("output"):
         _, built = inside(pr, pr["output"])
@@ -279,6 +311,18 @@ def find_brew():
         if Path(cand).exists():
             return cand
     return shutil.which("brew")
+
+
+def dkp_installed(package):
+    """The installed version of a devkitPro package, or None."""
+    pac = find_pacman()
+    if not pac:
+        return None
+    try:
+        r = subprocess.run([pac, "-Q", package], capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
 
 
 def install_plan(manager, packages, update_all=False):

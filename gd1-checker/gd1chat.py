@@ -787,6 +787,12 @@ def pe(fn, *args):
         raise ToolError(str(e))
 
 
+def is_switch(cfg):
+    words = " ".join(str(x) for x in (cfg.get("device_name"), cfg.get("about"),
+                                      APP.registry.firmware(cfg) if APP else "")).lower()
+    return "switch" in words or "atmosph" in words
+
+
 @tool("set_project",
       "Save (or update) a source code project on the Mac for this device: where its folder is, the command that "
       "builds it, the file the build makes, and where that file goes on the device. Only edits the settings on the Mac.",
@@ -796,6 +802,13 @@ def pe(fn, *args):
        "device_path": dict(S, description="Where the built file goes on the device, e.g. /switch/mygame/mygame.nro")},
       ["name", "folder"])
 def t_set_project(st, emit, a):
+    build = (a.get("build") or "").strip()
+    if is_switch(st.cfg()) and re.match(r"^(\S*/)?cmake\s+(?!--build)", build) and "CMAKE_TOOLCHAIN_FILE" not in build:
+        # Plain cmake builds for the Mac, and can't find Switch libraries like switch-zlib.
+        build = re.sub(r"^(\S*/)?cmake\s+", "aarch64-none-elf-cmake ", build)
+        emit({"type": "note", "text": "Switch builds configure with devkitPro's aarch64-none-elf-cmake, so I used "
+                                      "that instead of plain cmake."})
+        a = dict(a, build=build)
     pr = pe(projects.make_project, a.get("name"), a.get("folder"), a.get("build"), a.get("output"), a.get("device_path"))
     projects.save(st.config_path, pr)
     return "Saved project %s. Build command: %s. Built file: %s. Goes to: %s" % (
@@ -2146,7 +2159,7 @@ def _run_mac_step(st, cfg, p, emit):
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't run it: %s" % e)
         result = "The command %s %s (exit code %d)." % (p["command"][:80], "worked" if code == 0 else "failed", code)
-        return show_output(emit, result, code, out)
+        return show_output(emit, result, code, out, p["command"])
     if p["kind"] == "project_edit":
         try:
             bk = projects.write_file(cfg, pr, p["remote"], Path(p["source"]).read_text("utf-8"))
@@ -2155,6 +2168,12 @@ def _run_mac_step(st, cfg, p, emit):
         result = "Saved %s in project %s.%s" % (p["remote"], pr["name"],
                                                 " The old version was backed up to %s." % bk if bk else " (new file)")
         return result, "Result: " + result
+    if is_switch(cfg) and re.match(r"^(\S*/)?cmake\s+(?!--build)", pr["build"]) and \
+            "CMAKE_TOOLCHAIN_FILE" not in pr["build"]:
+        pr = dict(pr, build=re.sub(r"^(\S*/)?cmake\s+", "aarch64-none-elf-cmake ", pr["build"]))
+        projects.save(st.config_path, pr)
+        emit({"type": "note", "text": "This project was set to build with plain cmake, which builds for the Mac. I "
+                                      "switched it to devkitPro's aarch64-none-elf-cmake for the Switch."})
     emit({"type": "status", "text": "Building %s..." % pr["name"]})
     try:
         code, out, built = projects.run_build(pr, emit, STOP)
@@ -2172,7 +2191,7 @@ def _run_mac_step(st, cfg, p, emit):
                       % pr["output"]
     else:
         result = "The build of %s failed (exit code %d)." % (pr["name"], code)
-    return show_output(emit, result, code, out)
+    return show_output(emit, result, code, out, pr["build"])
 
 
 ERROR_LINE = re.compile(r"(?i)(\berror\b|command not found|not found|no such file|fatal|cannot|could not|failed|"
@@ -2197,7 +2216,7 @@ def first_error(out):
     return ""
 
 
-def show_output(emit, result, code, out):
+def show_output(emit, result, code, out, command=""):
     """Shows the output on the page (open, so it's easy to copy) and gives the AI the same text."""
     tail = output_tail(out)
     err = first_error(out) if code != 0 else ""
@@ -2211,8 +2230,17 @@ def show_output(emit, result, code, out):
                   out or "")
     if code != 0 and m:
         lib = (m.group(1) or m.group(2) or m.group(3) or "").lower() or "?"
-        err += (". A library is missing: for a console build install devkitPro's version (for example switch-%s) with "
-                "propose_install_packages" % lib)
+        have = projects.dkp_installed("switch-" + lib)
+        wrapper = bool(re.search(r"\b[a-z0-9_]+-none-[a-z]+-cmake\b|\b[a-z0-9_]+-[a-z]+-cmake\b", command or ""))
+        if have:
+            err += (". devkitPro's %s is already installed, so installing or updating won't help. The build must "
+                    "configure with aarch64-none-elf-cmake (not plain cmake)%s, in a fresh build folder (Patchbay clears old cmake settings by itself after a failed setup). If it still fails, \
+add -DZLIB_ROOT=/opt/devkitpro/portlibs/switch"
+                    % (have, " - this build command uses plain cmake, fix it with set_project" if command and not
+                       wrapper else ""))
+        else:
+            err += (". A library is missing: for a console build install devkitPro's version (for example switch-%s) "
+                    "with propose_install_packages" % lib)
     summary = result + (" First error: " + err if err else "")
     emit({"type": "tool_result", "name": "output", "summary": summary, "text": tail or "(no output)", "open": code != 0})
     return summary, "%s\nOutput (last lines):\n%s" % (summary, tail or "(no output)")
