@@ -50,8 +50,13 @@ font-weight:700;color:#fff;position:relative}
 
 /* chat */
 #chat{flex-direction:column}
-#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;max-width:900px;width:100%;margin:0 auto}
-.msg{padding:10px 14px;border-radius:12px;max-width:85%;white-space:pre-wrap;word-wrap:break-word}
+#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px;max-width:900px;width:100%;margin:0 auto}
+.msg{padding:10px 14px;border-radius:12px;max-width:85%;white-space:pre-wrap;word-wrap:break-word;position:relative}
+.cp{position:absolute;right:8px;bottom:-12px;font:11px system-ui,sans-serif;padding:1px 8px;border-radius:7px;
+  border:1px solid var(--line);background:var(--card);color:var(--mute);cursor:pointer;opacity:0;transition:opacity .15s}
+.msg:hover>.cp,.cp:focus,.cp.done{opacity:1}
+pre{position:relative}pre>.cp{top:4px;bottom:auto;right:4px}pre:hover>.cp{opacity:1}
+@media (hover:none){.cp{opacity:.75}}
 .me{align-self:flex-end;background:var(--me);color:var(--meink)}
 .ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
 .err{align-self:flex-start;color:var(--bad);border:1px solid var(--bad);background:var(--card)}
@@ -312,8 +317,18 @@ $('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});locatio
 const log=$('log'),t=$('t'),send=$('send');
 function md(s){return esc(s).replace(/```[\w-]*\n?([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>')
   .replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')}
-function add(cls,html){const d=document.createElement('div');d.className=cls;d.innerHTML=html;log.appendChild(d);
-  log.scrollTop=log.scrollHeight;return d}
+function add(cls,html,raw){const d=document.createElement('div');d.className=cls;d.innerHTML=html;
+  d.querySelectorAll('pre').forEach(pr=>copyBtn(pr,pr.textContent));
+  if(/\bmsg\b/.test(cls))copyBtn(d,raw!=null?raw:d.textContent);
+  log.appendChild(d);log.scrollTop=log.scrollHeight;return d}
+function copyBtn(el,text){const b=document.createElement('button');b.type='button';b.className='cp';b.textContent='Copy';
+  b.title='Copy to the clipboard';b.onclick=async ev=>{ev.stopPropagation();ev.preventDefault();
+    const ok=await copyText(text);b.textContent=ok?'Copied':'Couldn\'t copy';b.classList.add('done');
+    setTimeout(()=>{b.textContent='Copy';b.classList.remove('done')},1500)};el.appendChild(b)}
+async function copyText(text){ // the clipboard API only works on https or this Mac; the laptop (plain http) uses the old way
+  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}
+  const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';
+  document.body.appendChild(ta);ta.select();let ok=false;try{ok=document.execCommand('copy')}catch(e){}ta.remove();return ok}
 function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
   if(l.startsWith('+')&&!l.startsWith('+++'))return '<span class="add">'+e+'</span>';
   if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
@@ -341,7 +356,7 @@ function reachMsg(e){return location.protocol==='file:'?'This page was opened as
   'Can\'t reach Patchbay ('+esc(e.message)+'). Is python3 patchbay.py running in Terminal on the Mac Studio?'}
 function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
   const keep=()=>{if(ctx)log.appendChild(ctx.status)};
-  if(ev.type==='user')add('msg me',esc(ev.text));
+  if(ev.type==='user')add('msg me',esc(ev.text),ev.text);
   else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
   else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
   else if(ev.type==='tool'){if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
@@ -349,9 +364,9 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
       .map(([k,v])=>k+': '+String(v).slice(0,80)).join(', ');ctx.status.textContent='Using '+ev.name+(a?' ('+a+')':'')+'...'}}
   else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
     add('step','<details><summary>✓ '+esc(ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
-  else if(ev.type==='note'){add('msg ai',md(ev.text));keep()}
-  else if(ev.type==='answer')add('msg ai',md(ev.text||'(no answer)'));
-  else if(ev.type==='error')add('msg err',esc(ev.text));
+  else if(ev.type==='note'){add('msg ai',md(ev.text),ev.text);keep()}
+  else if(ev.type==='answer')add('msg ai',md(ev.text||'(no answer)'),ev.text||'');
+  else if(ev.type==='error')add('msg err',esc(ev.text),ev.text);
   else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
   else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
   else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
