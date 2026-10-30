@@ -189,6 +189,39 @@ def build_env():
     return env
 
 
+CONSOLE_MARKS = {"switch": ("switch_rules", "libnx", "aarch64-none-elf", "/portlibs/switch"),
+                 "3ds": ("3ds_rules", "libctru", "/portlibs/3ds"),
+                 "wiiu": ("wut_rules", "wiiu_rules", "/portlibs/wiiu")}
+
+
+def console_of(folder):
+    """Which console a project builds for ("switch", "3ds", "wiiu"), from its Makefile/CMakeLists, or None."""
+    text = ""
+    for name in ("Makefile", "makefile", "CMakeLists.txt"):
+        try:
+            text += (Path(folder) / name).read_text(errors="replace")[:200000]
+        except OSError:
+            pass
+    for console, marks in CONSOLE_MARKS.items():
+        if any(m in text for m in marks):
+            return console
+    return None
+
+
+def _console_pkgconfig(cwd, env):
+    """For console projects, make pkg-config find devkitPro's libraries (like switch-freetype) instead of the
+    Mac's. Without this, Makefiles that call plain pkg-config fail with "Package freetype2 was not found"."""
+    console = console_of(cwd)
+    if not console:
+        return ""
+    dkp = env.get("DEVKITPRO") or "/opt/devkitpro"
+    pc = "%s/portlibs/%s/lib/pkgconfig" % (dkp, console)
+    if not Path(pc).is_dir():
+        return ""
+    env["PATCHBAY_PKGCONFIG"] = pc
+    return 'export PKG_CONFIG_LIBDIR="$PATCHBAY_PKGCONFIG"; export PKG_CONFIG_PATH="$PATCHBAY_PKGCONFIG"; '
+
+
 def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
     """Run one command in a folder on the Mac, showing its output live. Returns (exit code, output)."""
     shell = os.environ.get("SHELL") or "/bin/zsh"
@@ -196,8 +229,10 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
         shell = "/bin/sh"
     started = time.time()
     # No keyboard input: a command that asks for a password (like sudo) stops instead of waiting forever.
-    proc = subprocess.Popen([shell, "-lc", 'export PATH="$PATCHBAY_PATH:$PATH"; ' + command], cwd=str(cwd),
-                            env=build_env(), stdin=subprocess.DEVNULL,
+    env = build_env()
+    pkgconf = _console_pkgconfig(cwd, env)
+    proc = subprocess.Popen([shell, "-lc", 'export PATH="$PATCHBAY_PATH:$PATH"; ' + pkgconf + command],
+                            cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     lines = []
     try:

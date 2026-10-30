@@ -2698,7 +2698,11 @@ def show_output(emit, result, code, out, command=""):
         lib = projects.dkp_name(lib)          # e.g. freetype2 -> switch-freetype
         have = projects.dkp_installed(lib)
         wrapper = bool(re.search(r"\b[a-z0-9_]+-none-[a-z]+-cmake\b|\b[a-z0-9_]+-[a-z]+-cmake\b", command or ""))
-        if have:
+        if have and re.search(r"pkg-config search path|No package '", out or ""):
+            err += (". devkitPro's %s is already installed. Patchbay now points pkg-config at devkitPro's libraries "
+                    "by itself for console projects, so just run the build again (propose_build). Don't add "
+                    "PKG_CONFIG_PATH to the command" % have)
+        elif have:
             err += (". devkitPro's %s is already installed, so installing or updating won't help. The build must "
                     "configure with aarch64-none-elf-cmake (not plain cmake)%s, in a fresh build folder (Patchbay clears old cmake settings by itself after a failed setup). If it still fails, \
 add -DZLIB_ROOT=/opt/devkitpro/portlibs/switch"
