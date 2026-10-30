@@ -186,11 +186,14 @@ def _make_app(native=True):
         "NSLocalNetworkUsageDescription": "PatchBay finds and talks to the devices on your home network.",
     }
     if icon:
-        info["CFBundleIconFile"] = "PatchBay"
+        info["CFBundleIconFile"] = ICON_NAME     # must match the file name exactly, or macOS shows a blank icon
     with open(APP_DIR / "Contents" / "Info.plist", "wb") as f:
         plistlib.dump(info, f)
     (res / "patchbay-build.json").write_text(__import__("json").dumps(dict(_stamp(), native=ok, note=note)))
-    for cmd in (["/usr/bin/codesign", "--force", "--deep", "-s", "-", str(APP_DIR)], ["/usr/bin/touch", str(APP_DIR)]):
+    lsregister = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/"
+                  "lsregister")
+    for cmd in (["/usr/bin/codesign", "--force", "--deep", "-s", "-", str(APP_DIR)], ["/usr/bin/touch", str(APP_DIR)],
+                [lsregister, "-f", str(APP_DIR)]):     # tell macOS the icon changed
         try:   # an ad-hoc signature so Apple silicon Macs run it; touch so Finder notices the change
             subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError):
@@ -229,14 +232,21 @@ def refresh_app():
 
 # ---------------------------------------------------------------- the app icon
 
-ICON_VERSION = 3
+ICON_VERSION = 4     # bumped whenever the icon or how it's stored changes, so existing apps get rebuilt
+ICON_NAME = "AppIcon"   # the .icns file in the app's Resources; Info.plist names it the same
 ICON_PNG = HERE / "macapp" / "icon.png"   # 1024x1024; drawn in macapp/icon.svg.html
 
 
 def make_icon(res_dir):
-    """Write Patchbay.icns into the app's Resources (using the Mac's own sips and iconutil). True if it worked."""
+    """Write AppIcon.icns into the app's Resources (using the Mac's own sips and iconutil). True if it worked."""
     import shutil
-    target = res_dir / "Patchbay.icns"
+    target = res_dir / (ICON_NAME + ".icns")
+    for old in res_dir.glob("*.icns"):     # an older build's icon under another name
+        if old.name != target.name:
+            try:
+                old.unlink()
+            except OSError:
+                pass
     cache = HERE / "data-cache" / ("Patchbay-icon-%d.icns" % ICON_VERSION)
     if cache.exists():
         shutil.copy2(str(cache), str(target))
