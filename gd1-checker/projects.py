@@ -427,6 +427,86 @@ def dkp_installed(package):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+# -lNAME (or NAME-config / pkg-config name) in a console project's build files -> devkitPro package (no prefix).
+# None = comes with the console's base kit (switch-dev), nothing to install.
+LINK_PACKAGES = {
+    "freetype": "freetype", "freetype2": "freetype", "harfbuzz": "harfbuzz", "png": "libpng", "png16": "libpng",
+    "libpng": "libpng", "z": "zlib", "zlib": "zlib", "jpeg": "libjpeg-turbo", "turbojpeg": "libjpeg-turbo",
+    "webp": "libwebp", "libwebp": "libwebp", "gif": "giflib", "jansson": "jansson", "curl": "curl", "bz2": "bzip2",
+    "zstd": "libzstd", "lzma": "liblzma", "archive": "libarchive", "glad": "glad", "egl": "mesa", "glesv2": "mesa",
+    "glapi": "mesa", "drm_nouveau": "libdrm_nouveau", "sdl2": "sdl2", "sdl2_ttf": "sdl2_ttf",
+    "sdl2_image": "sdl2_image", "sdl2_mixer": "sdl2_mixer", "sdl2_gfx": "sdl2_gfx", "mbedtls": "mbedtls",
+    "mbedx509": "mbedtls", "mbedcrypto": "mbedtls", "opus": "libopus", "ogg": "libogg", "vorbis": "libvorbis",
+    "vorbisfile": "libvorbis", "vorbisidec": "libvorbisidec", "mpg123": "libmpg123", "modplug": "libmodplug",
+    "flac": "flac", "physfs": "physfs", "lz4": "lz4", "config": "libconfig", "glfw3": "glfw", "glfw": "glfw",
+    "glm": "glm", "ntfs-3g": "ntfs-3g", "lwext4": "lwext4", "usbhsfs": None, "minizip": "zlib", "theora": "libtheora", "xml2": "libxml2", "lua": "lua51", "box2d": "box2d",
+    "nx": None, "m": None, "stdc++": None, "c": None, "pthread": None, "ctru": None, "citro2d": None,
+    "citro3d": None, "wut": None, "deko3d": None,
+}
+EXTRA_NEEDS = {"freetype": ["harfbuzz", "bzip2", "libpng", "zlib"]}    # freetype's settings file asks for these too
+_AVAILABLE = {}
+
+
+def dkp_available(console):
+    """Every devkitPro package name for a console (from pacman's package lists), or None if pacman can't tell."""
+    if console in _AVAILABLE:
+        return _AVAILABLE[console]
+    pac = find_pacman()
+    names = None
+    if pac:
+        try:
+            r = subprocess.run([pac, "-Slq"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+            if r.returncode == 0 and r.stdout.strip():
+                names = {x.strip() for x in r.stdout.splitlines() if x.strip()}
+        except (OSError, subprocess.SubprocessError):
+            pass
+    _AVAILABLE[console] = names
+    return names
+
+
+def needed_packages(folder):
+    """The devkitPro packages a console project's Makefile, CMakeLists.txt and CI workflows ask for.
+    Returns (console, needed, missing) or (None, [], []) for projects that aren't console builds."""
+    folder = Path(folder)
+    console = console_of(folder)
+    if not console:
+        return None, [], []
+    text = ""
+    files = [folder / n for n in ("Makefile", "makefile", "CMakeLists.txt")]
+    files += sorted((folder / ".github" / "workflows").glob("*.y*ml"))[:10]
+    for f in files:
+        try:
+            text += "\n" + f.read_text(errors="replace")[:300000]
+        except OSError:
+            pass
+    pre = console + "-"
+    wanted = []
+    # Packages the CI workflow installs by name (dkp-pacman -S switch-freetype ...): these are real names.
+    for line in re.findall(r"(?:pacman|dkp-pacman)[^\n]*?-S\w*\s+([^\n]+)", text):
+        wanted += [w for w in re.findall(r"[a-z0-9][a-z0-9_+.-]*", line.lower()) if w.startswith(pre)]
+    names = re.findall(r"(?<![\w/-])-l([A-Za-z][\w+.]*)", text)
+    names += re.findall(r"\b([a-z0-9_]+)-config\b", text)
+    names += re.findall(r"pkg_check_modules\([^)]*?\s([\w+.-]+)\)", text)
+    names += re.findall(r"find_package\((\w+)", text)
+    for n in names:
+        pkg = LINK_PACKAGES.get(n.lower(), False)
+        if pkg:
+            wanted.append(pre + pkg)
+            wanted += [pre + x for x in EXTRA_NEEDS.get(pkg, [])]
+    seen, needed = set(), []
+    for w in wanted:
+        if w not in seen:
+            seen.add(w)
+            needed.append(w)
+    avail = dkp_available(console)
+    if avail:
+        needed = [n for n in needed if n in avail]
+    if not find_pacman():
+        return console, needed, []
+    missing = [n for n in needed if not dkp_installed(n)]
+    return console, needed, missing
+
+
 def install_plan(manager, packages, update_all=False):
     """What installing packages will do, as (commands, needs_password, words for the card). Raises ProjectError."""
     pkgs = [str(x).strip() for x in (packages or []) if str(x).strip()]

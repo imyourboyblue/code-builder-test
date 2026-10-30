@@ -958,6 +958,18 @@ def t_project_edit(st, emit, a):
 def t_build(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root = pe(projects.folder_of, pr)
+    try:
+        console, needed, missing = projects.needed_packages(root)
+    except Exception:      # never let the check itself stop a build
+        console, needed, missing = None, [], []
+    if missing:
+        # Install everything the project needs in one go, instead of one failed build per library.
+        res = t_install_packages(st, emit, {"manager": "devkitpro", "packages": missing,
+                                            "reason": "%s needs these devkitPro libraries before it can build."
+                                                      % pr["name"]})
+        return ("Not built yet: the project's build files need devkitPro libraries that aren't installed (%s). "
+                "%s After the user confirms and they install, call propose_build again."
+                % (", ".join(missing), res))
     return add_pending(st, emit, "build", cfg, pr["name"], root, "",
                        "Build project %s on %s" % (pr["name"], APP.computer if APP else "the Mac"),
                        "In folder: %s\nRun: %s" % (root, pr["build"]), on_mac=True, extra_fields={"project": pr["name"]})
