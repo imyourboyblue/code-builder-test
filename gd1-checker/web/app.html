@@ -419,7 +419,7 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='tool'){endStream();if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
     ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
   else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
-    add('step','<details><summary>✓ '+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+    add('step','<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':'✓ ')+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
   else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
   else if(ev.type==='answer'){endStream();add('msg ai',md(ev.text||'(no answer)'),ev.text||'')}
   else if(ev.type==='error')add('msg err',esc(ev.text),ev.text);
@@ -458,15 +458,15 @@ function card(ev,closed){
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
-  const build=/^(In folder|Run:)/.test(ev.diff||'');
+  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages';
   const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
   if(plan)return planCard(ev,closed);
-  const label=ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const label=inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
-    '<div>'+(sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+    '<div>'+(inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(build?'Command':sets?'Changes':'Exact change')+'</summary><pre>'+(build||sets?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    (ev.diff?'<details open><summary>'+(inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre>'+(build||sets||inst?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}

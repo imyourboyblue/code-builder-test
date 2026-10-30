@@ -89,15 +89,15 @@ An .nro's program code is compiled, so it can't be edited directly. To change wh
 4. It asks to build. Click **Run the build** to run the build command (like `make`) in the project folder. The AI reads the build output and fixes any errors the same way.
 5. When the build works, it offers to install the new .nro on the device. As always, you type the device's name to confirm, and the device's current file is backed up first.
 
-To build Switch homebrew, the Mac Studio needs devkitPro installed (from devkitpro.org). If `make` works in Terminal in your project folder, it works here too.
+To build Switch homebrew, the Mac Studio needs devkitPro. You don't have to set it up by hand: the AI installs it and any packages a project needs (see below). Builds always find devkitPro's tools and Homebrew's tools (like cmake) by themselves, so you never need to `export` anything or edit shell files. Each build's last 80 lines of output show up in the chat (open, so it's easy to read or copy), with the first error line in the heading.
 
 ### Update a homebrew app for your firmware (like Chiaki)
 
 In a device's chat, click **Update a homebrew app so it works with my firmware**, or just ask in your own words, for example "Update FTPD light so it works with my firmware". You don't need to know file names or versions: the AI finds them on the device. It then does the whole job, telling you in one line what it's doing:
 
 1. It finds the app on the device from your words (apps in `/switch`, and background programs in `/atmosphere/contents`), reads the firmware and Atmosphère versions, and looks up the newest releases of Atmosphère, libnx and the app. If a newer release of the app already supports your firmware, it tells you first.
-2. It checks the build tools on the Mac Studio. If something is missing or old, it gives you one command to paste into Terminal, like `sudo dkp-pacman -Syu`. Commands that need your Mac password always go through you.
-3. It downloads the app's source code into `~/Patchbay-projects/`, runs simple setup steps, builds, reads the errors, fixes the code and builds again until it works. These steps happen on the Mac by themselves (every changed code file is backed up first). To get a card for each one again, ask "turn off automatic Mac steps".
+2. It checks the build tools on the Mac Studio. If something is missing or old, it shows an **Install** card listing the packages (for example switch-dev and switch-zlib from devkitPro, or cmake from Homebrew). Click **Install**. For devkitPro your Mac shows its own password box (the password you log in with); Patchbay never sees the password. If devkitPro isn't on the Mac at all, the same card installs it first from devkitPro's official installer. Homebrew itself is the one thing you'd install by hand, from https://brew.sh.
+3. It downloads the app's source code into `~/Patchbay-projects/`, works out the build steps from the project's real build files (Patchbay already knows the right steps for ftpd), runs simple setup steps, builds, reads the errors, fixes the code and builds again until it works. These steps happen on the Mac by themselves (every changed code file is backed up first). To get a card for each one again, ask "turn off automatic Mac steps".
 4. It installs the new file on the console. You type the device's name on a card, and the old file is backed up first. Then test it on the console (restart it for a background program).
 
 Only general things (version numbers, library names, error messages) are looked up on the web. Your code and files are never sent anywhere.

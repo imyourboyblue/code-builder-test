@@ -537,8 +537,18 @@ def t_folders(st, emit, a):
 
 AUTO_KINDS = ("get_source", "project_edit", "build")
 # Setup commands that only touch the project folder may run without a card when automatic Mac steps are on.
-SAFE_COMMAND = re.compile(r"^(git (submodule|pull|fetch|checkout|switch|status|log|tag)|cmake|make|ninja|meson|mkdir|ls)"
-                          r"\b[^;|&<>`$\\]*$")
+SAFE_PART = re.compile(r"^(\S*/)?(git (submodule|pull|fetch|checkout|switch|status|log|tag)|cmake|[a-z0-9_-]+-cmake|make|"
+                       r"ninja|meson|mkdir|ls|which|pwd)\b[^;|&<>`$\\]*$")
+
+
+class _SafeCommand:
+    """Simple setup commands (cmake, make, git pull...) joined with && count as safe; anything else needs a card."""
+    def match(self, cmd):
+        parts = [x.strip() for x in cmd.split("&&")]
+        return all(x and SAFE_PART.match(x) for x in parts)
+
+
+SAFE_COMMAND = _SafeCommand()
 
 
 def runs_by_itself(cfg, kind, extra):
@@ -556,13 +566,14 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
         emit({"type": "note", "text": "On %s: %s" % (APP.computer if APP else "the Mac", summary)})
         short, detail = run_mac_step(st, cfg, p, emit)
-        emit({"type": "note", "text": short})
+        if kind not in ("command", "build"):     # those already show their output box
+            emit({"type": "note", "text": short})
         return "Done automatically (no card needed). " + detail
     if on_mac:
         # Changes on the Mac (project files, builds): pressing Confirm is enough.
         pid = uuid.uuid4().hex[:8]
         st.pending[pid] = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
-        emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "on_mac": True,
+        emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "on_mac": True, "kind": kind,
               "typing": bool((extra_fields or {}).get("needs_typing")),
               "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
         return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must press Confirm. "
@@ -742,10 +753,24 @@ def t_nro_icon(st, emit, a):
 # ---- source projects on the Mac (the way to change what a program does, e.g. for newer firmware)
 
 def project(st, name):
+    cfg = st.cfg()
+    if not (name or "").strip() or str(name).strip().lower() in ("none", "null"):
+        # No name given: use the last project worked on, or the only one there is.
+        known = projects.all_projects(cfg)
+        last = getattr(st, "last_project", None)
+        if last and any(p["name"] == last for p in known):
+            name = last
+        elif len(known) == 1:
+            name = known[0]["name"]
+        else:
+            raise ToolError("Say which project: %s." % (", ".join(p["name"] for p in known) or
+                                                         "there are none yet (use propose_get_source or set_project)"))
     try:
-        return projects.get(st.cfg(), name)
+        pr = projects.get(cfg, name)
     except projects.ProjectError as e:
         raise ToolError(str(e))
+    st.last_project = pr["name"]
+    return pr
 
 
 def pe(fn, *args):
@@ -1255,7 +1280,7 @@ def t_get_source(st, emit, a):
 @tool("propose_command",
       "Suggest running one command in a project's folder on the Mac, e.g. a cmake setup step, 'git pull', 'git "
       "submodule update --init --recursive', or 'make clean'. Does NOT run: shows the exact command on a card the "
-      "user confirms. Commands needing sudo can't run here; give those to the user to type in Terminal.",
+      "user confirms. To install build packages, use propose_install_packages instead.",
       {"project": S, "command": S, "reason": dict(S, description="One short sentence on why")}, ["project", "command"])
 def t_command(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
@@ -1263,13 +1288,42 @@ def t_command(st, emit, a):
     if not cmd:
         raise ToolError("Give the command to run.")
     if re.search(r"(^|[;&|]\s*)sudo\b", cmd):
-        raise ToolError("Commands with sudo need the Mac password, so they can't run from the chat. Ask the user to "
-                        "type it in Terminal.")
+        raise ToolError("Don't use sudo here. To install or update build packages use propose_install_packages "
+                        "(devkitPro or Homebrew): the Mac shows its own password box. Never ask the user to type "
+                        "commands in Terminal.")
+    if re.match(r"^(\S*/)?(brew|dkp-pacman|pacman)\s+(install|upgrade|-S)", cmd):
+        raise ToolError("Use propose_install_packages to install packages (it handles the password).")
     root = pe(projects.folder_of, pr)
     return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
                        "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
                        "In folder: %s\nRun: %s" % (root, cmd), on_mac=True,
                        extra_fields={"project": pr["name"], "command": cmd})
+
+
+@tool("propose_install_packages",
+      "Install or update build packages on the Mac: devkitPro packages (switch-dev, switch-zlib, 3ds-dev...; installs "
+      "devkitPro itself first if it's missing) or Homebrew packages (cmake, pkg-config...). Shows a card; after the "
+      "user confirms, the Mac shows its own password box for devkitPro. Never tell the user to run these in Terminal.",
+      {"manager": dict(S, description="devkitpro or homebrew"),
+       "packages": {"type": "array", "items": S, "description": "Package names, e.g. [\"switch-dev\", \"switch-zlib\"]"},
+       "update_all": {"type": "boolean", "description": "Also update everything already installed (devkitPro -Syu)"},
+       "reason": dict(S, description="One short sentence on why")}, ["manager"])
+def t_install_packages(st, emit, a):
+    cfg = st.cfg()
+    manager = (a.get("manager") or "devkitpro").strip().lower().replace("devkitpro-pacman", "devkitpro")
+    manager = "homebrew" if manager in ("brew", "homebrew") else manager
+    pkgs = a.get("packages") or []
+    if isinstance(pkgs, str):
+        pkgs = pkgs.replace(",", " ").split()
+    try:
+        cmds, admin, words = projects.install_plan(manager, pkgs, bool(a.get("update_all")))
+    except projects.ProjectError as e:
+        raise ToolError(str(e))
+    note = a.get("reason") or ""
+    detail = words + ("\n\nAfter you press Confirm, your Mac asks for its own password (the one you log in with). "
+                      "Patchbay never sees it." if admin else "")
+    return add_pending(st, emit, "install_packages", cfg, words, Path.home(), note, words, detail, on_mac=True,
+                       extra_fields={"manager": manager, "packages": pkgs, "update_all": bool(a.get("update_all"))})
 
 
 @tool("read_web_page",
@@ -1475,12 +1529,18 @@ yourself, saying in one short line what you're doing at each step:
   1. prepare_homebrew_update with the user's words for the program. It finds the program, the versions, the newest \
 releases, the build tools and any source project. If a newer release of the program already supports the \
 firmware, say so first.
-  2. If the build tools are missing or old, give the user the exact Terminal commands (e.g. sudo dkp-pacman -Syu \
-for devkitPro; research other platforms' toolchains) and continue once they say it's done.
+  2. If build tools or packages are missing or old (check_build_tools), install them yourself with \
+propose_install_packages (devkitPro packages like switch-dev and switch-zlib, or Homebrew ones like cmake). The \
+Mac shows its own password box after the user confirms. Never ask the user to type commands in Terminal, and \
+never tell them to export variables or edit shell files: Patchbay sets up devkitPro and Homebrew paths itself.
   3. Get the source with propose_get_source (or use the existing project).
-  4. Read its README, Makefile or CMakeLists.txt. Use propose_command for setup steps (cmake configure, git \
-submodule update) and set_project for the build command, the built file and device_path (where find_homebrew \
-found it on the device; a background program's file is /atmosphere/contents/<id>/exefs.nsp).
+  4. Use a build recipe when find_homebrew gives one. Otherwise read the real build files (CMakeLists.txt, \
+Makefile, and the CI workflow in .github/workflows, which shows the exact commands that work); READMEs are often \
+out of date. Never invent tool names, paths or scripts: only use ones you saw in a file or tool result. For a \
+devkitPro CMake project on Switch the build is: aarch64-none-elf-cmake -S . -B build <options> && cmake --build \
+build -j8 (3DS: arm-none-eabi-cmake). For a Makefile project it's make. Put the whole build command, the built \
+file and device_path (where find_homebrew found it on the device; a background program's file is \
+/atmosphere/contents/<id>/exefs.nsp) in set_project, then propose_build.
   5. propose_build. Read the errors; fix the code with propose_project_edit (libnx renames and changed functions \
 are the usual cause on Switch; look up the library's changelog); build again until it builds cleanly.
   6. propose_install (the device's current file is backed up first). Then tell the user how to test it (restart \
@@ -1492,7 +1552,9 @@ change. The user approves it once; then do every step without stopping to ask (a
 without another card).
 - The user can drop files into the chat (logs, pictures, .nro files); their contents come with the message. \
 read_attachment reads more of a long one.
-- If something fails, say what failed in one line and what to try next.
+- If something fails, read the output (it shows the error lines), say what failed in one line, and fix it \
+yourself: install a missing package, correct the command, or edit the code. Exit code 127 means a program isn't \
+installed. A tool result starting "A confirmation card" means nothing has run yet: wait for the user's card.
 
 Scanning settings: folders %(folders)s. Writing to the device is currently %(writes)s."""
 
@@ -1658,7 +1720,7 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
@@ -1679,7 +1741,11 @@ def step_summary(name, args, result):
         stem = w[:-3].lower()
         w = PAST.get(stem, stem.capitalize() + "ed")
     doing = (w + " " + rest).strip()
-    return "%s: %s" % (doing, first[:140]) if first else doing
+    if first.startswith("A confirmation card"):
+        return "Waiting for you to confirm on the card: " + step_doing(name, args)
+    if first.startswith("Done automatically"):
+        first = first[len("Done automatically (no card needed). "):] or first
+    return "%s: %s" % (doing, first[:160]) if first else doing
 
 
 PAST = {"check": "Checked", "look": "Looked", "read": "Read", "scann": "Scanned", "search": "Searched",
@@ -1695,7 +1761,7 @@ def do_confirm(st, pid, typed, emit):
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
     if getattr(st, "home", False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
-    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan"):
+    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages"):
         if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
             raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
         del st.pending[pid]
@@ -1828,6 +1894,15 @@ def run_mac_step(st, cfg, p, emit):
         else:
             result = "Downloaded %s to %s and saved it as project %s." % (p["url"], dest, pr["name"])
         return result.splitlines()[0], "Result: " + result
+    if p["kind"] == "install_packages":
+        emit({"type": "status", "text": "Installing %s..." % (", ".join(p["packages"]) or "updates")})
+        try:
+            code, out = projects.install_packages(p["manager"], p["packages"], p["update_all"], emit, STOP)
+        except (OSError, projects.ProjectError) as e:
+            raise ToolError("Couldn't install: %s" % e)
+        result = "Installing %s %s (exit code %d)." % (", ".join(p["packages"]) or "updates",
+                                                       "worked" if code == 0 else "failed", code)
+        return show_output(emit, result, code, out)
     pr = project(st, p["project"])
     if p["kind"] == "command":
         emit({"type": "status", "text": "Running %s..." % p["command"][:60]})
@@ -1836,7 +1911,7 @@ def run_mac_step(st, cfg, p, emit):
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't run it: %s" % e)
         result = "The command %s %s (exit code %d)." % (p["command"][:80], "worked" if code == 0 else "failed", code)
-        return result, "%s Last part of its output:\n%s" % (result, out[-6000:])
+        return show_output(emit, result, code, out)
     if p["kind"] == "project_edit":
         try:
             bk = projects.write_file(cfg, pr, p["remote"], Path(p["source"]).read_text("utf-8"))
@@ -1862,7 +1937,44 @@ def run_mac_step(st, cfg, p, emit):
                       % pr["output"]
     else:
         result = "The build of %s failed (exit code %d)." % (pr["name"], code)
-    return result, "%s Last part of the build output:\n%s" % (result, out[-6000:])
+    return show_output(emit, result, code, out)
+
+
+ERROR_LINE = re.compile(r"(?i)(\berror\b|command not found|not found|no such file|fatal|cannot|could not|failed|"
+                        r"undefined reference|missing)")
+
+
+def output_tail(out, lines=80):
+    """The last lines of a command's output, plus the error lines from earlier on (so the cause isn't cut off)."""
+    rows = [l.rstrip() for l in (out or "").splitlines()]
+    tail = rows[-lines:]
+    early = [l for l in rows[:-lines] if ERROR_LINE.search(l)][-20:]
+    text = "\n".join(tail)
+    if early:
+        text = "Error lines from earlier in the output:\n" + "\n".join(early) + "\n...\nLast %d lines:\n%s" % (len(tail), text)
+    return text[-9000:]
+
+
+def first_error(out):
+    for l in (out or "").splitlines():
+        if ERROR_LINE.search(l) and not re.search(r"(?i)\b0 errors?\b|-- (looking|performing|check)", l):
+            return l.strip()[:200]
+    return ""
+
+
+def show_output(emit, result, code, out):
+    """Shows the output on the page (open, so it's easy to copy) and gives the AI the same text."""
+    tail = output_tail(out)
+    err = first_error(out) if code != 0 else ""
+    if code == 127 or "command not found" in (out or ""):
+        err = (err or "command not found") + " (exit code 127 means a program isn't installed or isn't on the PATH)"
+        if re.search(r"(-cmake|aarch64-none-elf|arm-none-eabi|dkp-|elf2nro|nacptool)", out or ""):
+            err += ". That's a devkitPro tool: install devkitPro's packages with propose_install_packages"
+        elif re.search(r"\bcmake\b", out or ""):
+            err += ". Install cmake with propose_install_packages (homebrew)"
+    summary = result + (" First error: " + err if err else "")
+    emit({"type": "tool_result", "name": "output", "summary": summary, "text": tail or "(no output)", "open": code != 0})
+    return summary, "%s\nOutput (last lines):\n%s" % (summary, tail or "(no output)")
 
 
 def do_cancel(st, pid, emit):

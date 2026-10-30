@@ -233,6 +233,24 @@ KNOWN_HOMEBREW = {
 }
 
 
+# Checked build steps for some programs, so the AI doesn't have to guess (their READMEs can be out of date).
+BUILD_RECIPES = {
+    "mtheall/ftpd": (
+        "Build recipe for ftpd (checked against its CMakeLists.txt; the README's 'make nro' is out of date). Needs "
+        "devkitPro packages switch-dev and switch-zlib, and cmake 3.30 or newer from Homebrew. Configure downloads a "
+        "few small libraries, so it needs internet.\n"
+        "  Classic (text-only) version, the one in /switch/ftpd-classic.nro:\n"
+        "    set_project build: aarch64-none-elf-cmake -S . -B build-classic -DFTPD_CLASSIC=ON "
+        "-DCMAKE_BUILD_TYPE=Release && cmake --build build-classic -j8\n"
+        "    output: build-classic/ftpd-classic.nro\n"
+        "  Full (touch screen) version, ftpd.nro: also needs switch-curl, switch-libzstd, switch-jansson, deko3d "
+        "(devkitPro) and imagemagick (Homebrew).\n"
+        "    set_project build: aarch64-none-elf-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build "
+        "-j8\n"
+        "    output: build/ftpd.nro"),
+}
+
+
 # Program ids that well-known sysmodules use, for ones without a toolbox.json name.
 KNOWN_IDS = {
     "420000000000000E": "sys-ftpd-light or sys-ftpd (probably)", "00FF0000636C6BFF": "sys-clk (probably)",
@@ -333,6 +351,8 @@ def find_homebrew(cfg, words):
             repos.append((score, len(k), repo, what))
     for score, _, repo, what in sorted(repos, reverse=True)[:3]:
         lines.append("Known source for %s: https://github.com/%s (check it with latest_release %s)" % (what, repo, repo))
+        if repo in BUILD_RECIPES and BUILD_RECIPES[repo] not in lines:
+            lines.append(BUILD_RECIPES[repo])
     if found and "/atmosphere/contents/" in found[0][2]:
         lines.append("A sysmodule's built file is usually an .nsp; it goes to %s (as exefs.nsp). The console needs a "
                      "restart to load the new one." % found[0][2])

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import subprocess
 import time
 from pathlib import Path
@@ -165,13 +166,24 @@ def write_file(cfg, pr, rel, new_text):
     return backup
 
 
+EXTRA_PATHS = ["/opt/devkitpro/tools/bin", "/opt/devkitpro/devkitA64/bin", "/opt/devkitpro/devkitARM/bin",
+               "/opt/devkitpro/devkitPPC/bin", "/opt/devkitpro/portlibs/switch/bin", "/opt/devkitpro/portlibs/3ds/bin",
+               "/opt/devkitpro/pacman/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+
+
 def build_env():
+    """The environment builds run in: devkitPro's variables and tools, and Homebrew, are always there."""
     env = dict(os.environ)
-    if "DEVKITPRO" not in env and Path("/opt/devkitpro").is_dir():
-        env["DEVKITPRO"] = "/opt/devkitpro"
-        env["DEVKITARM"] = "/opt/devkitpro/devkitARM"
-        env["DEVKITPPC"] = "/opt/devkitpro/devkitPPC"
-        env["PATH"] = "/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:" + env.get("PATH", "")
+    dkp = env.get("DEVKITPRO") or "/opt/devkitpro"
+    if Path(dkp).is_dir():
+        env["DEVKITPRO"] = dkp
+        for var, sub in (("DEVKITA64", "devkitA64"), ("DEVKITARM", "devkitARM"), ("DEVKITPPC", "devkitPPC")):
+            if (Path(dkp) / sub).is_dir():
+                env.setdefault(var, str(Path(dkp) / sub))
+    have = env.get("PATH", "").split(":")
+    add = [p for p in EXTRA_PATHS if Path(p).is_dir() and p not in have]
+    env["PATH"] = ":".join(add + have)
+    env["PATCHBAY_PATH"] = env["PATH"]
     return env
 
 
@@ -182,7 +194,8 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
         shell = "/bin/sh"
     started = time.time()
     # No keyboard input: a command that asks for a password (like sudo) stops instead of waiting forever.
-    proc = subprocess.Popen([shell, "-lc", command], cwd=str(cwd), env=build_env(), stdin=subprocess.DEVNULL,
+    proc = subprocess.Popen([shell, "-lc", 'export PATH="$PATCHBAY_PATH:$PATH"; ' + command], cwd=str(cwd),
+                            env=build_env(), stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
     lines = []
     try:
@@ -249,14 +262,95 @@ def quote(s):
 
 # ----------------------------------------------------------------- the build tools (devkitPro)
 
+DKP_INSTALLER = "https://github.com/devkitPro/pacman/releases/latest/download/devkitpro-pacman-installer.pkg"
+PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9_+.@-]{0,80}$")
+
+
+def find_pacman():
+    for cand in ("/opt/devkitpro/pacman/bin/pacman", "/usr/local/bin/dkp-pacman", "/usr/bin/dkp-pacman",
+                 "/opt/homebrew/bin/dkp-pacman"):
+        if Path(cand).exists():
+            return cand
+    return shutil.which("dkp-pacman")
+
+
+def find_brew():
+    for cand in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if Path(cand).exists():
+            return cand
+    return shutil.which("brew")
+
+
+def install_plan(manager, packages, update_all=False):
+    """What installing packages will do, as (commands, needs_password, words for the card). Raises ProjectError."""
+    pkgs = [str(x).strip() for x in (packages or []) if str(x).strip()]
+    bad = [x for x in pkgs if not PACKAGE_NAME.match(x)]
+    if bad:
+        raise ProjectError("These don't look like package names: %s" % ", ".join(bad))
+    if not pkgs and not update_all:
+        raise ProjectError("Say which packages to install (e.g. switch-dev, switch-zlib), or update_all.")
+    if manager == "homebrew":
+        brew = find_brew()
+        if not brew:
+            raise ProjectError("Homebrew isn't installed on this Mac. It's a one-time setup the user does in Terminal: "
+                               "the command is on https://brew.sh (copy it from that page). Then try again.")
+        cmds = []
+        if pkgs:
+            cmds.append("%s install %s" % (quote(brew), " ".join(pkgs)))
+        if update_all:
+            cmds.append("%s upgrade %s" % (quote(brew), " ".join(pkgs)))
+        return cmds, False, "Homebrew: " + " ".join(cmds).replace(quote(brew), "brew")
+    if manager != "devkitpro":
+        raise ProjectError("manager must be devkitpro or homebrew.")
+    pac = find_pacman()
+    cmds = []
+    if not pac:
+        if sys.platform != "darwin":
+            raise ProjectError("devkitPro isn't installed, and the automatic installer is only for macOS. See "
+                               "https://devkitpro.org/wiki/Getting_Started")
+        # devkitPro's own macOS package manager installer, from its official GitHub releases.
+        cmds.append("curl -fsSL -o /tmp/devkitpro-pacman-installer.pkg %s && installer -pkg "
+                    "/tmp/devkitpro-pacman-installer.pkg -target /" % DKP_INSTALLER)
+        pac = "/opt/devkitpro/pacman/bin/pacman"
+    cmds.append("%s -S%s --needed --noconfirm %s" % (pac, "yu" if update_all else "y", " ".join(pkgs)))
+    words = ("First install devkitPro's package manager (official installer from github.com/devkitPro). "
+             if len(cmds) > 1 else "") + "devkitPro: %s%s" % (("update everything" + (" and install" if pkgs else "")) if update_all else "install",
+                                                                (" " + ", ".join(pkgs)) if pkgs else "")
+    return cmds, True, words
+
+
+def run_admin(commands, emit, stop=None):
+    """Run commands that need the Mac password. On macOS the Mac shows its own password box (nothing is typed here)."""
+    script = "(" + " && ".join("(%s)" % c for c in commands) + ") 2>&1"
+    if sys.platform == "darwin":
+        apple = 'do shell script "%s" with administrator privileges' % script.replace("\\", "\\\\").replace('"', '\\"')
+        emit({"type": "status", "text": "Waiting for the Mac's password box..."})
+        command = "osascript -e %s" % quote(apple)
+    elif os.geteuid() == 0:
+        command = script
+    else:
+        command = "sudo -n sh -c %s" % quote(script)
+    code, out = run_shell(Path.home(), command, emit, timeout=60 * 60, stop=stop)
+    if code != 0 and "-128" in out:
+        out += "\n(The password box was cancelled, so nothing was installed.)"
+    return code, out
+
+
+def install_packages(manager, packages, update_all, emit, stop=None):
+    cmds, admin, _ = install_plan(manager, packages, update_all)
+    if admin:
+        return run_admin(cmds, emit, stop)
+    return run_shell(Path.home(), " && ".join(cmds), emit, timeout=60 * 60, stop=stop)
+
+
 def toolchain_report():
     """What's installed for building Switch homebrew. Only reads."""
     lines = []
     dkp = Path(build_env().get("DEVKITPRO") or "/opt/devkitpro")
     if not dkp.is_dir():
-        return ("devkitPro is NOT installed on this Mac. It's needed to build Switch homebrew. The user installs it "
-                "from https://devkitpro.org/wiki/Getting_Started (the macOS installer package), then in Terminal: "
-                "sudo dkp-pacman -S switch-dev")
+        return ("devkitPro is NOT installed on this Mac. It's needed to build Switch homebrew. Install it with "
+                "propose_install_packages (manager devkitpro, packages [switch-dev] plus any the project needs): it "
+                "installs devkitPro's package manager first. The Mac shows its own password box.")
     lines.append("devkitPro is installed at %s." % dkp)
     pac = None
     for cand in ("dkp-pacman", "/opt/devkitpro/pacman/bin/pacman"):
@@ -274,7 +368,20 @@ def toolchain_report():
             lines.append("Couldn't list the packages: %s" % e)
     else:
         lines.append("dkp-pacman wasn't found, so package versions are unknown.")
-    lines.append("To update everything, the user runs this in Terminal (it asks for the Mac password): "
-                 "sudo dkp-pacman -Syu   To add a library: sudo dkp-pacman -S <name>, e.g. switch-ffmpeg. "
-                 "Commands that need sudo can't run from the chat.")
+    env = build_env()
+    for tool in ("cmake", "aarch64-none-elf-cmake", "arm-none-eabi-cmake", "make", "git", "pkg-config", "patch"):
+        found = shutil.which(tool, path=env["PATH"])
+        ver = ""
+        if found and tool in ("cmake", "make", "git"):
+            try:
+                ver = (subprocess.run([found, "--version"], capture_output=True, text=True, timeout=10,
+                                      stdin=subprocess.DEVNULL).stdout.splitlines() or [""])[0]
+            except (OSError, subprocess.SubprocessError):
+                pass
+        lines.append("%s: %s" % (tool, ("%s %s" % (found, ver)).strip() if found else "NOT found"))
+    if not shutil.which("cmake", path=env["PATH"]):
+        lines.append("cmake is missing: the devkitPro cmake wrappers (aarch64-none-elf-cmake) need it. Install it with "
+                     "propose_install_packages (manager homebrew, packages [cmake]).")
+    lines.append("Missing devkitPro packages: install them with propose_install_packages (the Mac shows its own "
+                 "password box). To update everything: propose_install_packages with update_all.")
     return "\n".join(lines)
