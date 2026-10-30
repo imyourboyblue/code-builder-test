@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import tlsfix
+
 API_URL = os.environ.get("PATCHBAY_CLAUDE_URL") or "https://api.anthropic.com/v1/messages"   # override for tests only
 API_VERSION = "2026-10-21"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -222,10 +224,11 @@ class Claude:
                 raise ClaudeError("Claude said (%d): %s" % (e.code, msg[:400]))
             except OSError as e:
                 last = str(e)
-                if attempt < 3:
+                if attempt < 3 and "CERTIFICATE_VERIFY_FAILED" not in last:
                     time.sleep(2 ** (attempt + 1))
                     continue
-                raise ClaudeError("Couldn't reach Claude (%s). Is the internet working?" % e)
+                raise ClaudeError(tlsfix.HELP if "CERTIFICATE_VERIFY_FAILED" in str(e) else
+                                  "Couldn't reach Claude (%s). Is the internet working?" % e)
         else:
             raise ClaudeError("Claude is busy right now (%s). Try again in a minute." % last)
         self._add_cost(self.price(resp.get("model") or s["model"], resp.get("usage")))

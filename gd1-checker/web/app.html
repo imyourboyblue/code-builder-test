@@ -429,6 +429,10 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
   else if(ev.type==='new_chat'){log.innerHTML='';add('msg me',esc(ev.text),ev.text);if(ctx)log.appendChild(ctx.status);loadChatBar()}
   else if(ev.type==='claude_cost'){showCost(ev)}
+  else if(ev.type==='choices'){endStream();const c=add('card',md(ev.text)+'<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+
+      ev.options.map((o,i)=>'<button'+(i===0?' class="primary"':'')+' data-i="'+i+'">'+esc(o.label)+'</button>').join('')+'</div>',ev.text);
+    c.querySelectorAll('button[data-i]').forEach(b=>b.onclick=async()=>{if(busy)return;const o=ev.options[+b.dataset.i];
+      c.querySelector('.row').innerHTML='<i>'+esc(o.label)+'</i>';add('msg me',esc(o.label),o.label);await chatStream('/api/chat',{text:o.send})});keep()}
 }
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.

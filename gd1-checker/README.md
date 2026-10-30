@@ -117,7 +117,7 @@ The AI on your Mac does the work, but it can get stuck or guess wrong. Patchbay 
 
 Before anything is sent, your Mac user name, home folder, IP addresses, device names, the Mac's name, email addresses and passwords are swapped for stand-ins like `<device-1>` or `<ip-1>`. Unless you tick **Send automatically**, a card shows exactly what will be sent and you press **Send to Claude**. **See what was sent** lists every request that left the Mac. The button shows what this session cost so far. A question usually costs a few cents, and a big job in Always mode about $1 to $3.
 
-The AI also never asks you to type build commands in Terminal. If it tries, Patchbay sends it back to do the step itself, and an exact step that already failed can't be retried unchanged. Starting a new job like "update ftpd classic" in an old chat starts a fresh chat on its own (the old one is kept under **Past chats**).
+If the same step fails twice, or it takes 8 steps without getting further, it stops and shows what it tried, with buttons: **Ask Claude**, **Try another way** or **Stop here**. The AI also never asks you to type build commands in Terminal. If it tries, Patchbay sends it back to do the step itself, and an exact step that already failed can't be retried unchanged. Starting a new job like "update ftpd classic" in an old chat starts a fresh chat on its own (the old one is kept under **Past chats**).
 
 ### Homebrew on any device
 

@@ -46,6 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, quote, urlparse
 
+import tlsfix  # https certificates for python.org Python on a Mac (must come first)
 import gd1check as core
 import backup
 import claude
@@ -793,6 +794,31 @@ def is_switch(cfg):
     return "switch" in words or "atmosph" in words
 
 
+def checked_build(st, cfg, pr, emit, save=False):
+    """Switch projects: use the known recipe (ftpd), drop toolchain files that don't exist, and always configure
+    with devkitPro's Switch wrapper. Plain cmake builds for the Mac and can't find Switch libraries."""
+    if not is_switch(cfg):
+        return pr
+    build = pr.get("build") or ""
+    if Path(os.path.expanduser(pr.get("folder") or "")).name.lower() == "ftpd" and \
+            ("classic" in (pr.get("output") or "").lower() or "FTPD_CLASSIC" in build) and \
+            build != firmware.FTPD_CLASSIC_BUILD:
+        pr = dict(pr, build=firmware.FTPD_CLASSIC_BUILD, output="build-classic/ftpd-classic.nro")
+        msg = "I reset ftpd classic's build to its checked recipe (from ftpd's own build files)."
+    else:
+        fixed, changes = projects.fix_switch_build(build)
+        if isinstance(changes, str):
+            raise ToolError(changes)
+        if not changes:
+            return pr
+        pr = dict(pr, build=fixed)
+        msg = "I fixed the build command: " + "; ".join(changes) + "."
+    if save:
+        projects.save(st.config_path, pr)
+    emit({"type": "note", "text": msg})
+    return pr
+
+
 @tool("set_project",
       "Save (or update) a source code project on the Mac for this device: where its folder is, the command that "
       "builds it, the file the build makes, and where that file goes on the device. Only edits the settings on the Mac.",
@@ -802,13 +828,10 @@ def is_switch(cfg):
        "device_path": dict(S, description="Where the built file goes on the device, e.g. /switch/mygame/mygame.nro")},
       ["name", "folder"])
 def t_set_project(st, emit, a):
-    build = (a.get("build") or "").strip()
-    if is_switch(st.cfg()) and re.match(r"^(\S*/)?cmake\s+(?!--build)", build) and "CMAKE_TOOLCHAIN_FILE" not in build:
-        # Plain cmake builds for the Mac, and can't find Switch libraries like switch-zlib.
-        build = re.sub(r"^(\S*/)?cmake\s+", "aarch64-none-elf-cmake ", build)
-        emit({"type": "note", "text": "Switch builds configure with devkitPro's aarch64-none-elf-cmake, so I used "
-                                      "that instead of plain cmake."})
-        a = dict(a, build=build)
+    if a.get("build"):
+        tmp = checked_build(st, st.cfg(), {"build": a["build"], "folder": a.get("folder"),
+                                           "output": a.get("output")}, emit)
+        a = dict(a, build=tmp["build"], output=tmp.get("output") or a.get("output"))
     pr = pe(projects.make_project, a.get("name"), a.get("folder"), a.get("build"), a.get("output"), a.get("device_path"))
     projects.save(st.config_path, pr)
     return "Saved project %s. Build command: %s. Built file: %s. Goes to: %s" % (
@@ -1012,7 +1035,7 @@ def t_search_web(st, emit, a):
     try:
         return clip(firmware.web_search(q[:200]))
     except (OSError, ValueError) as e:
-        raise ToolError("The search didn't work: %s" % e)
+        raise ToolError("The search didn't work: %s" % tlsfix.explain(e))
 
 
 def clean_items(items):
@@ -1359,7 +1382,7 @@ def t_web(st, emit, a):
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read(3 * 1024 * 1024).decode(r.headers.get_content_charset() or "utf-8", "replace")
     except (OSError, ValueError) as e:
-        raise ToolError("Couldn't read that page: %s" % e)
+        raise ToolError("Couldn't read that page: %s" % tlsfix.explain(e))
     text = re.sub(r"(?is)<(script|style|nav|header|footer)[^>]*>.*?</\1>", " ", raw)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = re.sub(r"&nbsp;", " ", text)
@@ -1732,6 +1755,52 @@ def claude_system(system):
     return system
 
 
+# Steps that move a job forward (as opposed to only reading).
+PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
+                  "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
+                  "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper"}
+ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
+
+
+def claude_ready():
+    return bool(APP) and APP.claude.mode() in ("stuck", "plan") and APP.claude.has_key()
+
+
+def ask_user(st, emit, why, tried):
+    """Stop instead of going round in circles: say what was tried and let the user pick what's next."""
+    steps = "\n".join("- " + t for t in tried[-8:])
+    options = []
+    if APP and APP.claude.has_key() and APP.claude.mode() != "always":
+        options.append({"label": "Ask Claude", "send": ASK_CLAUDE_CHOICE})
+    options += [{"label": "Try another way", "send": "Try a different way. Don't repeat what already failed."},
+                {"label": "Stop here", "send": "Stop here for now and sum up what's wrong in two sentences."}]
+    text = "I'm stopping to check with you. %s\n\nWhat I tried:\n%s" % (why, steps)
+    if not (APP and APP.claude.has_key()):
+        text += "\n\nTip: with a Claude API key (☁ Claude button), I could ask Claude instead of guessing."
+    emit({"type": "choices", "text": text, "options": options})
+    st.messages.append({"role": "assistant", "content": text})
+    return None
+
+
+def ask_claude_choice(st, emit):
+    """The user picked "Ask Claude" after Patchbay stopped."""
+    name, args, result = getattr(st, "last_stuck", None) or ("", {}, "")
+    question = ("The local AI got stuck on this job and stopped. Last failing step: %s %s. What is wrong, and "
+                "exactly what should be done next?" % (name, json.dumps(args)[:600]) if name else
+                "The local AI got stuck on this job. What should be done next?")
+    st.messages.append({"role": "user", "content": "[I asked for Claude's help.]"})
+    try:
+        out = offer_question(st, emit, st.cfg(), question, (result or "")[-6000:], "stuck")
+    except ToolError as e:
+        emit({"type": "answer", "text": str(e)})
+        return
+    if out.startswith("A confirmation card"):
+        emit({"type": "answer", "text": "Check what will be sent on the card, then press Send to Claude."})
+        return
+    st.messages.append({"role": "user", "content": "[" + out + "]"})
+    chat_turn(st, None, emit)
+
+
 def stuck_help(st, emit, cfg, name, args, result):
     """The same step failed twice: ask Claude. Returns True when a card is now waiting for the user."""
     question = "This step failed twice: %s %s. What is wrong, and exactly what should be done next?" % (
@@ -1858,7 +1927,8 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
         system += ("\n\nThe user approved this plan. Carry it out now, step by step, without stopping to ask. "
                    "Say in one short line what each step does.\n" + "\n".join(
                        "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
-    fails, nudges = {}, 0
+    fails, nudges, tried, idle = {}, 0, [], 0
+    idle_limit = 15 if st.plan else 8
     for _ in range(PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS):
         check_stop()
         emit({"type": "status", "text": "Thinking..."})
@@ -1902,14 +1972,25 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 traceback.print_exc()
                 result = "Error: %s: %s" % (type(e).__name__, e)
             result = clip(result or "(no output)")
-            emit({"type": "tool_result", "name": name, "text": result, "summary": step_summary(name, args, result)})
+            summary = step_summary(name, args, result)
+            emit({"type": "tool_result", "name": name, "text": result, "summary": summary})
             st.messages.append({"role": "tool", "content": result, "tool_name": name})
-            if failed(result) and name != "ask_claude" and APP and APP.claude.mode() in ("stuck", "plan"):
-                key = name + ":" + str(args.get("project") or args.get("command") or args.get("path") or "")
+            tried.append(summary)
+            bad = failed(result)
+            idle = 0 if (not bad and name in PROGRESS_TOOLS) else idle + 1
+            if bad and name != "ask_claude":
+                # The same goal (e.g. building this project), even if the command changed in between.
+                key = name + ":" + str(args.get("project") or args.get("path") or args.get("manager") or "")
                 fails[key] = fails.get(key, 0) + 1
-                if fails[key] == 2:
+                st.last_stuck = (name, args, result)
+                if fails[key] == 2 and claude_ready():
                     if stuck_help(st, emit, cfg, name, args, result):
                         return          # a card is waiting for the user
+                elif fails[key] >= 2:
+                    return ask_user(st, emit, "That step failed %s." % ("twice" if fails[key] == 2 else
+                                                                     "%d times" % fails[key]), tried)
+            if idle >= idle_limit:
+                return ask_user(st, emit, "I've taken %d steps without getting any further." % idle, tried)
     emit({"type": "answer", "text": "I stopped after %d steps so I don't loop forever. Tell me how to continue."
           % (PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS)})
 
@@ -1962,6 +2043,8 @@ def step_summary(name, args, result):
         return "Waiting for you to confirm on the card: " + step_doing(name, args)
     if first.startswith("Done automatically"):
         first = first[len("Done automatically (no card needed). "):] or first
+    if failed(result):
+        doing = "Didn't work: " + step_doing(name, args)[:1].lower() + step_doing(name, args)[1:]
     return "%s: %s" % (doing, first[:160]) if first else doing
 
 
@@ -2168,12 +2251,7 @@ def _run_mac_step(st, cfg, p, emit):
         result = "Saved %s in project %s.%s" % (p["remote"], pr["name"],
                                                 " The old version was backed up to %s." % bk if bk else " (new file)")
         return result, "Result: " + result
-    if is_switch(cfg) and re.match(r"^(\S*/)?cmake\s+(?!--build)", pr["build"]) and \
-            "CMAKE_TOOLCHAIN_FILE" not in pr["build"]:
-        pr = dict(pr, build=re.sub(r"^(\S*/)?cmake\s+", "aarch64-none-elf-cmake ", pr["build"]))
-        projects.save(st.config_path, pr)
-        emit({"type": "note", "text": "This project was set to build with plain cmake, which builds for the Mac. I "
-                                      "switched it to devkitPro's aarch64-none-elf-cmake for the Switch."})
+    pr = checked_build(st, cfg, pr, emit, save=True)
     emit({"type": "status", "text": "Building %s..." % pr["name"]})
     try:
         code, out, built = projects.run_build(pr, emit, STOP)
@@ -2850,7 +2928,9 @@ class Handler(BaseHTTPRequestHandler):
                                                       "Past chats."})
                     if text or refs:
                         st.record({"type": "user", "text": text, "files": [attachment_name(r) for r in refs]})
-                    if refs:
+                    if text == ASK_CLAUDE_CHOICE and not refs:
+                        ask_claude_choice(st, emit)
+                    elif refs:
                         chat_turn(st, text, emit, attachment_message(st, text, refs))
                     else:
                         chat_turn(st, text, emit)

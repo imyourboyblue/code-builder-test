@@ -166,8 +166,10 @@ def write_file(cfg, pr, rel, new_text):
     return backup
 
 
-EXTRA_PATHS = ["/opt/devkitpro/tools/bin", "/opt/devkitpro/devkitA64/bin", "/opt/devkitpro/devkitARM/bin",
-               "/opt/devkitpro/devkitPPC/bin", "/opt/devkitpro/portlibs/switch/bin", "/opt/devkitpro/portlibs/3ds/bin",
+# The console wrappers (portlibs/<console>/bin) come first: devkitA64/bin can have a plain aarch64-none-elf-cmake
+# that doesn't load the Switch settings.
+EXTRA_PATHS = ["/opt/devkitpro/portlibs/switch/bin", "/opt/devkitpro/portlibs/3ds/bin", "/opt/devkitpro/tools/bin",
+               "/opt/devkitpro/devkitA64/bin", "/opt/devkitpro/devkitARM/bin", "/opt/devkitpro/devkitPPC/bin",
                "/opt/devkitpro/pacman/bin", "/opt/homebrew/bin", "/usr/local/bin"]
 
 
@@ -218,6 +220,48 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
         if proc.poll() is None:
             proc.kill()
     return code, "\n".join(lines)
+
+
+DKP = Path("/opt/devkitpro")
+SWITCH_WRAPPER = DKP / "portlibs/switch/bin/aarch64-none-elf-cmake"
+SWITCH_TOOLCHAIN = DKP / "cmake/Switch.cmake"
+
+
+def cmake_files():
+    """The devkitPro cmake wrappers and toolchain files really on this Mac."""
+    found = sorted(str(p) for p in DKP.glob("portlibs/*/bin/*-cmake")) + sorted(str(p) for p in DKP.glob("cmake/*.cmake"))
+    return found
+
+
+def switch_configure():
+    """The command that starts a Switch cmake setup, or None if devkitPro's Switch cmake files aren't installed."""
+    if SWITCH_WRAPPER.exists():
+        return str(SWITCH_WRAPPER)
+    if SWITCH_TOOLCHAIN.exists():
+        return "cmake -DCMAKE_TOOLCHAIN_FILE=%s" % SWITCH_TOOLCHAIN
+    return None
+
+
+def fix_switch_build(command):
+    """Repairs a Switch build command: toolchain files that don't exist are dropped, and the setup step always uses
+    devkitPro's Switch wrapper. Returns (fixed command, list of what changed, or an error sentence)."""
+    changes = []
+    cmd = command or ""
+    for m in re.finditer(r"\s*-DCMAKE_TOOLCHAIN_FILE(?::\w+)?=(\"[^\"]+\"|'[^']+'|\S+)", cmd):
+        path = m.group(1).strip("\"'")
+        if not Path(os.path.expanduser(path)).exists():
+            cmd = cmd.replace(m.group(0), "")
+            changes.append("removed the toolchain file %s (it doesn't exist)" % path)
+    start = re.match(r"^\s*((?:\S*/)?(?:cmake|aarch64-none-elf-cmake))\s+(?!--build)", cmd)
+    if start:
+        good = switch_configure()
+        if not good:
+            return cmd, "devkitPro's Switch cmake files aren't installed (they come with switch-dev, in the package " \
+                        "switch-cmake). Install switch-cmake with propose_install_packages."
+        if start.group(1) != good and not (start.group(1).endswith("cmake") and "CMAKE_TOOLCHAIN_FILE" in cmd):
+            cmd = good + cmd[start.end(1):]
+            changes.append("the setup step now uses %s" % good.split()[0])
+    return cmd, changes
 
 
 def cmake_build_dirs(command):
@@ -424,6 +468,9 @@ def toolchain_report():
             except (OSError, subprocess.SubprocessError):
                 pass
         lines.append("%s: %s" % (tool, ("%s %s" % (found, ver)).strip() if found else "NOT found"))
+    lines.append("devkitPro cmake files on this Mac (use only these, never guess paths):\n  " +
+                 ("\n  ".join(cmake_files()) or "none (install switch-cmake / 3ds-cmake with propose_install_packages)"))
+    lines.append("Switch builds configure with: %s" % (switch_configure() or "NOT available: install switch-cmake"))
     if not shutil.which("cmake", path=env["PATH"]):
         lines.append("cmake is missing: the devkitPro cmake wrappers (aarch64-none-elf-cmake) need it. Install it with "
                      "propose_install_packages (manager homebrew, packages [cmake]).")

@@ -234,19 +234,20 @@ KNOWN_HOMEBREW = {
 
 
 # Checked build steps for some programs, so the AI doesn't have to guess (their READMEs can be out of date).
+FTPD_CLASSIC_BUILD = ("/opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-cmake -S . -B build-classic "
+                      "-DFTPD_CLASSIC=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build-classic -j8")
 BUILD_RECIPES = {
     "mtheall/ftpd": (
         "Build recipe for ftpd (checked against its CMakeLists.txt; the README's 'make nro' is out of date). Needs "
         "devkitPro packages switch-dev and switch-zlib, and cmake 3.30 or newer from Homebrew. Configure downloads a "
         "few small libraries, so it needs internet.\n"
         "  Classic (text-only) version, the one in /switch/ftpd-classic.nro:\n"
-        "    set_project build: aarch64-none-elf-cmake -S . -B build-classic -DFTPD_CLASSIC=ON "
-        "-DCMAKE_BUILD_TYPE=Release && cmake --build build-classic -j8\n"
+        "    set_project build: " + FTPD_CLASSIC_BUILD + "\n"
         "    output: build-classic/ftpd-classic.nro\n"
         "  Full (touch screen) version, ftpd.nro: also needs switch-curl, switch-libzstd, switch-jansson, deko3d "
         "(devkitPro) and imagemagick (Homebrew).\n"
-        "    set_project build: aarch64-none-elf-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build "
-        "-j8\n"
+        "    set_project build: /opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-cmake -S . -B build "
+        "-DCMAKE_BUILD_TYPE=Release && cmake --build build -j8\n"
         "    output: build/ftpd.nro"),
 }
 
