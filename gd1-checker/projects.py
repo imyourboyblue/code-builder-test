@@ -484,7 +484,7 @@ def needed_packages(folder):
     # Packages the CI workflow installs by name (dkp-pacman -S switch-freetype ...): these are real names.
     for line in re.findall(r"(?:pacman|dkp-pacman)[^\n]*?-S\w*\s+([^\n]+)", text):
         wanted += [w for w in re.findall(r"[a-z0-9][a-z0-9_+.-]*", line.lower()) if w.startswith(pre)]
-    names = re.findall(r"(?<![\w/-])-l([A-Za-z][\w+.]*)", text)
+    names = re.findall(r"(?<![\w/-])-l([A-Za-z][\w+.-]*)", text)
     names += re.findall(r"\b([a-z0-9_]+)-config\b", text)
     names += re.findall(r"pkg_check_modules\([^)]*?\s([\w+.-]+)\)", text)
     names += re.findall(r"find_package\((\w+)", text)
