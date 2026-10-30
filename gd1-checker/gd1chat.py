@@ -31,6 +31,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -497,7 +498,7 @@ def t_scan(st, emit, a):
     _, out = run_captured(emit, core.cmd_scan, cfg, None)
     try:
         rep = latest_report_dict(cfg)
-        return core.report_text(rep) + "\nSnapshot: %s" % Path(rep["snapshot"]).name
+        return core.report_text(rep) + ("\nSnapshot: %s" % Path(rep["snapshot"]).name if rep.get("snapshot") else "")
     except ToolError:
         return out
 
@@ -512,7 +513,7 @@ def latest_report_dict(cfg):
 @tool("last_report", "Show what the most recent scan found, without scanning again.")
 def t_report(st, emit, a):
     rep = latest_report_dict(st.cfg())
-    return core.report_text(rep) + "\nSnapshot: %s" % Path(rep["snapshot"]).name
+    return core.report_text(rep) + ("\nSnapshot: %s" % Path(rep["snapshot"]).name if rep.get("snapshot") else "")
 
 
 @tool("find_good_copies", "List the snapshots that hold a copy of one file, and whether each copy passed the damage checks.",
@@ -530,6 +531,37 @@ def t_copies(st, emit, a):
     for b, local, ok in backup_copies(cfg, path):
         rows.append("backup %s  %s  %s" % (b["name"], core.human_size(local.stat().st_size), "good" if ok else "DAMAGED"))
     return "\n".join(rows) if rows else "No snapshot or backup holds %s." % path
+
+
+def old_snapshot_usage(cfg):
+    """(bytes, folders) of scan copies made before scans stopped keeping copies."""
+    root = core.data_dir(cfg)
+    if not (root / "snapshots").is_dir():
+        return 0, 0
+    return core.scan_usage(root)
+
+
+def clear_old_snapshots(cfg):
+    """Delete the old scan copies. A good copy of a file that's now on Needs attention is moved next to it first
+    (as <name>.good-copy), so nothing that could repair a file is lost. Returns how many folders went."""
+    root = core.data_dir(cfg)
+    snaps = sorted((p for p in (root / "snapshots").glob("*") if p.is_dir()), reverse=True)
+    att = core.attention(cfg)
+    for path, it in att.items():
+        for s in snaps:
+            info = core._json_file(s / "_manifest.json", {}).get(path)
+            src = core.local_path_for(s, path)
+            if info and info.get("ok") and src.is_file():
+                dest = core.local_path_for(root / "needs-attention", path)
+                good = dest.with_name(dest.name + ".good-copy")
+                good.parent.mkdir(parents=True, exist_ok=True)
+                src.replace(good)
+                it["good_copy"] = str(good)
+                break
+    core._save_json(core.attention_file(root), att)
+    for s in snaps:
+        shutil.rmtree(str(s), ignore_errors=True)
+    return len(snaps)
 
 
 def backup_copies(cfg, path, newest_first=False):
@@ -2034,7 +2066,7 @@ flush it, then rename it over the real one; use a SQLite journal (WAL); keep a b
 - The app also has a Files screen where the user can drag files between the Mac and the device. Point them to it \
 for copying, uploading, renaming or deleting whole files and folders.
 - .nro files are compiled homebrew programs. read_file shows an .nro's name, version, sizes and damage checks. To \
-fix a damaged .nro, put back a good copy (find_good_copies looks in scan snapshots and full backups, then \
+fix a damaged .nro, put back a good copy (scans no longer keep copies of clean files; find_good_copies looks in the user's backups and old scan copies, then \
 propose_restore) or rebuild it from source. You can change its name, author or version (propose_nro_info_change) \
 or its icon (propose_nro_icon). You can NOT change an .nro's program code directly: it is compiled.
 - To change what a program does (for example update it for newer firmware), work on its source code project on \
@@ -2052,8 +2084,8 @@ host/ports. After a change to host or ports, use test_connection.
 look up the most specific clue with web_search (generic text only), then save_firmware_name with a short answer.
 - Never ask the user for something a tool can find: the firmware and Atmosphère versions (device_firmware), \
 which file a program is (find_homebrew: the user's own words like "FTPD light" are enough), its version \
-(read_file), or its source code address (find_homebrew, then web_search). If something truly can't be found, \
-pick the most likely answer, say which you picked, and carry on.
+(read_file), or its source code address (find_homebrew, find_github_repo, then web_search). If something truly \
+can't be found after looking it up, say so plainly and ask the user. Never guess.
 - If the firmware version isn't on the SD card, offer setup_firmware_helper once (a tiny app the user opens one \
 time from the Homebrew Menu). Don't wait for it: building with the newest libnx works for current firmware.
 - Homebrew works the same way on any device (Switch, 3DS, Wii, Wii U, Vita, PSP, PS4, Linux handhelds, the user's \
@@ -3224,6 +3256,15 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
             self.json(APP.claude.public())
+        elif path == "/api/attention":
+            cfg = APP.device(q.get("device")).cfg()
+            items = []
+            for p, it in sorted(core.attention(cfg).items()):
+                good = next((b["name"] for b, _, ok in backup_copies(cfg, p, newest_first=True) if ok), None)
+                items.append({"path": p, "problems": it.get("problems", []), "size": it.get("size"),
+                              "found": it.get("found"), "good_backup": good, "good_copy": bool(it.get("good_copy")),
+                              "release": p.lower().endswith((".nro", ".nsp", ".ovl"))})
+            self.json({"items": items})
         elif path == "/api/claude/status":
             self.json(APP.claude.key_status(force=q.get("force") == "1"))
         elif path == "/api/claude/sent":
@@ -3411,6 +3452,18 @@ value="1"><button>Restart Patchbay</button></form>""" % (
                 raise ToolError("Wait for the current request to finish first.")
             st.delete_chat(data.get("id"))
             self.json({"ok": True})
+        elif path == "/api/attention/keep":
+            cfg = APP.device(data.get("device")).cfg()
+            try:
+                core.accept(cfg, norm(data.get("path")))
+            except ValueError as e:
+                raise ToolError(str(e))
+            self.json({"ok": True})
+        elif path == "/api/scan-copies/clear":
+            gone = 0
+            for _, c in APP.registry.all():
+                gone += clear_old_snapshots(c)
+            self.json({"removed": gone})
         elif path == "/api/stop":
             job = APP.chat_job
             if job and not job.done:
@@ -3852,6 +3905,9 @@ value="1"><button>Restart Patchbay</button></form>""" % (
         def go():
             with WRITES:
                 done = fm.apply(cfg, p["steps"], "from the Files screen", tr.emit, tr)
+            for s in p["steps"]:
+                if s[0] == "delete":
+                    core.resolve(cfg, s[1])      # deleted from the device: off the Needs attention list
             first, last = (done[0]["id"], done[-1]["id"]) if done else (0, 0)
             result = "Done: %s. %s" % (p["title"], "Logged as change #%d." % first if first == last and first else
                                        "Logged as changes #%d to #%d." % (first, last) if done else "")

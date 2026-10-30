@@ -127,24 +127,21 @@ def _secrets(app):
 
 def _scan_data(app):
     import gd1chat
-    total, count, per = 0, 0, []
+    total, count, waiting = 0, 0, 0
     for _, cfg in app.registry.all():
         try:
-            b, n = gd1chat.core.scan_usage(gd1chat.core.data_dir(cfg))
+            b, n = gd1chat.old_snapshot_usage(cfg)
+            waiting += len(gd1chat.core.attention(cfg))
         except Exception:
             continue
         total, count = total + b, count + n
-        if n:
-            per.append("%s %s" % (cfg["device_name"], gd1chat.core.human_size(b)))
+    att = (" %d problem file%s kept under Needs attention." % (waiting, "" if waiting == 1 else "s")) if waiting else ""
     if not count:
-        return ok("scans", "Scan copies", "None saved yet.")
-    text = ("%s in %d scan cop%s (%s). Scans keep copies so damaged files can be put back from a good one; "
-            "unchanged files share space, and only the newest few are kept."
-            % (gd1chat.core.human_size(total), count, "y" if count == 1 else "ies", ", ".join(per)))
-    return ok("scans", "Scan copies", text) if count <= 1 else \
-        warn("scans", "Scan copies", text, "Clearing keeps each device's newest scan and any last good copies.",
-             "Clear old scan copies", "scans") if total > 20e9 else \
-        dict(ok("scans", "Scan copies", text), fix="Clear old scan copies", fix_id="scans")
+        return ok("scans", "Scan copies", "Scans don't keep copies: clean files are deleted after checking." + att)
+    return warn("scans", "Scan copies", "%s in %d old scan cop%s from before scans stopped keeping copies.%s"
+                % (gd1chat.core.human_size(total), count, "y" if count == 1 else "ies", att),
+                "They're not needed any more. Deleting them keeps a good copy of any file that's on Needs attention.",
+                "Delete old scan copies", "scans")
 
 
 def _claude(app):
@@ -192,10 +189,8 @@ def fix(app, check_id, emit):
             "Nothing more to move (or the Keychain said no)."
     if check_id == "scans":
         import gd1chat
-        gone = 0
-        for _, cfg in app.registry.all():
-            gone += gd1chat.core.prune_scans(gd1chat.core.data_dir(cfg), 1)
-        return "Removed %d older scan cop%s. Each device keeps its newest scan (and any last good copies)." % (
+        gone = sum(gd1chat.clear_old_snapshots(cfg) for _, cfg in app.registry.all())
+        return "Deleted %d old scan cop%s. Good copies of files on Needs attention were kept." % (
             gone, "y" if gone == 1 else "ies")
     if check_id == "ollama":
         if sys.platform != "darwin":

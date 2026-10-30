@@ -448,3 +448,16 @@ The chat AI looks things up instead of guessing. It checks the program's GitHub 
 releases, and it double-checks a repository and devkitPro package names before it offers to download or install
 them. It only asks Claude (which costs money) after at least 3 of its own lookups haven't answered the question, and
 it sends a list of what it already tried.
+
+## Scans don't keep copies
+
+A scan downloads each file, checks it, and deletes it from the Mac again. For clean files it keeps only a small
+fingerprint (size and checksum), so the next scan can tell what changed. Files with problems are kept until you pick
+what to do on the device's **Needs attention** tab:
+- **Keep as is**: Patchbay won't flag this exact version again (accepted.json).
+- **Repair**: the chat finds a good version (your backups or the program's own release), then shows one plan.
+- **Delete from device**: the usual confirm card where you type the device name.
+
+Since there are no spare copies, run a backup (Backups tab) when you want something to restore from. Old scan copies
+from before this change are listed in 🩺 Setup with a **Delete old scan copies** button. It keeps a good copy of any
+file that's on Needs attention.

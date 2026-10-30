@@ -284,11 +284,18 @@ border:2px solid var(--line)}
 .cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected{background:rgba(255,59,48,.16);color:var(--bad)}
 .cl-state{font-size:13.5px;font-weight:600;padding:7px 10px;border-radius:8px;margin-bottom:8px;background:var(--line);color:var(--mute)}
 .cl-state::before{content:"\25CF ";}.cl-state.connected{background:rgba(52,199,89,.16);color:var(--ok)}.cl-state.rejected{background:rgba(255,59,48,.14);color:var(--bad)}
+.att-n{background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;font-weight:700;margin-left:3px}
+.att-intro{font-size:13.5px;color:var(--mute);margin:0 0 12px;line-height:1.45}
+.att-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius,12px);padding:12px 14px;margin-bottom:10px}
+.att-path{font-weight:600;word-break:break-all}.att-size{font-weight:400;color:var(--mute);font-size:12.5px}
+.att-probs{margin:6px 0;padding-left:18px;font-size:13.5px}.att-probs li.error b{color:var(--bad)}.att-probs li.warning b{color:var(--warn)}
+.att-src{font-size:12.5px;color:var(--mute);margin-bottom:8px}.att-acts{gap:6px;display:flex;flex-wrap:wrap}
+button.danger{color:var(--bad);border-color:var(--bad)}
 </style></head><body>
 <header>
   <a href="#/" title="All devices"><h1>Patchbay</h1></a>
   <span id="crumb"></span>
-  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a></nav>
+  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a><a id="tab-attention">Needs attention <span id="att-n" class="att-n" hidden></span></a></nav>
   <span id="info"></span>
   <button id="activity-btn" type="button" title="Everything Patchbay did, with Undo">🕘 Activity</button>
   <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
@@ -339,6 +346,12 @@ border:2px solid var(--line)}
   <div class="row" style="margin:0 0 10px"><span id="ap-info" class="empty" style="flex:1"></span>
     <button id="ap-scan" class="primary">Read the apps</button><button id="ap-upd">Check for updates</button></div>
   <div id="ap-body"></div>
+</div></main>
+
+<main class="view" id="attention"><div class="wrap">
+  <div class="att-intro">Scans check each file and then delete it from this Mac. Only files with problems are kept here until you decide.
+    There are no spare copies, so <b>Repair</b> puts back a good version from the program's own release or from a backup you made (Backups tab).</div>
+  <div id="att-body"></div>
 </div></main>
 
 <main class="view" id="backups"><div class="wrap">
@@ -397,7 +410,7 @@ async function stream(url,body,on){ // reads the server's live, line-by-line rep
 
 /* ---------- routing: #/  #/d/NAME/chat  #/d/NAME/files */
 function route(){
-  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups|apps)/);
+  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups|apps|attention)/);
   clearInterval(bkTimer);
   clearInterval(homeTimer);
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
@@ -408,14 +421,35 @@ function route(){
   document.body.insertBefore($('chat'),$('files'));
   const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
   $(view).classList.add('on');$('tabs').hidden=false;$('reset').hidden=view!=='chat';
-  for(const v of ['chat','files','backups','apps']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
-  if(changed){loadInfo();loadChat();bkOptsLoaded=false}
+  for(const v of ['chat','files','backups','apps','attention']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
+  if(changed){loadInfo();loadChat();bkOptsLoaded=false;attCount()}
   if(view==='files')openFiles(changed);
   else if(view==='backups'){loadBackups();bkTimer=setInterval(loadBackups,1500)}
   else if(view==='apps')loadApps()
+  else if(view==='attention')loadAttention()
   else $('t').focus();
 }
 window.addEventListener('hashchange',route);
+
+/* ---------- Needs attention: files a scan found problems in */
+let ATT=[];
+async function attCount(){try{const j=await getJSON('/api/attention?device='+enc(cur));ATT=j.items;const n=$('att-n');n.textContent=ATT.length;n.hidden=!ATT.length}catch(e){}}
+async function loadAttention(){const b=$('att-body');b.innerHTML='<div class="empty">Loading…</div>';await attCount();
+  if(!ATT.length){b.innerHTML='<div class="empty">Nothing needs your attention. The last scans found no problems (or you\'ve dealt with them).</div>';return}
+  b.innerHTML=ATT.map((x,i)=>{const src=x.good_backup?'a good copy in your backup '+x.good_backup:x.good_copy?'a good copy saved from an old scan':x.release?'the program\'s own release (Patchbay looks it up)':'';
+    return '<div class="att-item"><div class="att-path">'+esc(x.path)+' <span class="att-size">'+esc(size(x.size||0))+' · found '+esc((x.found||'').replace('_',' '))+'</span></div>'+
+    '<ul class="att-probs">'+x.problems.map(p=>'<li class="'+esc(p.level)+'"><b>'+esc(p.level==='error'?'Problem':p.level==='warning'?'Warning':'Note')+':</b> '+esc(p.text)+'</li>').join('')+'</ul>'+
+    '<div class="att-src">'+(src?'Repair from: '+esc(src)+'.':'No known good copy yet: Repair will look for one online first, and asks you before changing anything.')+'</div>'+
+    '<div class="row att-acts"><button data-i="'+i+'" data-a="keep">Keep as is</button><button class="primary" data-i="'+i+'" data-a="repair">Repair</button><button class="danger" data-i="'+i+'" data-a="delete">Delete from device</button></div></div>'}).join('');
+  b.querySelectorAll('button[data-a]').forEach(btn=>btn.onclick=()=>attAct(ATT[+btn.dataset.i],btn.dataset.a))}
+async function attAct(x,a){
+  if(a==='keep'){if(!confirm('Keep '+x.path+' as it is? Patchbay won\'t flag this version again, and deletes the copy it kept on this Mac.'))return;
+    try{await postJSON('/api/attention/keep',{device:cur,path:x.path});act('Kept as is. It won\'t be flagged again unless it changes.');loadAttention()}catch(e){alert(e.message)}}
+  else if(a==='delete')plan({op:'delete',paths:[x.path]})
+  else{const why=x.problems.map(p=>p.text).join(' ');
+    const text='Repair '+x.path+' on '+cur+'. The scan found: '+why+' The copy kept on the Mac is the damaged one, not a good one. '+
+      (x.good_backup?'My backup '+x.good_backup+' has a good copy. ':'')+'Find a good version first (my backups, or the program\'s original release; look it up, don\'t guess). If you find one, show one plan to put it back. If you can\'t, tell me.';
+    location.hash='#/d/'+enc(cur)+'/chat';setTimeout(()=>{t.value=text;t.focus();if(!busy)$('f').requestSubmit()},400)}}
 
 /* ---------- home: device portraits */
 let homeData=null;

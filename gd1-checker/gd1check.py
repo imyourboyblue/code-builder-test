@@ -619,12 +619,83 @@ def wanted(path, cfg):
     return any(fnmatch.fnmatch(name, p) or fnmatch.fnmatch(path, p) for p in cfg["include"])
 
 
+KEEP_LEVELS = ("error", "warning")      # files with these problems are kept on the Mac until you decide
+
+
+def _json_file(path, default):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def _save_json(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(path)
+
+
+def fingerprints_file(root):
+    return Path(root) / "fingerprints.json"
+
+
+def attention_file(root):
+    return Path(root) / "attention.json"
+
+
+def accepted_file(root):
+    return Path(root) / "accepted.json"
+
+
+def attention(cfg):
+    """Files with problems that are waiting for you to decide: path -> details."""
+    return _json_file(attention_file(data_dir(cfg)), {})
+
+
+def accept(cfg, path):
+    """'Keep as is': this exact version of the file isn't flagged again. Its kept copy on the Mac is deleted."""
+    root = data_dir(cfg)
+    att = attention(cfg)
+    item = att.pop(path, None)
+    if not item:
+        raise ValueError("%s isn't on the Needs attention list." % path)
+    acc = _json_file(accepted_file(root), {})
+    acc[path] = {"sha256": item.get("sha256"), "size": item.get("size"), "when": now_stamp(),
+                 "problems": [p["text"] for p in item.get("problems", [])]}
+    _save_json(accepted_file(root), acc)
+    _forget_copy(item)
+    _save_json(attention_file(root), att)
+
+
+def resolve(cfg, path):
+    """The file was repaired or deleted: drop it from the list and delete its kept copy."""
+    root = data_dir(cfg)
+    att = attention(cfg)
+    item = att.pop(path, None)
+    if item:
+        _forget_copy(item)
+        _save_json(attention_file(root), att)
+
+
+def _forget_copy(item):
+    p = item.get("copy")
+    if p:
+        try:
+            Path(p).unlink()
+        except OSError:
+            pass
+
+
 def cmd_scan(cfg, args):
+    """Download each file, check it, and delete it again unless it has a problem. Only a fingerprint (size and
+    checksum) is kept for clean files, so the next scan can spot changes. Problem files are kept in
+    <data>/<device>/needs-attention until you choose Keep as is, Repair or Delete."""
     root = data_dir(cfg)
     stamp = now_stamp()
-    snap = unique_dir(root / "snapshots", stamp)
-    stamp = snap.name
-    say("Snapshot folder: %s" % snap)
+    work = root / "checking"          # files sit here only while they're being checked
+    keep_dir = root / "needs-attention"
     dev = GD1(cfg)
     dev.connect()
 
@@ -644,49 +715,72 @@ def cmd_scan(cfg, args):
                 break
     say("Found %d files to check (%d skipped as too big)." % (len(files), len(skipped)))
 
-    previous = latest_manifest(root, exclude=stamp)
-    prev_dir = latest_snapshot_dir(root, exclude=stamp)
+    prints = _json_file(fingerprints_file(root), {})
+    if not prints:            # first scan since the change: start from the newest old snapshot's list
+        prints = latest_manifest(root) or {}
+    accepted = _json_file(accepted_file(root), {})
+    att = _json_file(attention_file(root), {})
     leftovers = leftover_notes([f["path"] for f in files])
     report = {"device": cfg["device_name"], "host": cfg["host"], "port": dev.port,
-              "time": stamp, "snapshot": str(snap), "files": [], "skipped": skipped}
-    manifest = {}
-
-    stopped = False
-    for i, f in enumerate(files, 1):
-        if should_stop():
-            stopped = True
-            break
-        local = local_path_for(snap, f["path"])
-        say("[%d/%d] %s" % (i, len(files), f["path"]))
-        try:
-            dev.download(f["path"], local)
-        except Cancelled:
-            stopped = True
-            break
-        except (ftplib.Error, OSError, EOFError) as e:
-            report["files"].append({"path": f["path"], "problems": [problem("error", "Couldn't download: %s" % e)]})
-            continue
-        data = local.read_bytes()
-        probs = check_bytes(f["path"], data, f["size"])
-        if f["path"] in leftovers:
-            probs.append(leftovers[f["path"]])
-        old = previous.get(f["path"]) if previous else None
-        if old and old["size"] > 1024 and len(data) < old["size"] * 0.5:
-            probs.append(problem("warning", "File shrank from %d to %d bytes since the last scan." % (old["size"], len(data))))
-        sha = hashlib.sha256(data).hexdigest()
-        if old and old.get("sha256") == sha and prev_dir:
-            share_copy(local_path_for(prev_dir, f["path"]), local)   # unchanged: no second copy on the disk
-        manifest[f["path"]] = {"size": len(data), "sha256": sha, "modified": f["modified"],
-                               "ok": not any(p["level"] == "error" for p in probs)}
-        report["files"].append({"path": f["path"], "size": len(data), "sha256": sha, "problems": probs})
+              "time": stamp, "snapshot": "", "files": [], "skipped": skipped}
+    stopped, kept = False, 0
     try:
-        dev.close()
-    except Exception:
-        pass
+        for i, f in enumerate(files, 1):
+            if should_stop():
+                stopped = True
+                break
+            local = local_path_for(work, f["path"])
+            say("[%d/%d] %s" % (i, len(files), f["path"]))
+            try:
+                dev.download(f["path"], local)
+            except Cancelled:
+                stopped = True
+                break
+            except (ftplib.Error, OSError, EOFError) as e:
+                report["files"].append({"path": f["path"], "problems": [problem("error", "Couldn't download: %s" % e)]})
+                continue
+            data = local.read_bytes()
+            probs = check_bytes(f["path"], data, f["size"])
+            if f["path"] in leftovers:
+                probs.append(leftovers[f["path"]])
+            old = prints.get(f["path"])
+            if old and old.get("size", 0) > 1024 and len(data) < old["size"] * 0.5:
+                probs.append(problem("warning", "File shrank from %d to %d bytes since the last scan."
+                                     % (old["size"], len(data))))
+            sha = hashlib.sha256(data).hexdigest()
+            real_size = len(data)
+            del data
+            ok_version = accepted.get(f["path"], {}).get("sha256") == sha
+            serious = [p for p in probs if p["level"] in KEEP_LEVELS]
+            if serious and not ok_version:
+                dest = local_path_for(keep_dir, f["path"])
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                local.replace(dest)
+                att[f["path"]] = {"problems": probs, "size": dest.stat().st_size, "sha256": sha,
+                                  "found": stamp, "copy": str(dest), "modified": f["modified"]}
+                kept += 1
+            else:
+                local.unlink()
+                if f["path"] in att:          # it's fine now (repaired, or changed back)
+                    _forget_copy(att.pop(f["path"]))
+                if serious and ok_version:
+                    probs = [problem("info", "You chose Keep as is for this version: %s"
+                                     % "; ".join(p["text"] for p in serious))]
+            prints[f["path"]] = {"size": real_size, "sha256": sha, "modified": f["modified"], "ok": not serious, "checked": stamp}
+            report["files"].append({"path": f["path"], "size": prints[f["path"]]["size"], "sha256": sha,
+                                    "problems": probs})
+    finally:
+        try:
+            dev.close()
+        except Exception:
+            pass
+        import shutil
+        shutil.rmtree(str(work), ignore_errors=True)     # nothing is left behind, even after Stop
+        _save_json(fingerprints_file(root), prints)
+        _save_json(attention_file(root), att)
     if stopped:
         report["stopped"] = "Stopped after %d of %d files." % (len(report["files"]), len(files))
-
-    (snap / "_manifest.json").write_text(json.dumps(manifest, indent=2))
+    report["kept"] = kept
     rpath = root / "reports" / ("%s.json" % stamp)
     rpath.parent.mkdir(exist_ok=True)
     rpath.write_text(json.dumps(report, indent=2))
@@ -695,10 +789,6 @@ def cmd_scan(cfg, args):
     say()
     say(report_text(report))
     say("Report saved: %s" % tpath)
-    gone = prune_scans(root, int(cfg.get("keep_scans") or 5))
-    if gone:
-        say("Removed %d older scan cop%s (keeping the newest %d)." % (gone, "y" if gone == 1 else "ies",
-                                                                     int(cfg.get("keep_scans") or 5)))
 
 
 def share_copy(old, new):
@@ -791,6 +881,11 @@ def report_text(report):
     if report.get("skipped"):
         lines.append("")
         lines.append("Skipped %d files bigger than max_file_mb." % len(report["skipped"]))
+    if report.get("kept"):
+        lines.append("")
+        lines.append("%d file%s with problems %s kept on the Mac under Needs attention until you decide what to do. "
+                     "Clean files were deleted from the Mac after checking." % (
+                         report["kept"], "" if report["kept"] == 1 else "s", "is" if report["kept"] == 1 else "are"))
     if report.get("stopped"):
         lines.append("")
         lines.append("You stopped this scan. %s The files checked so far are saved; scan again for the rest."
@@ -817,10 +912,12 @@ def cmd_explain(cfg, args):
     if not bad:
         say("The last scan found no damage, so there's nothing to explain.")
         return
-    snap = Path(report["snapshot"])
+    snap = Path(report["snapshot"]) if report.get("snapshot") else None
+    att = attention(cfg)
     parts = []
     for f in bad[:15]:
-        local = local_path_for(snap, f["path"])
+        kept = att.get(f["path"], {}).get("copy")
+        local = Path(kept) if kept else (local_path_for(snap, f["path"]) if snap else Path("/nonexistent"))
         tail = local.read_bytes()[-96:] if local.exists() else b""
         parts.append("File: %s (%s bytes)\nProblems:\n%s\nLast bytes (hex): %s"
                      % (f["path"], f.get("size"), "\n".join("- " + p["text"] for p in f["problems"]), tail.hex(" ")))
@@ -829,7 +926,7 @@ def cmd_explain(cfg, args):
         "(an embedded FreeBSD-based system) freezes during heavy file writes, such as an auto-save or a "
         "database update. A scan of its files found the problems below.\n\n%s\n\n"
         "In plain, short language: 1) say what most likely happened to each file, 2) say which files matter most, "
-        "3) say what to do next (for example restore a good copy from an earlier snapshot), and "
+        "3) say what to do next (for example put back the original file from the program's release, or from a backup), and "
         "4) suggest what the program should change so a freeze can't damage files again (for example writing to "
         "a temporary file and renaming it, or using a database journal). Don't invent facts you can't see."
         % (report["device"], "\n\n".join(parts)))
