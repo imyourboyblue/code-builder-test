@@ -1930,7 +1930,11 @@ propose_install_packages (devkitPro packages like switch-dev and switch-zlib, or
 Mac shows its own password box after the user confirms. Never ask the user to type commands in Terminal, and \
 never tell them to export variables or edit shell files: Patchbay sets up devkitPro and Homebrew paths itself. \
 Console builds link the console's own libraries from devkitPro (switch-zlib, switch-curl, switch-libzstd...), \
-never the Mac's (brew zlib won't work).
+never the Mac's (brew zlib won't work). For console projects Patchbay also points pkg-config (and tools like \
+freetype-config) at devkitPro's libraries by itself, so never add export PKG_CONFIG_PATH, DEVKITPRO or PATH to a \
+command. After installing a missing library, just build again with propose_build.
+  Show only one card at a time and then stop: finish your thinking first, then propose the single next step. \
+Don't download a ready-made release file instead of building unless the user asks for that.
   3. Get the source with propose_get_source (or use the existing project).
   4. Use a build recipe when find_homebrew gives one. Otherwise read the real build files (CMakeLists.txt, \
 Makefile, and the CI workflow in .github/workflows, which shows the exact commands that work); READMEs are often \
@@ -2311,8 +2315,14 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
         said = clean_answer(msg.get("content"))
         if said:
             emit({"type": "note", "text": said})
+        card = None      # only one card at a time: after it shows, the turn ends and waits for the user
         for c in calls:
             check_stop()
+            if card:
+                st.messages.append({"role": "tool", "tool_name": (c.get("function") or {}).get("name"),
+                                    "content": "Not done: a card is already waiting for the user. Only one card at a "
+                                               "time. Wait for their answer."})
+                continue
             fn = c.get("function", {})
             name, args = fn.get("name"), fn.get("arguments") or {}
             if isinstance(args, str):
@@ -2321,6 +2331,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 except ValueError:
                     args = {}
             emit({"type": "tool", "name": name, "args": args, "text": step_doing(name, args)})
+            cards_before = set(st.pending)
             try:
                 if name not in handlers:
                     raise ToolError("There's no tool called %s." % name)
@@ -2337,6 +2348,9 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             emit({"type": "tool_result", "name": name, "text": result, "summary": summary})
             st.messages.append({"role": "tool", "content": result, "tool_name": name})
             tried.append(summary)
+            if set(st.pending) - cards_before:
+                card = summary
+                continue
             bad = failed(result)
             idle = 0 if (not bad and name in PROGRESS_TOOLS) else idle + 1
             if bad and name != "ask_claude":
@@ -2352,6 +2366,11 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                                                                      "%d times" % fails[key]), tried)
             if idle >= idle_limit:
                 return ask_user(st, emit, "I've taken %d steps without getting any further." % idle, tried)
+        if card:
+            st.messages.append({"role": "assistant", "content": "I'm waiting for you on the card."})
+            emit({"type": "answer", "text": "Check the card above and press Confirm or Cancel. I'll carry on from "
+                                            "there."})
+            return
     emit({"type": "answer", "text": "I stopped after %d steps so I don't loop forever. Tell me how to continue."
           % (PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS)})
 
@@ -2591,6 +2610,8 @@ def run_mac_step(st, cfg, p, emit):
     if re.search(r"\bfailed\b", short) and p.get("kind") in ("command", "install_packages") \
             and "password box was cancelled" not in detail:
         failed_steps[step_key(p)] = short
+    elif p.get("kind") == "install_packages":
+        failed_steps.clear()     # new packages can fix earlier failures, so they may be tried again
     else:
         failed_steps.pop(step_key(p), None)
     return short, detail
