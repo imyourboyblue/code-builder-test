@@ -121,7 +121,7 @@ the chat. It only checks when the Devices screen opens or you press Check health
 
 ### Apps (homebrew library)
 
-Open a Switch and click the **Apps** tab, then **Read the apps**. Patchbay lists every app in /switch with its icon,
+Open a Switch (or a PS4/PS5 with a homebrew FTP server) and click the **Apps** tab, then **Read the apps**. Patchbay lists every app in /switch with its icon,
 name, version and author (read from the file itself), flags damaged ones, and lists the background programs
 (sysmodules). **Check for updates** looks up each app's newest release on GitHub (only the project name is sent);
 **Update** hands it to the chat's guided update, which backs up the current file first. If Patchbay doesn't know an

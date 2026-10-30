@@ -71,12 +71,19 @@ def set_repo(cfg, path, repo):
     return r.get(path)
 
 
+# PlayStation homebrew whose GitHub home is well known (the user can set any other one).
+PS_KNOWN = {"etahen": ("etaHEN/etaHEN", "etaHEN"), "goldhen": ("GoldHEN/GoldHEN_Releases", "GoldHEN"),
+            "ftpsrv": ("ps5-payload-dev/ftpsrv", "ftpsrv"), "websrv": ("ps5-payload-dev/websrv", "websrv"),
+            "elfldr": ("ps5-payload-dev/elfldr", "elfldr"), "shsrv": ("ps5-payload-dev/shsrv", "shsrv"),
+            "klogsrv": ("ps5-payload-dev/klogsrv", "klogsrv")}
+
+
 def guess_repo(*names):
     for n in names:
         sq = firmware._squash(n or "")
         if not sq:
             continue
-        for key, (repo, _) in firmware.KNOWN_HOMEBREW.items():
+        for key, (repo, _) in list(firmware.KNOWN_HOMEBREW.items()) + list(PS_KNOWN.items()):
             k = firmware._squash(key)
             if sq == k or sq.startswith(k) or k.startswith(sq) and len(sq) >= 4:
                 return repo
@@ -100,6 +107,111 @@ def find_nros(dev, root="/switch", depth=2):
             elif kind == "file" and name.lower().endswith(".nro"):
                 out.append((full, size, modified))
     return sorted(out)
+
+
+# ---------------------------------------------------------------- PlayStation 4 / 5 (homebrew FTP with full access)
+
+PS_META = ["/system_data/priv/appmeta", "/user/appmeta"]
+PS_APPS = ["/user/app", "/system_ex/app"]
+PS_PAYLOADS = ["/data", "/data/payloads", "/data/etaHEN/payloads", "/data/etaHEN/plugins", "/data/GoldHEN/payloads",
+               "/data/GoldHEN/plugins", "/mnt/usb0", "/mnt/usb0/payloads", "/mnt/usb1"]
+OFFICIAL_ID = re.compile(r"^(CUSA|PPSA|PCJS|PLJS|PCAS|PLAS|ELJS|ECAS)\d{5}$")
+SYSTEM_ID = re.compile(r"^NPXS\d{5}$")
+
+
+def is_playstation(dev):
+    return any(firmware._names(dev, d) for d in PS_META + PS_APPS)
+
+
+def parse_sfo(data):
+    """A PS4 param.sfo as a dict (TITLE, TITLE_ID, APP_VER, VERSION, ...)."""
+    import struct
+    if data[:4] != b"\x00PSF":
+        return {}
+    keys_at, data_at, count = struct.unpack_from("<III", data, 8)
+    out = {}
+    for i in range(count):
+        koff, fmt, ln, _mx, doff = struct.unpack_from("<HHIII", data, 20 + i * 16)
+        key = data[keys_at + koff:data.index(b"\x00", keys_at + koff)].decode("ascii", "replace")
+        raw = data[data_at + doff:data_at + doff + ln]
+        out[key] = struct.unpack("<I", raw[:4])[0] if fmt == 0x0404 else raw.rstrip(b"\x00").decode("utf-8", "replace")
+    return out
+
+
+def _small(dev, path, limit=4 * 1024 * 1024):
+    try:
+        return firmware._fetch(dev, path, limit)
+    except Exception:
+        return None
+
+
+def ps_app_info(dev, tid):
+    """(name, version, meta folder, icon bytes) for one installed title."""
+    for base in PS_META + [d + "/" + tid + "/sce_sys" for d in PS_APPS]:
+        folder = base if base.endswith("sce_sys") else base + "/" + tid
+        names = [n.lower() for n in (firmware._names(dev, folder) or [])]
+        if not names:
+            continue
+        name = ver = None
+        if "param.json" in names:
+            try:
+                j = json.loads((_small(dev, folder + "/param.json") or b"{}").decode("utf-8", "replace"))
+                loc = j.get("localizedParameters") or {}
+                lang = loc.get(loc.get("defaultLanguage") or "en-US") or loc.get("en-US") or {}
+                name = lang.get("titleName") or j.get("titleName")
+                ver = j.get("contentVersion") or j.get("masterVersion")
+            except ValueError:
+                pass
+        elif "param.sfo" in names:
+            sfo = parse_sfo(_small(dev, folder + "/param.sfo") or b"")
+            name, ver = sfo.get("TITLE"), sfo.get("APP_VER") or sfo.get("VERSION")
+        icon = _small(dev, folder + "/icon0.png") if "icon0.png" in names else None
+        if name or icon:
+            return name, ver, folder, icon
+    return None, None, None, None
+
+
+def ps_scan(dev, step, stop, old, icons):
+    ids = []
+    for d in PS_META + PS_APPS:
+        for n in firmware._names(dev, d) or []:
+            if re.match(r"^[A-Z]{4}\d{5}$", n) and not SYSTEM_ID.match(n) and n not in ids:
+                ids.append(n)
+    apps = []
+    for i, tid in enumerate(sorted(ids)):
+        if stop is not None and stop.is_set():
+            break
+        prev = old.get("app:" + tid)
+        if prev and prev.get("name") != tid:
+            apps.append(prev)
+            continue
+        step(0.05 + 0.8 * i / max(1, len(ids)), "Reading %s (%d of %d)..." % (tid, i + 1, len(ids)))
+        name, ver, folder, icon = ps_app_info(dev, tid)
+        app = {"path": "app:" + tid, "file": tid, "name": name or tid, "version": ver or "",
+               "author": "game or official app" if OFFICIAL_ID.match(tid) else "homebrew", "where": folder,
+               "homebrew": not OFFICIAL_ID.match(tid)}
+        if icon:
+            key = hashlib.sha1(tid.encode()).hexdigest()[:16]
+            (icons / (key + ".png")).write_bytes(icon)
+            app["icon"] = key
+        apps.append(app)
+    step(0.9, "Looking for payloads and plugins...")
+    payloads, seen = [], set()
+    for d in PS_PAYLOADS:
+        try:
+            entries = dev._list(d)
+        except Exception:
+            continue
+        for name, kind, size, modified in entries:
+            if kind == "file" and name.lower().endswith((".elf", ".bin", ".prx", ".sprx")):
+                full = str(PurePosixPath(d) / name)
+                if full in seen:
+                    continue
+                seen.add(full)
+                payloads.append({"path": full, "file": name, "name": name, "version": "", "size": size,
+                                 "sysmodule": True, "kind": "payload"})
+    apps.sort(key=lambda a: (not a.get("homebrew"), a["name"].lower()))
+    return apps, payloads
 
 
 class ScanJob:
@@ -136,10 +248,14 @@ def scan(cfg, step=lambda f, n: None, stop=None):
     dev = core.GD1(cfg)
     dev.connect(quiet=True)
     try:
-        step(0.02, "Looking for apps in /switch...")
+        step(0.02, "Looking for apps...")
         files = find_nros(dev)
         if not files and not firmware._names(dev, "/switch"):
-            raise SystemExit("There's no /switch folder on %s, so there's no Switch homebrew to list." % cfg["device_name"])
+            if is_playstation(dev):
+                return _finish(cfg, before, chosen, *ps_scan(dev, step, stop, old, icons), platform="playstation",
+                               step=step)
+            raise SystemExit("Patchbay doesn't know where %s keeps its apps yet (it knows Nintendo Switch and "
+                             "PlayStation 4/5). Ask the chat to look around its folders." % cfg["device_name"])
         apps = []
         for i, (path, size, modified) in enumerate(files):
             if stop is not None and stop.is_set():
@@ -188,7 +304,15 @@ def scan(cfg, step=lambda f, n: None, stop=None):
         sysmods.append({"path": m["path"], "file": m["id"], "name": m.get("name") or m["id"], "version": "",
                         "boot2": m.get("boot2"), "repo": chosen.get(m["path"]) or guess_repo(*nm.split(" or ")),
                         "repo_guessed": m["path"] not in chosen, "sysmodule": True})
-    lib = {"device": cfg["device_name"], "checked": time.time(), "apps": sorted(apps, key=lambda a: a["name"].lower()),
+    return _finish(cfg, before, chosen, apps, sysmods, platform="switch", step=step)
+
+
+def _finish(cfg, before, chosen, apps, sysmods, platform="switch", step=lambda f, n: None):
+    for a in apps + sysmods:
+        if "repo" not in a:
+            a["repo"] = chosen.get(a["path"]) or guess_repo(a.get("name"), PurePosixPath(a["path"]).stem)
+            a["repo_guessed"] = a["path"] not in chosen
+    lib = {"device": cfg["device_name"], "platform": platform, "checked": time.time(), "apps": sorted(apps, key=lambda a: (a.get("homebrew") is False, a["name"].lower())),
            "sysmodules": sysmods}
     if before.get("updates_checked"):
         lib["updates_checked"] = before["updates_checked"]

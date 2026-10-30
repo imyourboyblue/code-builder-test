@@ -2718,13 +2718,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/library/icon":
             cfg = APP.device(q.get("device")).cfg()
             key = q.get("id") or ""
-            f = core.data_dir(cfg) / "library" / "icons" / (key + ".jpg")
-            if not re.match(r"^[0-9a-f]{16}$", key) or not f.exists():
+            folder = core.data_dir(cfg) / "library" / "icons"
+            f = next((folder / (key + ext) for ext in (".jpg", ".png") if (folder / (key + ext)).exists()), None)
+            if not re.match(r"^[0-9a-f]{16}$", key) or not f:
                 self.send_error(404)
                 return
             data = f.read_bytes()
             self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Type", "image/png" if f.suffix == ".png" else "image/jpeg")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "max-age=3600")
             self.end_headers()

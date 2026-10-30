@@ -723,18 +723,22 @@ function drawApps(dev,lib,err){
   const card=(a,i)=>{const L=a.latest,st=L?L.status:null;
     return '<div class="apcard">'+(a.icon?'<img src="/api/library/icon?device='+enc(dev)+'&id='+a.icon+'" alt="">':'<div class="noicon"></div>')+
     '<div style="flex:1;min-width:0"><b>'+esc(a.name)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(a.version||'')+'</span>'+
-    '<div style="font-size:12.5px;color:var(--mute);overflow-wrap:anywhere">'+esc(a.author?a.author+' · ':'')+esc(a.path)+(a.boot2?' · starts at boot':'')+'</div>'+
+    '<div style="font-size:12.5px;color:var(--mute);overflow-wrap:anywhere">'+esc(a.author?a.author+' · ':'')+esc(a.where||a.path)+(a.boot2?' · starts at boot':'')+'</div>'+
     (a.problems&&a.problems.length?'<div style="font-size:13px;color:var(--bad)">⚠ Damaged: '+esc(a.problems[0])+'</div>':'')+(a.note?'<div style="font-size:13px">'+esc(a.note)+'</div>':'')+
     (L?'<div style="font-size:13px;margin-top:2px">'+(st==='newer'?'🆕 <b>'+esc(L.tag)+'</b> is out ('+esc(L.date)+')':st==='same'?'✅ Up to date ('+esc(L.tag)+')':st==='older'?'Yours is newer than the latest release ('+esc(L.tag)+'), maybe your own build':st==='none'?'No releases on GitHub':'Newest release: '+esc(L.tag)+' ('+esc(L.date)+')')+'</div>':'')+
     '<div style="font-size:12px;color:var(--mute)">'+(a.repo?'GitHub: '+link('https://github.com/'+a.repo,esc(a.repo))+(a.repo_guessed?' (guessed)':''):'No GitHub project known')+' · <a href="#" class="ap-repo" data-i="'+i+'">'+(a.repo?'change':'set it')+'</a></div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(st==='newer'?'<button class="primary ap-up" data-i="'+i+'">Update</button>':'')+
       (a.problems&&a.problems.length?'<button class="ap-fix" data-i="'+i+'">Help me fix it</button>':'')+'</div></div></div>'};
   const all=lib.apps.concat(lib.sysmodules||[]);
-  $('ap-body').innerHTML=(err?'<div style="color:var(--bad)">'+esc(err)+'</div>':'')+'<div class="apgrid">'+lib.apps.map((a,i)=>card(a,i)).join('')+'</div>'+
-    ((lib.sysmodules||[]).length?'<h3>Background programs (sysmodules)</h3><div class="apgrid">'+lib.sysmodules.map((a,i)=>card(a,lib.apps.length+i)).join('')+'</div>':'');
+  const ps=lib.platform==='playstation',grid=list=>'<div class="apgrid">'+list.map(([a,i])=>card(a,i)).join('')+'</div>',idx=lib.apps.map((a,i)=>[a,i]);
+  const hb=idx.filter(([a])=>!ps||a.homebrew),games=ps?idx.filter(([a])=>!a.homebrew):[];
+  $('ap-body').innerHTML=(err?'<div style="color:var(--bad)">'+esc(err)+'</div>':'')+(ps?'<h3 style="margin-top:0">Homebrew apps</h3>':'')+
+    (hb.length?grid(hb):'<div class="empty">No homebrew apps found.</div>')+
+    (games.length?'<details style="margin-top:14px"><summary style="cursor:pointer"><b>Games and official apps ('+games.length+')</b></summary>'+grid(games)+'</details>':'')+
+    ((lib.sysmodules||[]).length?'<h3>'+(ps?'Payloads and plugins':'Background programs (sysmodules)')+'</h3><div class="apgrid">'+lib.sysmodules.map((a,i)=>card(a,lib.apps.length+i)).join('')+'</div>':'');
   const ask=q=>{location.hash='#/d/'+enc(dev)+'/chat';setTimeout(()=>{if(busy)return;t.value=q;send.click()},900)};
   document.querySelectorAll('.ap-up').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];
-    ask('Update '+a.name+' ('+a.path+', version '+(a.version||'unknown')+') to the newest release '+a.latest.tag+' from github.com/'+a.repo+'. Back up the current file first.')});
+    ask('Update '+a.name+' ('+(a.where||a.path)+', version '+(a.version||'unknown')+') to the newest release '+a.latest.tag+' from github.com/'+a.repo+'. Back up the current file first.')});
   document.querySelectorAll('.ap-fix').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];ask(a.path+' looks damaged ('+a.problems[0]+'). Can you fix it?')});
   document.querySelectorAll('.ap-repo').forEach(b=>b.onclick=async e=>{e.preventDefault();const a=all[+b.dataset.i];
     const r=prompt('GitHub project for '+a.name+' (owner/name, like mtheall/ftpd). Leave empty to forget it.',a.repo||'');if(r===null)return;
