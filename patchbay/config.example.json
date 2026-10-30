@@ -21,7 +21,7 @@
     "*.iso"
   ],
   "max_file_mb": 200,
-  "max_files": 5000,
+  "max_files": 0,
   "data_folder": "~/PatchBay-data",
   "ollama_url": "http://localhost:11434",
   "ollama_model": "qwen3.6:35b-a3b",

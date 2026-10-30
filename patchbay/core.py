@@ -132,7 +132,9 @@ def load_config(path):
     cfg.setdefault("include", ["*"])
     cfg.setdefault("exclude", [])
     cfg.setdefault("max_file_mb", 200)
-    cfg.setdefault("max_files", 5000)
+    cfg.setdefault("max_files", 0)      # 0 = no limit
+    if cfg.get("max_files") == 5000:     # the old built-in limit (from when scans kept copies): now no limit
+        cfg["max_files"] = 0
     cfg.setdefault("keep_scans", 5)     # scan copies kept per device (older ones go, unless they hold the only good copy)
     cfg.setdefault("data_folder", "~/PatchBay-data")
     cfg.setdefault("ollama_url", "http://localhost:11434")
@@ -772,20 +774,28 @@ def cmd_scan(cfg, args):
     dev.connect()
 
     max_bytes = int(cfg["max_file_mb"] * 1024 * 1024)
-    files, skipped = [], []
+    files, skipped, patterned, over_limit, seen = [], [], 0, 0, 0
+    limit = int(cfg.get("max_files") or 0)
     for folder in cfg["remote_folders"]:
         say("Listing %s ..." % folder)
         for path, size, modified in dev.walk(folder):
+            seen += 1
+            if seen % 2000 == 0:
+                say("  %d files listed so far..." % seen)
             if not wanted(path, cfg):
+                patterned += 1
                 continue
             if size is not None and size > max_bytes:
                 skipped.append({"path": path, "size": size, "why": "bigger than max_file_mb"})
                 continue
+            if limit and len(files) >= limit:
+                over_limit += 1          # still counted, so the report can say how many were left out
+                continue
             files.append({"path": path, "size": size, "modified": modified})
-            if len(files) >= cfg["max_files"]:
-                say("Reached max_files (%d); stopping the listing." % cfg["max_files"])
-                break
-    say("Found %d files to check (%d skipped as too big)." % (len(files), len(skipped)))
+    say("The device has %d files in the scanned folders. Checking %d of them.%s" % (seen, len(files), "".join(
+        x for x in ((" %d left out by the include/exclude patterns." % patterned) if patterned else "",
+                    (" %d bigger than %s MB." % (len(skipped), cfg["max_file_mb"])) if skipped else "",
+                    (" %d over the max_files limit of %d." % (over_limit, limit)) if over_limit else ""))))
 
     prints = _json_file(fingerprints_file(root), {})
     if not prints:            # first scan since the change: start from the newest old snapshot's list
@@ -794,7 +804,8 @@ def cmd_scan(cfg, args):
     att = _json_file(attention_file(root), {})
     leftovers = leftover_notes([f["path"] for f in files])
     report = {"device": cfg["device_name"], "host": cfg["host"], "port": dev.port,
-              "time": stamp, "snapshot": "", "files": [], "skipped": skipped}
+              "time": stamp, "snapshot": "", "files": [], "skipped": skipped,
+              "on_device": seen, "patterned": patterned, "over_limit": over_limit, "limit": limit}
     stopped, kept = False, 0
     eta = Eta(len(files), sum(f["size"] or 0 for f in files), _json_file(scan_stats_file(root), {}))
     try:
@@ -955,9 +966,17 @@ def report_text(report):
         lines.append(f["path"])
         for p in f["problems"]:
             lines.append("  %-7s %s" % (p["level"].upper(), p["text"]))
+    left_out = []
     if report.get("skipped"):
-        lines.append("")
-        lines.append("Skipped %d files bigger than max_file_mb." % len(report["skipped"]))
+        left_out.append("%d bigger than max_file_mb" % len(report["skipped"]))
+    if report.get("patterned"):
+        left_out.append("%d left out by the include/exclude patterns" % report["patterned"])
+    if report.get("over_limit"):
+        left_out.append("%d over the max_files limit of %d" % (report["over_limit"], report["limit"]))
+    if report.get("on_device") is not None:
+        lines.append("The scanned folders hold %d files on the device." % report["on_device"])
+    if left_out:
+        lines.append("Not checked: %s. Ask the chat to change these settings to include them." % "; ".join(left_out))
     if report.get("kept"):
         lines.append("")
         lines.append("%d file%s with problems %s kept on the Mac under Needs attention until you decide what to do. "

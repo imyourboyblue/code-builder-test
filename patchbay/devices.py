@@ -28,7 +28,7 @@ PORTRAIT_LIMIT = 3 * 1024 * 1024
 NEW_DEVICE = {
     "device_name": "", "host": "", "ports": [21, 5000], "username": "anonymous", "password": "anonymous@",
     "passive_mode": True, "timeout_seconds": 20, "remote_folders": ["/"], "include": ["*"],
-    "exclude": ["*.mp4", "*.wav", "*.iso"], "max_file_mb": 200, "max_files": 5000, "allow_writes": False,
+    "exclude": ["*.mp4", "*.wav", "*.iso"], "max_file_mb": 200, "max_files": 0, "allow_writes": False,
     "about": "",
 }
 
@@ -232,7 +232,7 @@ SETTINGS = {
     "include": ("list", "file patterns scans check"),
     "exclude": ("list", "file patterns scans skip"),
     "max_file_mb": ("int", "biggest file a scan copies, in MB"),
-    "max_files": ("int", "most files a scan copies"),
+    "max_files": ("int", "most files a scan checks (0 = no limit)"),
     "allow_writes": ("bool", "whether anything may be written to the device"),
     "about": ("text", "a sentence about the device for the AI"),
     "backup_folder": ("text", "where full backups go"),
