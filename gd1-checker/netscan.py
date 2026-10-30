@@ -11,6 +11,7 @@ offers. It does not try passwords and does not attempt to break in. Built-in par
 
 import re
 import socket
+import http.client
 import struct
 import threading
 import time
@@ -217,7 +218,7 @@ def load_makers(download=True):
                         MAKERS_FILE.write_text(got)
                         text = got
                         break
-                except (OSError, ValueError):
+                except (OSError, ValueError, http.client.HTTPException):
                     continue
             if not text and MAKERS_FILE.exists():
                 text = MAKERS_FILE.read_text(errors="replace")   # an old copy is better than none
@@ -530,7 +531,7 @@ def web_title(ip, port):
         html, server = _get("%s://%s:%d/" % ("https" if port in (443, 8443) else "http", ip, port))
     except urllib.error.HTTPError as e:
         return None, e.headers.get("Server", "") if e.headers else ""
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return None, ""
     m = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
     title = re.sub(r"\s+", " ", m.group(1)).strip() if m else None
@@ -543,7 +544,7 @@ def roku_info(ip):
     """A Roku's own name and model, from its documented local control (ECP) interface. Read-only."""
     try:
         xml, _ = _get("http://%s:8060/query/device-info" % ip)
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return {}
     pick = lambda tag: (re.search(r"<%s>([^<]+)</%s>" % (tag, tag), xml) or [None, None])[1]
     return {"name": pick("user-device-name") or pick("friendly-device-name"),
@@ -562,7 +563,7 @@ def cast_info(ip):
         import json
         text, _ = _get("http://%s:8008/setup/eureka_info?params=name,device_info" % ip)
         j = json.loads(text)
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return {}
     di = j.get("device_info") or {}
     return {"name": j.get("name"), "model": _maker_model(di.get("manufacturer"), di.get("model_name"))}
@@ -610,7 +611,7 @@ def _upnp_describe(url):
     try:
         with urllib.request.urlopen(url, timeout=2.5) as r:
             xml = r.read(8000).decode("utf-8", "replace")
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return None, None, None
     name = re.search(r"<friendlyName>([^<]+)</friendlyName>", xml)
     dtype = re.search(r"<deviceType>[^<]*:device:([^:]+):", xml)

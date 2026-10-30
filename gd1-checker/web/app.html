@@ -388,7 +388,7 @@ async function openSecurity(d){
     if(j.running){$('sec-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="sec-stop">Stop</button></div>';
       $('sec-stop').onclick=()=>postJSON('/api/security/stop',{ip:d.ip});return}
     clearInterval(secTimer);
-    if(j.error){$('sec-body').innerHTML='<div style="color:var(--bad)">'+esc(j.error)+'</div>';return}
+    if(j.error){$('sec-body').innerHTML='<div style="color:var(--bad)">'+esc(j.error)+'</div><div class="row" style="margin-top:10px"><button id="sec-retry">Try again</button><button onclick="closeModal()">Close</button></div>';$('sec-retry').onclick=ask;return}
     if(!j.report)return ask();
     secReport(d,j.report)};
   const poll=()=>{clearInterval(secTimer);draw();secTimer=setInterval(draw,1200)};

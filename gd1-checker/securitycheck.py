@@ -15,6 +15,7 @@ confirms the device is theirs. Built-in parts only.
 """
 
 import ftplib
+import http.client
 import ipaddress
 import json
 import re
@@ -108,7 +109,7 @@ def _http_server(ip, port):
             return r.headers.get("Server", ""), r.headers.get("X-Powered-By", ""), r.read(20000).decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return (e.headers.get("Server", "") if e.headers else ""), "", ""
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):   # e.g. an FTP server on a "web" port
         return "", "", ""
 
 
@@ -200,7 +201,7 @@ def lookup_cves(product, version, fetch=None):
     for url in urls:
         try:
             data = fetch(url)
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
             continue
         cves = parse_nvd(data)
         if cves or url is urls[-1]:
@@ -291,7 +292,7 @@ def anonymous_ftp(ip, port):
                 f.quit()
             except (OSError, ftplib.Error):
                 f.close()
-    except (OSError, ftplib.Error, EOFError):
+    except (OSError, ftplib.Error, EOFError, UnicodeError):
         return None
 
 
@@ -378,7 +379,8 @@ class SecurityCheck:
             self.report = run(self.ip, self.kind, self._step, self.stop)
             save_report(self.report)
         except Exception as e:  # keep the page alive
-            self.error = str(e)
+            self.error = "The check stopped early (%s: %s). Try again, and send this if it keeps happening." % (
+                type(e).__name__, e)
         finally:
             self.progress, self.finished = 1.0, time.time()
 
@@ -402,11 +404,18 @@ def run(ip, kind=None, step=None, stop=None, lookup=lookup_cves):
     for p in ports:
         entry = {"port": p, "name": PORT_NAMES.get(p, "Port %d" % p), "software": []}
         text = ""
-        if p in WEB_PORTS:
-            server, powered, _ = _http_server(ip, p)
-            text = " ".join(x for x in (server, powered) if x)
-        elif p not in (5555, 9100, 515):
-            text = _greeting(ip, p)
+        try:
+            # Servers like FTP and SSH speak first; only ask web questions if nothing did (port 5000 can be FTP).
+            if p not in (5555, 9100, 515):
+                text = _greeting(ip, p, 1.2 if p in WEB_PORTS else 1.5)
+            if not text and p in WEB_PORTS:
+                server, powered, _ = _http_server(ip, p)
+                text = " ".join(x for x in (server, powered) if x)
+            if text.startswith("220") and p not in (21, 990):
+                entry["name"] = "FTP"
+        except Exception as e:  # one odd door must not stop the whole check
+            text = ""
+            entry["error"] = str(e)[:200]
         entry["greeting"] = text[:200]
         for prod, ver in software_from(text):
             entry["software"].append({"product": prod, "version": ver})
@@ -418,7 +427,8 @@ def run(ip, kind=None, step=None, stop=None, lookup=lookup_cves):
 
     findings = rules(ports, kind)
 
-    for p in [x for x in ports if x in (21, 5000)]:
+    ftp_ports = [e["port"] for e in services if e["port"] == 21 or e["greeting"].startswith("220")]
+    for p in ftp_ports:
         if stopped():
             break
         step(0.45, "Checking whether FTP lets anyone in...")
@@ -439,7 +449,10 @@ def run(ip, kind=None, step=None, stop=None, lookup=lookup_cves):
         if stopped():
             break
         step(0.55, "Checking the secure page on port %d..." % p)
-        t = tls_check(ip, p)
+        try:
+            t = tls_check(ip, p)
+        except Exception as e:
+            t = {"port": p, "error": str(e)[:200]}
         tls.append(t)
         if t.get("old_versions"):
             findings.append(finding("medium", "It still accepts old encryption (%s)" % " and ".join(t["old_versions"]),
@@ -462,7 +475,10 @@ def run(ip, kind=None, step=None, stop=None, lookup=lookup_cves):
             step(0.65 + 0.3 * i / len(software), "Looking up known problems for %s %s..." % (prod, ver or ""))
             if not ver:
                 continue
-            cves = lookup(prod, ver)
+            try:
+                cves = lookup(prod, ver)
+            except Exception:
+                cves = None
             port = next((s["port"] for s in services if any(x["product"] == prod for x in s["software"])), None)
             if cves is None:
                 findings.append(finding("info", "Couldn't look up %s %s" % (prod, ver), "The vulnerability database "
