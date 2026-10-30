@@ -1477,6 +1477,40 @@ def t_find_repo(st, emit, a):
         for i in sorted(items, key=lambda i: -(i.get("stargazers_count") or 0)))
 
 
+@tool("read_repo_file",
+      "Read a file from a public GitHub repository without downloading it: README.md, Makefile, CMakeLists.txt, a "
+      "CI workflow, or a folder listing (path ending in /, e.g. .github/workflows/). Use it to check build steps and "
+      "needed libraries before planning. General research only.",
+      {"repo": dict(S, description="owner/name, e.g. joel16/NX-Shell"),
+       "path": dict(S, description="File or folder in the repository, e.g. README.md or .github/workflows/")},
+      ["repo", "path"])
+def t_read_repo_file(st, emit, a):
+    repo = (a.get("repo") or "").strip().strip("/")
+    path = (a.get("path") or "").strip().lstrip("/")
+    if not re.match(r"^[\w.-]+/[\w.-]+$", repo) or ".." in path:
+        raise ToolError("Give repo as owner/name and a path inside it.")
+    hdr = {"User-Agent": "patchbay/1.0", "Accept": "application/vnd.github+json"}
+    try:
+        if not path or path.endswith("/"):
+            url = "https://api.github.com/repos/%s/contents/%s" % (repo, urllib.parse.quote(path.rstrip("/")))
+            with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=20) as r:
+                items = json.loads(r.read())
+            return "Files in %s/%s:\n" % (repo, path) + "\n".join(
+                "- %s%s" % (i.get("name"), "/" if i.get("type") == "dir" else "") for i in items[:200])
+        url = "https://raw.githubusercontent.com/%s/HEAD/%s" % (repo, urllib.parse.quote(path))
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "patchbay/1.0"}),
+                                    timeout=20) as r:
+            text = r.read(400000).decode("utf-8", "replace")
+        return clip("From https://github.com/%s/blob/HEAD/%s:\n%s" % (repo, path, text))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ToolError("%s isn't in %s (404). List the folder (path ending in /) to see what's there, or check "
+                            "the repository name with find_github_repo." % (path or "That folder", repo))
+        raise ToolError("GitHub said no: %s" % e)
+    except (OSError, ValueError) as e:
+        raise ToolError("Couldn't reach GitHub: %s" % tlsfix.explain(e))
+
+
 @tool("project_packages",
       "For a console project (Switch, 3DS, Wii U): every devkitPro library its build files need, and which are not "
       "installed yet. Read-only. Put the missing ones in the plan as one install step.", {"project": S}, ["project"])
@@ -1507,6 +1541,18 @@ def t_tools(st, emit, a):
 def t_get_source(st, emit, a):
     cfg = st.cfg()
     name, dest = pe(projects.clone_target, (a.get("url") or "").strip(), a.get("name"))
+    gh = re.match(r"^https://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/?$", a["url"].strip())
+    if gh:     # never download from a guessed address: check the repository really exists first
+        try:
+            req = urllib.request.Request("https://api.github.com/repos/" + gh.group(1),
+                                         headers={"User-Agent": "patchbay/1.0"})
+            urllib.request.urlopen(req, timeout=20).close()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise ToolError("https://github.com/%s doesn't exist. Don't guess: find the real repository with "
+                                "find_github_repo, or ask the user for the link." % gh.group(1))
+        except OSError:
+            pass     # GitHub unreachable: the download itself will say so
     if dest.exists() and any(dest.iterdir()):
         raise ToolError("%s already exists on the Mac. Use set_project with that folder instead." % dest)
     return add_pending(st, emit, "get_source", cfg, name, dest, "",
@@ -1916,7 +1962,8 @@ def confirm_self(st, p, emit):
     st.messages.append({"role": "user", "content": "[I confirmed the Patchbay change. %s]" % msg})
 
 
-for _n in ("check_build_tools", "latest_release", "find_github_repo", "web_search", "read_web_page"):
+for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
+           "read_web_page"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
     HOME_HANDLERS[_n] = HANDLERS[_n]
@@ -2036,7 +2083,11 @@ are the usual cause on Switch; look up the library's changelog); build again unt
 the console for a background program).
   Downloading, project edits, builds and simple setup commands on the Mac may run by themselves (the tool result \
 says "Done automatically"); then just keep going. Writing to the device always needs the user's card.
-- Never guess a GitHub owner/name. Use the "Known source" line from prepare_homebrew_update, or find_github_repo.
+- Never guess anything: repository names, web addresses, package names, versions or build steps. Look each one \
+up first (prepare_homebrew_update's "Known source", find_github_repo, read_repo_file for the README, Makefile and \
+.github/workflows, latest_release, web_search, read_web_page). When you tell the user a fact, say where it came \
+from in a few words (e.g. "from its release page"). If you can't confirm something, say so and ask the user.
+- Ask Claude only after your own research (at least 3 lookups) didn't answer it.
 - One plan, one button: for any job that changes or runs something (installs, downloads, builds, copying to the \
 device, commands), first work everything out with read-only tools (prepare_homebrew_update, check_build_tools, \
 project_packages, project_read, latest_release...). Then call propose_plan ONCE with every step in order, the device \
@@ -2179,7 +2230,12 @@ def offer_question(st, emit, cfg, question, details, purpose):
        "purpose": dict(S, description="'stuck' (default) or 'plan'")}, ["question"])
 def t_ask_claude(st, emit, a):
     purpose = "plan" if (a.get("purpose") or "").strip().lower() == "plan" else "stuck"
-    return offer_question(st, emit, st.cfg(), a.get("question"), a.get("details"), purpose)
+    research = research_done(st)
+    if len(research) < NEED_RESEARCH:
+        raise ToolError(RESEARCH_FIRST.strip("[]").replace("Patchbay: b", "B"))
+    details = (a.get("details") or "") + "\n\nWhat I already researched (don't repeat it):\n" + "\n".join(
+        "- " + r for r in research[-12:])
+    return offer_question(st, emit, st.cfg(), a.get("question"), details, purpose)
 
 
 def claude_tools(tools):
@@ -2211,7 +2267,7 @@ def claude_system(system):
 
 
 # Steps that move a job forward (as opposed to only reading).
-LOOKUP_TOOLS = {"latest_release", "find_github_repo", "web_search", "read_web_page"}
+LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_search", "read_web_page"}
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
@@ -2258,8 +2314,34 @@ def ask_claude_choice(st, emit):
     chat_turn(st, None, emit)
 
 
+RESEARCH_TOOLS = {"find_github_repo", "read_repo_file", "latest_release", "web_search", "read_web_page",
+                  "prepare_homebrew_update", "project_packages", "check_build_tools", "project_read", "project_search"}
+NEED_RESEARCH = 3
+RESEARCH_FIRST = ("[Patchbay: before asking Claude (which costs money), research it yourself online first: "
+                  "find_github_repo, read_repo_file (README, Makefile, .github/workflows), latest_release, web_search, "
+                  "read_web_page. Ask Claude only if that research still doesn't answer it.]")
+
+
+def research_done(st):
+    """The research steps (tool, first line of result) since the user's last own message."""
+    out = []
+    for m in reversed(st.messages):
+        if m.get("role") == "user" and not str(m.get("content") or "").startswith("["):
+            break
+        if m.get("role") == "tool" and m.get("tool_name") in RESEARCH_TOOLS:
+            first = next((l.strip() for l in str(m.get("content") or "").splitlines() if l.strip()), "")
+            out.append("%s: %s" % (m["tool_name"], first[:160]))
+    return list(reversed(out))
+
+
 def stuck_help(st, emit, cfg, name, args, result):
     """The same step failed twice: ask Claude. Returns True when a card is now waiting for the user."""
+    research = research_done(st)
+    if len(research) < NEED_RESEARCH:
+        st.messages.append({"role": "user", "content": RESEARCH_FIRST})
+        return False
+    result = result + "\n\nWhat the local AI already researched (don't repeat it):\n" + "\n".join(
+        "- " + r for r in research[-12:])
     question = "This step failed twice: %s %s. What is wrong, and exactly what should be done next?" % (
         name, json.dumps(args)[:600])
     try:
@@ -2492,7 +2574,7 @@ STEP_WORDS = {
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
     "identify_firmware": "Working out the firmware", "save_firmware_name": "Saving the firmware name",
     "web_search": "Searching the web for {query}", "device_firmware": "Reading the firmware versions",
-    "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "check_build_tools": "Checking the build tools",
+    "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "read_repo_file": "Reading {path} in {repo}", "check_build_tools": "Checking the build tools",
     "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
     "read_web_page": "Reading {url}", "setup_firmware_helper": "Preparing the helper app",
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",

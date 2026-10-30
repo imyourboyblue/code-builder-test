@@ -530,6 +530,14 @@ def install_plan(manager, packages, update_all=False):
         raise ProjectError("manager must be devkitpro or homebrew.")
     # Fix names a build tool uses but devkitPro doesn't (switch-freetype2 -> switch-freetype).
     pkgs = [dkp_name(x) if x.startswith(DKP_PREFIXES) else x for x in pkgs]
+    avail = dkp_available("all")
+    unknown = [x for x in pkgs if avail and x not in avail]
+    if unknown:
+        import difflib
+        tips = ["%s (did you mean %s?)" % (x, ", ".join(difflib.get_close_matches(x, sorted(avail), 3, 0.6)) or
+                                           "nothing close") for x in unknown]
+        raise ProjectError("devkitPro has no package called: %s. Don't guess names; check the project's build "
+                           "files (project_packages) or its CI workflow." % "; ".join(tips))
     pac = find_pacman()
     cmds = []
     if not pac:

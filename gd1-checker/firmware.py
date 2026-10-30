@@ -640,4 +640,59 @@ def web_search(query):
         results.append("%s\n  %s\n  %s" % (clean(title), href, clean(snip)))
         if len(results) >= 8:
             break
-    return "\n".join(results) if results else "No results (the search site may have refused). Try read_web_page on a known site."
+    if not results:
+        results = _search_fallbacks(query)
+    return "\n".join(results) if results else ("No results from any search site. For homebrew, use find_github_repo "
+                                               "and read_repo_file instead.")
+
+
+def _clean_html(x):
+    x = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", x or ""))
+    for a, b in (("&amp;", "&"), ("&#x27;", "'"), ("&#39;", "'"), ("&quot;", '"'), ("&lt;", "<"), ("&gt;", ">")):
+        x = x.replace(a, b)
+    return x.strip()
+
+
+def _fetch_html(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) patchbay/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read(2 * 1024 * 1024).decode("utf-8", "replace")
+
+
+def _search_fallbacks(query):
+    """Other search sites, used when DuckDuckGo's main page gives nothing. Each is tried until one answers."""
+    q = urllib.parse.urlencode({"q": query})
+    out = []
+    try:   # DuckDuckGo's plain text version
+        html = _fetch_html("https://lite.duckduckgo.com/lite/?" + q)
+        links = re.findall(r"(?s)<a[^>]+href=\"([^\"]+)\"[^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>", html)
+        snips = re.findall(r"(?s)class=['\"]result-snippet['\"][^>]*>(.*?)</td>", html)
+        for i, (href, title) in enumerate(links[:8]):
+            u = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg")
+            out.append("%s\n  %s\n  %s" % (_clean_html(title), u[0] if u else href,
+                                           _clean_html(snips[i]) if i < len(snips) else ""))
+    except (OSError, ValueError):
+        pass
+    if out:
+        return out
+    try:   # Mojeek, an independent search engine
+        html = _fetch_html("https://www.mojeek.com/search?" + q)
+        for m in re.finditer(r'(?s)<a[^>]+class="title"[^>]+href="([^"]+)"[^>]*>(.*?)</a>(.*?)<p class="s">(.*?)</p>',
+                             html):
+            out.append("%s\n  %s\n  %s" % (_clean_html(m.group(2)), m.group(1), _clean_html(m.group(4))))
+            if len(out) >= 8:
+                break
+    except (OSError, ValueError):
+        pass
+    if out:
+        return out
+    try:   # GitHub's own repository search (most homebrew lives there)
+        req = urllib.request.Request("https://api.github.com/search/repositories?per_page=6&" + q,
+                                     headers={"User-Agent": "patchbay/1.0", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            for i in json.loads(r.read()).get("items") or []:
+                out.append("GitHub: %s (%s stars)\n  %s\n  %s" % (i.get("full_name"), i.get("stargazers_count"),
+                                                                    i.get("html_url"), (i.get("description") or "")[:150]))
+    except (OSError, ValueError):
+        pass
+    return out
