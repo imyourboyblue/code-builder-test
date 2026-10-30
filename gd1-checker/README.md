@@ -417,3 +417,15 @@ The app was tested with two fake FTP devices and one switched-off device: device
 The AI model menus show what each model is good for (like "Everyday help" or "Hard problems and building"), with a
 short line under the menu, instead of model names and versions. To change the words, edit `model_labels.py`: it has
 one list for the models on your Mac, one for Claude, and size-based labels for any other model you install.
+
+## One plan, one button
+
+For jobs that install, download, build or copy things, the chat AI first works everything out by reading (it
+doesn't change anything yet). Then it shows one plan card: numbered steps, the device files it will change, any
+commands it will run on the Mac, and what could go wrong. Press Confirm once and it does every step, showing
+progress. Stop works any time. The rules that still apply:
+- Device files are backed up before they're changed.
+- Installs still bring up the Mac's own password box.
+- A plan with risky commands (like `rm -rf`) needs the red "I understand" tick. A risky command that wasn't in the
+  plan still gets its own card.
+- If a step fails and can't be fixed, the AI stops and says what went wrong.

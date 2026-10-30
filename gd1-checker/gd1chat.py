@@ -606,6 +606,17 @@ def runs_by_itself(cfg, kind, extra):
     return kind == "command" and bool(SAFE_COMMAND.match(cmd.strip())) and ".." not in cmd and not risk.risky(cmd)
 
 
+def in_plan(plan, kind, extra):
+    """Whether an approved plan covers this Mac step. Risky commands only if the plan listed them and the user
+    ticked "I understand" on it."""
+    if kind == "ask_claude":
+        return False
+    cmd = (extra or {}).get("command") or ""
+    if kind == "command" and risk.risky(cmd):
+        return bool(plan.get("understood")) and cmd.strip() in plan.get("commands", [])
+    return True
+
+
 def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, on_mac=False, extra_fields=None):
     if on_mac:
         before = getattr(st, "failed_steps", {}).get(step_key(dict({"kind": kind, "remote": remote}, **(extra_fields or {}))))
@@ -613,6 +624,14 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
             raise ToolError("This exact step already failed: %s Don't try it again unchanged and don't call it "
                             "temporary. Read the error, fix the cause (a different command, a missing package, a code "
                             "change), or call ask_claude if you're stuck." % before)
+    if on_mac and kind != "plan" and st.plan and in_plan(st.plan, kind, extra_fields):
+        # The user approved the whole plan with one button: Mac steps in it run without their own card.
+        p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
+        emit({"type": "note", "text": "Plan step on %s: %s" % (APP.computer if APP else "the Mac", summary)})
+        short, detail = run_mac_step(st, cfg, p, emit)
+        if kind not in ("command", "build"):
+            emit({"type": "note", "text": short})
+        return "Done as part of the approved plan (no card needed). " + detail
     if on_mac and runs_by_itself(cfg, kind, extra_fields):
         # Automatic Mac step (setting auto_mac_steps): project files are backed up first, downloads go to a new folder.
         p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
@@ -967,9 +986,10 @@ def t_build(st, emit, a):
         res = t_install_packages(st, emit, {"manager": "devkitpro", "packages": missing,
                                             "reason": "%s needs these devkitPro libraries before it can build."
                                                       % pr["name"]})
-        return ("Not built yet: the project's build files need devkitPro libraries that aren't installed (%s). "
-                "%s After the user confirms and they install, call propose_build again."
-                % (", ".join(missing), res))
+        if not (res.startswith("Done as part of the approved plan") and not failed(res)):
+            return ("Not built yet: the project's build files need devkitPro libraries that aren't installed (%s). "
+                    "%s After the user confirms and they install, call propose_build again."
+                    % (", ".join(missing), res))
     return add_pending(st, emit, "build", cfg, pr["name"], root, "",
                        "Build project %s on %s" % (pr["name"], APP.computer if APP else "the Mac"),
                        "In folder: %s\nRun: %s" % (root, pr["build"]), on_mac=True, extra_fields={"project": pr["name"]})
@@ -1220,7 +1240,11 @@ def t_save_platform(st, emit, a):
       "device_writes: approving the plan (the user types the device name) covers those writes, each backed up "
       "first. Does NOT run anything by itself.",
       {"title": S, "steps": {"type": "array", "items": S, "description": "Plain steps, in order"},
-       "device_writes": {"type": "array", "items": S, "description": "Device paths the plan will change, if any"}},
+       "device_writes": {"type": "array", "items": S, "description": "Device paths the plan will change, if any"},
+       "mac_commands": {"type": "array", "items": S,
+                        "description": "Exact commands the plan will run on the Mac, if any (installs and builds "
+                                       "don't need listing)"},
+       "could_go_wrong": dict(S, description="One or two plain sentences: what could go wrong, and how it's undone")},
       ["title", "steps"])
 def t_plan(st, emit, a):
     cfg = st.cfg()
@@ -1228,12 +1252,21 @@ def t_plan(st, emit, a):
     if not steps:
         raise ToolError("Give the steps of the plan.")
     writes = [norm(x) for x in (a.get("device_writes") or []) if str(x).strip()][:50]
+    cmds = [str(x).strip() for x in (a.get("mac_commands") or []) if str(x).strip()][:30]
+    danger = []
+    for c in cmds:
+        danger += [w for w in risk.risky(c) if w not in danger]
     text = "\n".join("%d. %s" % (i + 1, x) for i, x in enumerate(steps))
     if writes:
         text += "\n\nChanges to %s (each backed up first):\n" % cfg["device_name"] + "\n".join("- " + w for w in writes)
+    if cmds:
+        text += "\n\nCommands it runs on the Mac:\n" + "\n".join("- " + c for c in cmds)
+    text += "\n\nWhat could go wrong: " + ((a.get("could_go_wrong") or "").strip() or
+                                         "A step can fail. Then I stop and tell you what happened; nothing after it runs.")
     return add_pending(st, emit, "plan", cfg, "plan", "", a.get("title") or "",
                        "Plan: %s" % (a.get("title") or "what I'll do"), text, on_mac=True,
-                       extra_fields={"steps": steps, "writes": writes, "needs_typing": bool(writes)})
+                       extra_fields={"steps": steps, "writes": writes, "needs_typing": bool(writes),
+                                     "commands": cmds, "risk": danger})
 
 
 @tool("read_attachment",
@@ -1412,6 +1445,18 @@ def t_latest(st, emit, a):
         return clip(firmware.latest_release(a.get("repo")))
     except (OSError, ValueError) as e:
         raise ToolError("Couldn't get the releases: %s" % e)
+
+
+@tool("project_packages",
+      "For a console project (Switch, 3DS, Wii U): every devkitPro library its build files need, and which are not "
+      "installed yet. Read-only. Put the missing ones in the plan as one install step.", {"project": S}, ["project"])
+def t_project_packages(st, emit, a):
+    pr = project(st, a.get("project"))
+    console, needed, missing = projects.needed_packages(pe(projects.folder_of, pr))
+    if not console:
+        return "%s isn't a devkitPro console project (no switch_rules/libnx etc. in its build files)." % pr["name"]
+    return ("%s builds for %s. Libraries its build files use: %s. Not installed yet: %s." %
+            (pr["name"], console, ", ".join(needed) or "none found", ", ".join(missing) or "none"))
 
 
 @tool("check_build_tools",
@@ -1961,9 +2006,12 @@ are the usual cause on Switch; look up the library's changelog); build again unt
 the console for a background program).
   Downloading, project edits, builds and simple setup commands on the Mac may run by themselves (the tool result \
 says "Done automatically"); then just keep going. Writing to the device always needs the user's card.
-- For a job with more than 3 steps, first use propose_plan: a short numbered plan, plus the device files it will \
-change. The user approves it once; then do every step without stopping to ask (approved device writes go through \
-without another card).
+- One plan, one button: for any job that changes or runs something (installs, downloads, builds, copying to the \
+device, commands), first work everything out with read-only tools (prepare_homebrew_update, check_build_tools, \
+project_packages, project_read, latest_release...). Then call propose_plan ONCE with every step in order, the device \
+files it changes, any exact Mac commands, and what could go wrong. Don't show single command or install cards \
+before the plan. After the user approves it, do every step without stopping to ask: Mac steps and the listed \
+device writes run without more cards. If a step fails, try to fix it; if you can't, stop and say what failed.
 - The user can drop files into the chat (logs, pictures, .nro files); their contents come with the message. \
 read_attachment reads more of a long one.
 - If something fails, read the output (it shows the error lines), say what failed in one line, and fix it \
@@ -2412,7 +2460,7 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "ask_claude": "Asking Claude", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "project_packages": "Checking which libraries {project} needs", "ask_claude": "Asking Claude", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
@@ -2566,7 +2614,8 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
                                                                % done["message"]})
                 return
             emit({"type": "note", "text": "Backed up %s first (Backups tab)." % ", ".join(folders)})
-        st.plan = {"steps": p["steps"], "writes": p["writes"]}
+        st.plan = {"steps": p["steps"], "writes": p["writes"], "commands": p.get("commands") or [],
+                   "understood": bool(p.get("risk"))}     # a risky plan can only be confirmed with the tick
         emit({"type": "answer", "text": "Plan approved. Working through it now; press Stop any time."})
         st.messages.append({"role": "user", "content": "[I approved the plan. Carry it out now without asking me again."
                                                        "%s]" % (" These device changes are approved too: " +
