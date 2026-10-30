@@ -281,9 +281,12 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
-.cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected{background:rgba(255,59,48,.16);color:var(--bad)}
+.cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected,.cl-dot.none{background:rgba(255,59,48,.16);color:var(--bad)}.cl-dot.unknown,.cl-dot.checking{background:rgba(232,163,61,.18);color:var(--warn)}
+#claude-btn.st-connected{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
+#claude-btn.st-rejected,#claude-btn.st-none{border-color:var(--bad);box-shadow:inset 0 0 0 1px var(--bad)}
+#claude-btn.st-unknown,#claude-btn.st-checking{border-color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn)}
 .cl-state{font-size:13.5px;font-weight:600;padding:7px 10px;border-radius:8px;margin-bottom:8px;background:var(--line);color:var(--mute)}
-.cl-state::before{content:"\25CF ";}.cl-state.connected{background:rgba(52,199,89,.16);color:var(--ok)}.cl-state.rejected{background:rgba(255,59,48,.14);color:var(--bad)}
+.cl-state::before{content:"\25CF ";}.cl-state.connected{background:rgba(52,199,89,.16);color:var(--ok)}.cl-state.rejected,.cl-state.none{background:rgba(255,59,48,.14);color:var(--bad)}.cl-state.unknown{background:rgba(232,163,61,.16);color:var(--warn)}
 .att-n{background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;font-weight:700;margin-left:3px}
 .att-intro{font-size:13.5px;color:var(--mute);margin:0 0 12px;line-height:1.45}
 .att-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius,12px);padding:12px 14px;margin-bottom:10px}
@@ -324,7 +327,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
     <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select> <span id="model-why" style="font-size:12px"></span></label>
-    <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent">☁ Claude <span id="cl-dot" class="cl-dot"></span></button></div>
+    <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent"><span id="cl-label">☁ Claude</span> <span id="cl-dot" class="cl-dot checking">checking</span></button></div>
   <div id="chatlist"></div>
   <div id="log"></div>
   <div class="quick" id="quick"></div>
@@ -1115,13 +1118,19 @@ setTimeout(async()=>{try{const u=await getJSON('/api/update');setUpdBadge(!u.err
 
 // ---- Claude (cloud help with your own API key)
 function money(x){return '$'+(x<0.995?(+x).toFixed(x<0.1?3:2):(+x).toFixed(2))}
-function showCost(c){const b=$('claude-btn');if(!b)return;
-  b.textContent='☁ Claude'+(c&&c.session>0?' · '+money(c.session)+' today':'');
-  b.title='Ask Claude for help. This session: '+money(c.session||0)+'. This month: '+money(c.month||0)+(c.cap?' of '+money(c.cap)+' limit':'')+'.'}
-async function claudeStatus(force){try{const s=await getJSON('/api/claude/status'+(force?'?force=1':''));
-  const d=$('cl-dot');d.className='cl-dot '+s.state;d.textContent={connected:'connected',rejected:'key rejected',none:'not connected',unknown:'not checked'}[s.state]||'';
-  $('claude-btn').title=s.text+'. Click for Claude settings.';const b=$('cl-state');if(b){b.className='cl-state '+s.state;b.textContent=s.text}return s}catch(e){return null}}
-claudeStatus();
+let CL_COST='',CL_TEXT='Checking your Claude key';
+function clTitle(){const b=$('claude-btn');if(b)b.title=CL_TEXT+'. '+CL_COST+'Click for Claude settings.'}
+function showCost(c){const l=$('cl-label');if(!l)return;   // only the label: the status pill next to it stays
+  l.textContent='☁ Claude'+(c&&c.session>0?' · '+money(c.session)+' today':'');
+  CL_COST='This session: '+money(c.session||0)+'. This month: '+money(c.month||0)+(c.cap?' of '+money(c.cap)+' limit':'')+'. ';clTitle()}
+function clShow(s){const d=$('cl-dot'),btn=$('claude-btn');
+  if(d){d.className='cl-dot '+s.state;d.textContent={connected:'connected',rejected:'key rejected',none:'no key',unknown:'can\'t check',checking:'checking'}[s.state]||''}
+  if(btn)btn.className='st-'+s.state;CL_TEXT=s.text;clTitle();
+  const b=$('cl-state');if(b){b.className='cl-state '+s.state;b.textContent=s.text}}
+async function claudeStatus(force){if(force)clShow({state:'checking',text:'Checking your key...'});
+  try{const s=await getJSON('/api/claude/status'+(force?'?force=1':''));clShow(s);return s}
+  catch(e){clShow({state:'unknown',text:'Couldn\'t check the key ('+e.message+')'});return null}}
+claudeStatus();setInterval(()=>claudeStatus(),11*60*1000);
 async function loadClaude(){try{const j=await getJSON('/api/claude');showCost({session:j.session_cost,month:j.month_cost,cap:j.monthly_cap});return j}catch(e){return null}}
 $('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window.CLWHY=j.model_why||{};setTimeout(()=>claudeStatus(true),0);
   modal('<h3>☁ Ask Claude for help</h3><div id="cl-state" class="cl-state">Checking your key...</div><div style="font-size:13.5px">Claude is Anthropic\'s cloud AI. It uses your own API key, which stays on '+esc(info.computer||'this Mac')+
@@ -1141,8 +1150,8 @@ $('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window
   const save=async extra=>{const b={mode:$('cl-mode').value,model:$('cl-model').value,auto_send:$('cl-auto').checked,monthly_cap:$('cl-cap').value};
     const k=$('cl-key').value.trim();if(k)b.key=k;Object.assign(b,extra||{});return postJSON('/api/claude/settings',b)};
   $('cl-save').onclick=async()=>{try{const r=await save();showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap});msg('Saved.'+(r.key_set?'':' Add an API key to start using Claude.'));$('cl-key').value='';claudeStatus(true)}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
-  $('cl-test').onclick=async()=>{msg('Asking Claude…');try{await save();const r=await postJSON('/api/claude/test',{});msg('It works. Claude said: '+esc(r.answer));showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap})}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
-  const f=$('cl-forget');if(f)f.onclick=async()=>{if(!confirm('Remove the saved API key from this Mac?'))return;try{await save({key:''});closeModal()}catch(e){msg(esc(e.message))}};
+  $('cl-test').onclick=async()=>{msg('Asking Claude…');try{await save();const r=await postJSON('/api/claude/test',{});msg('It works. Claude said: '+esc(r.answer));claudeStatus(true);showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap})}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  const f=$('cl-forget');if(f)f.onclick=async()=>{if(!confirm('Remove the saved API key from this Mac?'))return;try{await save({key:''});closeModal();claudeStatus(true)}catch(e){msg(esc(e.message))}};
   $('cl-sent').onclick=async()=>{try{const r=await getJSON('/api/claude/sent');
     modal('<h3>What was sent to Claude</h3>'+(r.items.length?r.items.map(x=>'<details><summary>'+esc(x.time)+' · '+esc(x.why)+'</summary><pre style="white-space:pre-wrap;font-size:12px">'+esc(x.text)+'</pre></details>').join(''):'<div>Nothing yet.</div>')+
       '<div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');$('box').classList.add('wide')}catch(e){msg(esc(e.message))}}};
