@@ -39,14 +39,48 @@ def _port():
 
 def _launcher_script():
     # If Patchbay is already running (for example started at login), just open its page. Otherwise start it from this
-    # exact folder and Python; it opens the browser by itself.
+    # exact folder and Python in the background, wait until its page answers, then open it. If anything goes wrong it
+    # shows a message box (an app started from the Dock has no Terminal window to show errors in).
     url = "http://127.0.0.1:%d/" % _port()
-    return ("#!/bin/bash\n"
-            "if /usr/bin/curl -s -o /dev/null --max-time 2 %s; then /usr/bin/open %s; exit 0; fi\n"
-            "cd %s || exit 1\n"
-            "mkdir -p data-cache\n"
-            'exec %s patchbay.py "$@" >> data-cache/patchbay.log 2>&1\n'
-            % (url, url, _q(HERE), _q(python_exe())))
+    return """#!/bin/bash
+URL=%(url)s
+DIR=%(dir)s
+PY=%(py)s
+alert() {
+  /usr/bin/osascript -e 'on run argv' -e 'display alert "Patchbay didn'"'"'t start" message (item 1 of argv) as critical' -e 'end run' "$1" >/dev/null 2>&1
+}
+up() { /usr/bin/curl -s -o /dev/null --max-time 2 "$URL"; }
+if up; then /usr/bin/open "$URL"; exit 0; fi
+if ! cd "$DIR" 2>/dev/null || ! ls patchbay.py >/dev/null 2>&1; then
+  alert "It can't open its folder: $DIR
+
+If you moved or renamed the Patchbay folder, start it once from Terminal with: python3 patchbay.py --install-app
+
+If the folder is still there, macOS may be blocking it: open System Settings > Privacy & Security > Files and Folders (or Full Disk Access), and allow Patchbay."
+  exit 1
+fi
+if [ ! -x "$PY" ]; then
+  alert "The Python it was set up with is gone: $PY
+
+Start it once from Terminal with: python3 patchbay.py --install-app"
+  exit 1
+fi
+mkdir -p data-cache
+echo "--- started from the app $(date) ---" >> data-cache/patchbay.log
+"$PY" patchbay.py --no-browser "$@" >> data-cache/patchbay.log 2>&1 &
+PID=$!
+for i in $(seq 1 60); do
+  if up; then /usr/bin/open "$URL"; exit 0; fi
+  if ! kill -0 $PID 2>/dev/null; then
+    alert "Here is the end of its log (data-cache/patchbay.log):
+
+$(tail -n 12 data-cache/patchbay.log)"
+    exit 1
+  fi
+  sleep 0.5
+done
+alert "It is still starting after 30 seconds. Try the icon again in a moment. Log: $DIR/data-cache/patchbay.log"
+""" % {"url": _q(url), "dir": _q(HERE), "py": _q(python_exe())}
 
 
 def _q(p):
@@ -60,8 +94,10 @@ def make_app():
     macos = APP_DIR / "Contents" / "MacOS"
     macos.mkdir(parents=True, exist_ok=True)
     runner = macos / "Patchbay"
-    runner.write_text(_launcher_script())
-    runner.chmod(0o755)
+    tmp = macos / "Patchbay.tmp"   # write a new file then swap, so a launcher that is running right now isn't cut off
+    tmp.write_text(_launcher_script())
+    tmp.chmod(0o755)
+    tmp.replace(runner)
     info = {
         "CFBundleName": "Patchbay",
         "CFBundleDisplayName": "Patchbay",
@@ -80,6 +116,20 @@ def make_app():
     except (OSError, subprocess.SubprocessError):
         pass
     return APP_DIR
+
+
+def refresh_app():
+    """Keep an existing Patchbay app up to date with this folder, Python and port (called at every start)."""
+    if not is_mac() or not APP_DIR.exists():
+        return False
+    runner = APP_DIR / "Contents" / "MacOS" / "Patchbay"
+    try:
+        if runner.exists() and runner.read_text() == _launcher_script() and os.access(str(runner), os.X_OK):
+            return False
+        make_app()
+        return True
+    except OSError:
+        return False
 
 
 def remove_app():

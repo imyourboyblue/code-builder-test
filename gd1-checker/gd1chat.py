@@ -3262,6 +3262,7 @@ def main():
                 webbrowser.open(url)
             return
         sys.exit("Port %d is already in use by another program. Try: python3 patchbay.py --port %d" % (port, port + 1))
+    mac_app.refresh_app()
     url = "http://127.0.0.1:%d" % port
     print("Patchbay is running. On this Mac, open: %s" % url)
     if lan:
