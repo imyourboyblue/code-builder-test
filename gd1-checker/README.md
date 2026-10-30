@@ -411,3 +411,9 @@ Each extra device has the same settings in its own file in the `devices` folder.
 The checker was tested against a fake FTP server holding damaged files (truncated and wiped databases, cut-off JSON, null padding, empty files, leftover temp files) and found every one. It has since worked on the real GD1.
 
 The app was tested with two fake FTP devices and one switched-off device: device pictures and the online check, adding devices, the chat, and on the Files screen dragging both ways, dropping files in, uploads that replace a file, new folder, rename, move, deleting a folder and undoing that delete. Signing in from a second computer was tested too, including wrong passwords, the lockout and signing out. The .nro checks were tested on made-up .nro files damaged in different ways (cut off, wiped header, zeroed code, null-padded icon section), along with changing the name and icon, editing a project, building it, installing the result, and putting a damaged .nro back from a backup. Firmware identification was tested on a fake FreeBSD device and a fake Switch SD card, and settings changes, downloading source code and running project commands were tested too. The web lookups couldn't be tested here (no internet in the test machine); they'll work on your Mac. Backups were tested with 1,500 files and a 30 MB file: stopping and resuming, linking unchanged files (three backups took the space of one), the copy matching the device exactly, and running from Terminal. It hasn't run on the real Mac Studio, laptop or GD1 yet.
+
+## AI model names in the menus
+
+The AI model menus show what each model is good for (like "Everyday help" or "Hard problems and building"), with a
+short line under the menu, instead of model names and versions. To change the words, edit `model_labels.py`: it has
+one list for the models on your Mac, one for Claude, and size-based labels for any other model you install.

@@ -61,6 +61,7 @@ import library
 import updater
 import selfcheck
 import selfedit
+import model_labels
 import risk
 import devices
 import firmware
@@ -3012,12 +3013,14 @@ value="1"><button>Restart Patchbay</button></form>""" % (
                 req = urllib.request.Request(ollama_url(cfg) + "/api/tags")
                 with urllib.request.urlopen(req, timeout=10) as r:
                     tags = json.loads(r.read()).get("models", [])
-                models = [{"name": m.get("name"), "size": core.human_size(m.get("size") or 0)} for m in tags]
+                models = [{"name": m.get("name"), "bytes": m.get("size") or 0,
+                           "size": core.human_size(m.get("size") or 0)} for m in tags]
                 err = None
             except (OSError, ValueError, ToolError) as e:
                 models, err = [], "Couldn't ask Ollama for its models (%s). Is the Ollama app running?" % e
             if cfg["ollama_model"] not in [m["name"] for m in models]:
                 models.insert(0, {"name": cfg["ollama_model"], "size": ""})
+            model_labels.label_all(models)
             self.json({"current": cfg["ollama_model"], "models": models, "error": err})
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()

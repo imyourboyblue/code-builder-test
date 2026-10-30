@@ -14,6 +14,8 @@ import getpass
 import json
 import keychain
 import os
+
+import model_labels
 import re
 import threading
 import time
@@ -121,7 +123,8 @@ class Claude:
         key = s.pop("key", "")
         month = self.month_cost()
         return dict(s, key_set=bool(key), key_end=key[-4:] if key else "", modes=MODES,
-                    models={k: v[0] for k, v in MODELS.items()}, session_cost=round(self.session_cost, 4),
+                    models={k: model_labels.cloud(k, v[0])[0] for k, v in MODELS.items()},
+                    model_why={k: model_labels.cloud(k)[1] for k in MODELS}, session_cost=round(self.session_cost, 4),
                     session_calls=self.session_calls, month_cost=round(month, 4),
                     cap_reached=bool(s["monthly_cap"]) and month >= s["monthly_cap"])
 
