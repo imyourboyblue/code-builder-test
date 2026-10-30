@@ -2885,6 +2885,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             self.wfile.write(data)
         elif path == "/api/health":
             self.json({"alerts": health.check(APP.registry, deep=q.get("deep") == "1"), "checked": time.time()})
+        elif path == "/api/prompts":
+            self.json({"prompts": load_prompts()})
         elif path == "/api/activity":
             items = activity.collect(APP.registry)
             writes = {cfg["device_name"]: bool(cfg.get("allow_writes")) for _, cfg in APP.registry.all()}
@@ -3105,6 +3107,32 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             except ValueError as e:
                 raise ToolError(str(e))
             self.json({"repo": repo})
+        elif path == "/api/prompts":
+            items = load_prompts()
+            name = (data.get("name") or "").strip()[:80]
+            if data.get("action") == "delete":
+                items = [x for x in items if x["name"] != name]
+            elif data.get("action") == "save":
+                text = (data.get("text") or "").strip()
+                if not name or not text:
+                    raise ToolError("Give the prompt a name and some text.")
+                if len(text) > 200000:
+                    raise ToolError("That prompt is too long to save (over 200,000 characters).")
+                old_name = (data.get("old_name") or name).strip()
+                now = time.strftime("%Y-%m-%d %H:%M")
+                keep = next((x for x in items if x["name"] == old_name), None)
+                items = [x for x in items if x["name"] not in (old_name, name)]
+                items.append({"name": name, "text": text, "saved": now, "runs": (keep or {}).get("runs", 0)})
+            elif data.get("action") == "ran":
+                for x in items:
+                    if x["name"] == name:
+                        x["runs"] = x.get("runs", 0) + 1
+                        x["last_run"] = time.strftime("%Y-%m-%d %H:%M")
+            else:
+                raise ToolError("Unknown action.")
+            items.sort(key=lambda x: x["name"].lower())
+            save_prompts(items)
+            self.json({"prompts": items})
         elif path == "/api/activity/undo":
             item = str(data.get("id") or "")
             name, kind = (item.split("|") + ["", ""])[:2]
@@ -3547,6 +3575,23 @@ class NetScanJob:
     def status(self):
         return {"running": self.finished is None, "progress": round(self.progress, 3), "note": self.note,
                 "results": self.results, "error": self.error, "finished": self.finished}
+
+
+PROMPTS_FILE = core.HERE / "data-cache" / "prompts.json"
+
+
+def load_prompts():
+    try:
+        return json.loads(PROMPTS_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def save_prompts(items):
+    PROMPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PROMPTS_FILE.with_name("prompts.json.tmp")
+    tmp.write_text(json.dumps(items, indent=2))
+    tmp.replace(PROMPTS_FILE)
 
 
 SCAN_FILE = core.HERE / "data-cache" / "netscan-last.json"

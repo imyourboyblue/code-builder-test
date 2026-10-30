@@ -278,6 +278,10 @@ python3 gd1check.py --device GD1 backup
 python3 gd1check.py --device GD1 backup --to /Volumes/MyDrive/Backups
 ```
 
+### Long prompts and saved prompts
+
+The message box grows as you type or paste, and shows how long the message is (Shift+Enter makes a new line). Long messages fold up in the chat, with **Show all** to see them. **⭐ Saved prompts** (above the message box) keeps prompts you use often: save what's in the box with a name, then **Run** it in any chat with one click, or **Edit first**. Write `{device}` where the device's name should go. They're kept in `data-cache/prompts.json`.
+
 ### Changing Patchbay itself
 
 Ask the chat on the Devices screen for a change to Patchbay ("add a Back up all button", "make the health alerts warn after 7 days"). It finds the right place in its own code and shows a card with the exact change. Nothing changes until you press **Save the change**. Before it saves:

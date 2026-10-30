@@ -95,7 +95,12 @@ border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 .live{color:var(--mute);font-size:13px;align-self:flex-start;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap}
 #f{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);max-width:900px;width:100%;margin:0 auto}
 textarea{flex:1;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);
-color:var(--ink);resize:none;min-height:46px;max-height:200px}
+color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
+.longmsg summary{cursor:pointer;color:inherit;opacity:.85;font-size:12.5px;margin-top:6px}
+.pr-item{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
+.pr-item .pr-t{flex:1;min-width:0}.pr-item pre{margin:4px 0 0;font-size:12px;color:var(--mute);white-space:pre-wrap;max-height:3.9em;overflow:hidden}
+.pr-btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+#t-count{font-size:11.5px;color:var(--mute);text-align:right;padding:0 16px;max-width:900px;margin:-8px auto 6px;width:100%}
 
 .chatbar{display:flex;gap:8px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;
   max-width:900px;width:100%;margin:0 auto}
@@ -202,6 +207,7 @@ border:2px solid var(--line)}
 .modal ul{margin:6px 0;padding-left:20px;font-size:13.5px;max-height:260px;overflow:auto}
 .modal label{display:block;font-size:13px;color:var(--mute);margin-top:8px}
 .modal label input{width:100%;margin-top:2px}
+.modal label input[type=checkbox],.modal label input[type=radio]{width:auto;flex:none;margin:0 2px 0 0}
 .modal .msgline{font-size:13.5px;margin-top:8px}
 .modal .bad{color:var(--bad)}
 </style></head><body>
@@ -241,6 +247,7 @@ border:2px solid var(--line)}
   <form id="f"><button type="button" id="attach" title="Add files to your message (or drop them here)">📎</button>
   <textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
   <button class="primary" id="send">Send</button></form>
+  <div id="t-count" hidden></div>
   <input type="file" id="chatfile" multiple hidden>
 </main>
 
@@ -595,7 +602,7 @@ function reachMsg(e){return location.protocol==='file:'?'This page was opened as
 function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
   const keep=()=>{if(ctx)log.appendChild(ctx.status)};
   const endStream=()=>{if(ctx&&ctx.stream){ctx.stream.remove();ctx.stream=null}};
-  if(ev.type==='user')add('msg me',esc(ev.text)+(ev.files&&ev.files.length?'<div class="files">📎 '+ev.files.map(esc).join(', ')+'</div>':''),ev.text);
+  if(ev.type==='user')add('msg me',meHtml(ev.text)+(ev.files&&ev.files.length?'<div class="files">📎 '+ev.files.map(esc).join(', ')+'</div>':''),ev.text);
   else if(ev.type==='delta'){if(ctx){if(!ctx.stream){ctx.stream=add('msg ai stream','')}
     ctx.stream.firstChild&&ctx.stream.firstChild.nodeType===3?ctx.stream.firstChild.nodeValue+=ev.text:ctx.stream.prepend(document.createTextNode(ev.text));
     log.scrollTop=log.scrollHeight;keep()}}
@@ -731,6 +738,8 @@ function drawQuick(){
     :[['Check for crash damage','Check '+cur+' for crash damage',1],['Update an app…','Update the app '],['Back up now','Back up everything on '+cur,1],
       ['What firmware?','What firmware is '+cur+' running?',1],['Find an app…','Find the app '],['Plan a big job…','Make a plan to ']];
   $('quick').innerHTML='';
+  {const b=document.createElement('button');b.type='button';b.textContent='⭐ Saved prompts';b.title='Save long prompts and run them again with one click';
+    b.onclick=()=>openPrompts();$('quick').appendChild(b)}
   for(const [label,text,go] of q.map(x=>x.length===2&&x[1]===1?[x[0],x[0],1]:x)){const b=document.createElement('button');b.type='button';b.textContent=label;
     b.onclick=()=>{if(busy)return;t.value=text;if(go)$('f').requestSubmit();else{t.focus();t.setSelectionRange(t.value.length,t.value.length)}};$('quick').appendChild(b)}}
 
@@ -921,9 +930,47 @@ $('model').onchange=async()=>{try{await postJSON('/api/model',{model:$('model').
 
 $('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
   const files=atts;atts=[];drawAtts();
-  t.value='';add('msg me',esc(s)+(files.length?'<div class="files">📎 '+files.map(f=>esc(f.name)).join(', ')+'</div>':''),s);
+  t.value='';grow();add('msg me',meHtml(s)+(files.length?'<div class="files">📎 '+files.map(f=>esc(f.name)).join(', ')+'</div>':''),s);
   await chatStream('/api/chat',{text:s,attachments:files.map(f=>f.ref)})};
 t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('f').requestSubmit()}});
+// the message box grows with what you type or paste (up to almost half the window), and says how long it is
+function grow(){t.style.height='auto';t.style.height=Math.min(t.scrollHeight+2,window.innerHeight*0.45)+'px';
+  const n=t.value.length,lines=t.value.split('\n').length,c=$('t-count');
+  c.hidden=n<400;c.textContent=n.toLocaleString()+' characters · '+lines+' line'+(lines>1?'s':'')+' · Shift+Enter for a new line'}
+t.addEventListener('input',grow);
+function meHtml(s){s=s||'';const lines=s.split('\n');
+  if(s.length<1500&&lines.length<25)return esc(s);
+  const head=lines.length>=25?lines.slice(0,12).join('\n'):s.slice(0,700);
+  return '<span>'+esc(head)+'…</span><details class="longmsg" ontoggle="this.previousElementSibling.hidden=this.open"><summary>Show all ('+s.length.toLocaleString()+' characters, '+lines.length+' lines)</summary>'+esc(s)+'</details>'}
+
+/* saved prompts: name a message once, run it again with one click ({device} becomes the device you're on) */
+let prompts=[];
+async function loadPrompts(){try{prompts=(await getJSON('/api/prompts')).prompts}catch(e){prompts=[]}return prompts}
+function fillPrompt(text){return text.split('{device}').join(cur===HOMECHAT?'my devices':cur)}
+function runPrompt(p,go){if(busy)return;closeModal();t.value=fillPrompt(p.text);grow();
+  postJSON('/api/prompts',{action:'ran',name:p.name}).catch(()=>{});
+  if(go)$('f').requestSubmit();else{t.focus();t.setSelectionRange(t.value.length,t.value.length)}}
+async function openPrompts(msg,editName){await loadPrompts();
+  const ed=editName!==undefined?prompts.find(p=>p.name===editName)||{name:'',text:t.value}:null;
+  modal('<h3>⭐ Saved prompts</h3>'+(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    (ed?'<div><label>Name<input id="pr-name" value="'+esc(ed.name)+'" placeholder="e.g. Full health check"></label>'+
+      '<label style="display:block;margin-top:6px">Prompt <small style="color:var(--mute)">(write {device} where the device\'s name should go)</small>'+
+      '<textarea id="pr-text" style="width:100%;min-height:220px;max-height:50vh;margin-top:4px">'+esc(ed.text)+'</textarea></label>'+
+      '<div class="row" style="display:flex;gap:6px;margin-top:8px"><button class="primary" id="pr-save">Save</button><button id="pr-back">Back</button></div><div id="pr-msg" style="font-size:13px;margin-top:4px"></div></div>':
+    '<div style="font-size:13.5px;color:var(--mute)">Run a long prompt again with one click. They work in every chat; {device} becomes the device you\'re chatting about.</div>'+
+    '<div class="row" style="display:flex;gap:6px;margin:8px 0"><button class="primary" id="pr-new">'+(t.value.trim()?'Save what\'s in the message box':'New prompt')+'</button><button onclick="closeModal()">Close</button></div>'+
+    (prompts.length?prompts.map((p,i)=>'<div class="pr-item"><div class="pr-t"><b>'+esc(p.name)+'</b> <small style="color:var(--mute)">'+p.text.length.toLocaleString()+' characters'+(p.runs?' · run '+p.runs+' time'+(p.runs>1?'s':''):'')+'</small><pre>'+esc(p.text.slice(0,400))+'</pre></div>'+
+      '<div class="pr-btns"><button class="primary" data-run="'+i+'">Run</button><button data-put="'+i+'" title="Put it in the message box so you can change it first">Edit first</button><button data-ed="'+i+'">Change</button><button data-del="'+i+'" title="Delete">🗑</button></div></div>').join('')
+      :'<div class="empty" style="padding:10px 0">No saved prompts yet. Type or paste one in the message box, then press ⭐ Saved prompts → Save.</div>')));
+  if(ed){$('pr-back').onclick=()=>openPrompts();
+    $('pr-save').onclick=async()=>{try{await postJSON('/api/prompts',{action:'save',name:$('pr-name').value,text:$('pr-text').value,old_name:ed.name||undefined});openPrompts('Saved.')}
+      catch(e){$('pr-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}};$('pr-name').focus();return}
+  $('pr-new').onclick=()=>openPrompts('', '');
+  document.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>runPrompt(prompts[+b.dataset.run],true));
+  document.querySelectorAll('[data-put]').forEach(b=>b.onclick=()=>runPrompt(prompts[+b.dataset.put],false));
+  document.querySelectorAll('[data-ed]').forEach(b=>b.onclick=()=>openPrompts('',prompts[+b.dataset.ed].name));
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{const p=prompts[+b.dataset.del];if(!confirm('Delete the saved prompt "'+p.name+'"?'))return;
+    await postJSON('/api/prompts',{action:'delete',name:p.name});openPrompts('Deleted "'+p.name+'".')})}
 $('reset').onclick=async()=>{if(busy)return;try{await postJSON('/api/reset',{device:cur})}catch(e){return alert(e.message)}log.innerHTML='';
   add('msg ai','New chat started. What would you like to do? (The last one is saved under Past chats.)');loadChatBar()};
 
