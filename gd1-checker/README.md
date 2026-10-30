@@ -56,6 +56,15 @@ python3 patchbay.py
 
 Your browser opens the **Devices** screen. Leave the Terminal window open while you use it. To stop, click on Terminal and press Ctrl+C.
 
+### Find devices on your network
+
+On the Devices screen, click **🔎 Find devices on my network** (or ask the chat "what's on my network?"). In about 20 seconds Patchbay lists the TVs, consoles, computers, printers and other devices on your own network: their address, any name they announce, the maker, what each probably is, and the normal ways to connect to it (FTP, SSH, file sharing, a TV's developer mode and so on).
+
+- **Add as a device** appears for anything with an FTP server, with the address and port filled in.
+- **How do I connect to it?** asks the chat, which explains the normal way in for that kind of device and, if it needs turning on first (like a TV's developer mode), looks up that model's steps and walks you through them.
+
+It only looks at your own network, only when you ask, and only through the doors a device openly offers with your own login. It never tries passwords or tries to break in. On a newer Mac, the first time you'll be asked whether Python may find devices on your local network: click **Allow**.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.

@@ -193,6 +193,7 @@ border:2px solid var(--line)}
 
 <main class="view" id="home"><div class="homecols"><div class="devs"><div class="wrap">
   <div class="row" style="margin:0"><span id="homeinfo" class="empty" style="flex:1"></span>
+    <button id="netscan-btn" title="Find TVs, consoles, computers and other devices on your network">🔎 Find devices on my network</button>
     <button id="recheck">Check again</button></div>
   <h2>On the network now</h2><div class="grid" id="online"></div>
   <h2 id="offh">Not found on the network right now</h2><div class="grid" id="offline"></div>
@@ -330,6 +331,37 @@ function tile(d,online){
     ${online?'<div class="go">Open chat →</div>':''}`;
   return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
 $('recheck').onclick=()=>loadHome(true);
+
+// ---- find devices on the network
+let scanTimer=null;
+async function openScan(start){
+  modal('<h3>🔎 Devices on your network</h3><div style="font-size:13.5px">Patchbay looks at your own network for devices and the normal ways to connect to them. It only looks: it doesn\'t change anything or try any passwords.</div><div id="ns-body" style="margin-top:10px"></div>');
+  $('box').classList.add('wide');
+  if(start){try{await postJSON('/api/netscan/start',{})}catch(e){$('ns-body').textContent=e.message;return}}
+  const draw=async()=>{if(!$('ns-body'))return clearInterval(scanTimer);let j;try{j=await getJSON('/api/netscan')}catch(e){return}
+    if(j.running){$('ns-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
+      $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
+    clearInterval(scanTimer);
+    if(j.error){$('ns-body').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
+    if(!j.finished){$('ns-body').innerHTML='<button class="primary" id="ns-go">Start looking</button>';$('ns-go').onclick=()=>openScan(true);return}
+    const r=j.results||[];
+    $('ns-body').innerHTML=(r.length?'':'<div>No other devices answered. Make sure they\'re switched on and on the same Wi-Fi or network.</div>')+
+      r.map((d,i)=>'<div style="border-bottom:1px solid var(--line,#ddd);padding:8px 0"><b>'+esc(d.name||d.kind)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(d.ip)+(d.vendor?' · '+esc(d.vendor):'')+'</span>'+
+        (d.saved_as?' <span style="font-size:12px">✅ saved as '+esc(d.saved_as)+'</span>':'')+
+        '<div style="font-size:13.5px">'+esc(d.name?d.kind:'')+(d.port_names.length?(d.name?' · ':'')+'Open: '+esc(d.port_names.join(', ')):(d.name?'':'No open doors Patchbay knows yet'))+'</div>'+
+        (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
+        '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!d.saved_as?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
+        '<button class="ns-ask" data-i="'+i+'">How do I connect to it?</button></div></div>').join('')+
+      '<div class="row" style="margin-top:10px;display:flex;gap:6px"><button id="ns-again">Look again</button><button onclick="closeModal()">Close</button></div>';
+    $('ns-again').onclick=()=>openScan(true);
+    document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
+      $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
+    document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];closeModal();if(busy)return;
+      const q='How do I connect to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.vendor?' made by '+d.vendor:'')+' at '+d.ip+'? Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'.';
+      add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})})};
+  await draw();clearInterval(scanTimer);scanTimer=setInterval(draw,1200);
+}
+$('netscan-btn').onclick=()=>openScan(false);
 
 let picFor=null;
 function pickPicture(name){picFor=name;$('picfile').value='';$('picfile').click()}

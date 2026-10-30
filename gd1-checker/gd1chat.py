@@ -52,6 +52,7 @@ import backup
 import claude
 import collections
 import mac_app
+import netscan
 import selfcheck
 import devices
 import firmware
@@ -1447,6 +1448,26 @@ def h_open(st, emit, a):
     return "Opened %s's %s screen for the user." % (name, tab)
 
 
+@home_tool("scan_network",
+            "Find the devices on the user's own home network (TVs, consoles, computers, printers...): their address, "
+            "name, maker, what they probably are, and the normal ways to connect to each. Only looks; changes "
+            "nothing. Takes about 20 seconds.")
+def h_scan_network(st, emit, a):
+    job = getattr(APP, "netscan", None)
+    if not (job and job.finished and time.time() - job.finished < 600 and not job.error):
+        job = APP.netscan = NetScanJob()
+        while job.finished is None:
+            check_stop()
+            emit({"type": "status", "text": job.note})
+            time.sleep(1)
+    if job.error:
+        raise ToolError("The scan didn't work: %s" % job.error)
+    return scan_summary(job.results) + ("\n\nTo add one with an FTP server: add_device. For any other kind, explain "
+                                        "the normal way to connect (from 'Ways in'), and if needed look up that model's "
+                                        "documented access (developer mode, network settings) with web_search, "
+                                        "using generic words only. Never try passwords or try to break in.")
+
+
 @home_tool("check_address", "See whether anything answers at an IP address and port, and what it says (FTP, SSH, "
            "web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
 def h_check(st, emit, a):
@@ -1517,6 +1538,11 @@ about all of the user's devices rather than one. The user is not a programmer: a
 
 Use tools instead of guessing.
 - list_devices shows every saved device and whether it's on the network.
+- For "find/scan devices on my network" (or "what's on my network", "find my TV"): scan_network. Then for each \
+device say in plain words what it is and the normal way to connect (its "Ways in"). If the user wants to use one \
+that has no open door yet, look up that model's documented way to turn on access (developer mode, network/remote \
+settings, file sharing) with web_search using generic words, and walk them through it step by step. Connect only \
+with the user's own login. Never guess or try passwords, and never try to break in.
 - For "search <address> port <n>" or "find/connect <address>": check_address. If an FTP server answers and it isn't \
 a saved device, offer add_device (ask for a short name if they didn't give one). If they mean a saved device moved, \
 propose_settings for its host/ports, then test_connection.
@@ -1741,6 +1767,13 @@ def t_ask_claude(st, emit, a):
 
 
 def claude_tools(tools):
+    seen, uniq = set(), []
+    for t in tools:          # the same tool twice would be refused by Claude
+        n = t["function"]["name"]
+        if n not in seen:
+            seen.add(n)
+            uniq.append(t)
+    tools = uniq
     mode = APP.claude.mode() if APP else "off"
     if mode in ("off", "always"):
         return [t for t in tools if t["function"]["name"] != "ask_claude"]
@@ -2023,7 +2056,7 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "ask_claude": "Asking Claude", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "ask_claude": "Asking Claude", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
@@ -2547,6 +2580,9 @@ class Handler(BaseHTTPRequestHandler):
             st = APP.device(q.get("device"))
             st.ensure_loaded()
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
+        elif path == "/api/netscan":
+            job = getattr(APP, "netscan", None)
+            self.json(job.status() if job else {"running": False, "results": [], "finished": None})
         elif path == "/api/selfcheck":
             self.json({"checks": selfcheck.run_checks(APP), "app": mac_app.status()})
         elif path == "/api/report":
@@ -2715,6 +2751,16 @@ class Handler(BaseHTTPRequestHandler):
             job = APP.chat_job
             if job and not job.done:
                 STOP.set()
+            self.json({"ok": True})
+        elif path == "/api/netscan/start":
+            job = getattr(APP, "netscan", None)
+            if not (job and job.finished is None):
+                APP.netscan = NetScanJob()
+            self.json(APP.netscan.status())
+        elif path == "/api/netscan/stop":
+            job = getattr(APP, "netscan", None)
+            if job:
+                job.stop.set()
             self.json({"ok": True})
         elif path == "/api/selfcheck/fix":
             try:
@@ -3063,6 +3109,52 @@ def run_transfer(tr, work):
 
 NEW_JOB = re.compile(r"(?i)^\s*(please\s+|can you\s+|could you\s+)?(update|rebuild|recompile|port)\s+"
                      r"(?!it\b|that\b|this\b|them\b|again\b)\S")
+
+
+class NetScanJob:
+    """One network scan, running in the background so the page can show progress."""
+    def __init__(self):
+        self.started, self.finished = time.time(), None
+        self.progress, self.note, self.results, self.error = 0.0, "Starting...", [], None
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        def prog(done, total, note):
+            self.progress, self.note = (done / total if total else 0), note
+        try:
+            found = netscan.scan(prog, self.stop)
+            saved = {}
+            for _, c in APP.registry.all():
+                saved[c["host"]] = c["device_name"]
+            for d in found:
+                d["saved_as"] = saved.get(d["ip"])
+            self.results = found
+            self.note = "Found %d device(s)." % len(found)
+        except Exception as e:  # keep the page alive
+            traceback.print_exc()
+            self.error = str(e)
+            note_problem("network scan: %s" % e)
+        finally:
+            self.progress, self.finished = 1.0, time.time()
+
+    def status(self):
+        return {"running": self.finished is None, "progress": round(self.progress, 3), "note": self.note,
+                "results": self.results, "error": self.error, "finished": self.finished}
+
+
+def scan_summary(found):
+    if not found:
+        return "No other devices answered on your network."
+    rows = []
+    for d in found:
+        ways = ", ".join(a["name"] for a in d["access"]) or "no open doors Patchbay knows"
+        rows.append("%s — %s%s%s. Ways in: %s.%s" % (
+            d["ip"], d["kind"], (" called %s" % d["name"]) if d["name"] else "",
+            (" (made by %s)" % d["vendor"]) if d["vendor"] else "", ways,
+            (" Already saved as %s." % d["saved_as"]) if d.get("saved_as") else ""))
+    return "Devices on your network:\n" + "\n".join(rows)
 
 
 RECENT_ERRORS = collections.deque(maxlen=60)    # for the error report
