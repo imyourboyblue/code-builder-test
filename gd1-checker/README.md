@@ -363,6 +363,10 @@ Browsing only reads from GD1. It never changes anything.
 - The new file is uploaded under a temporary name and only swapped in once it's fully sent. So a dropped connection can't leave a half-written file behind.
 - `explain` only talks to Ollama on your own Mac (`localhost`). The script refuses to send your files anywhere else.
 
+### Risky commands and big deletes
+
+Commands that can delete or break things (like `rm -rf`, `dd`, `chmod -R`, formatting a disk, `git reset --hard`, restarting the device, piping a download into a shell) are never run by themselves, even with automatic Mac steps on or inside an approved plan. Their card is marked **⚠ Risky command**, says in plain words what it could do, and needs an **I understand** tick (plus the device name for commands on a device). On the Files screen, deleting a folder or 20+ files at once also needs that tick. Every change to a device file shows before and after side by side first.
+
 ## Where things are saved
 
 **Passwords and keys** (device passwords, the Claude API key) are kept in the Mac's **Keychain**, not in the settings files. The files only hold a pointer like `@keychain:device-3f9a1c2b`. Patchbay moves any old plain passwords over by itself when it starts (🩺 Setup shows how many are in the Keychain). To see them, open Keychain Access and search for "Patchbay". The first time a new Python reads them, macOS may ask to allow it: choose **Always Allow**. If the Keychain can't be used, they stay in the settings file as before.

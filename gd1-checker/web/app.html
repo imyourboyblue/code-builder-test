@@ -117,6 +117,9 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 .sbs td.se{background:repeating-linear-gradient(45deg,transparent 0 6px,color-mix(in srgb,var(--line) 45%,transparent) 6px 7px)}
 .sbs tr.sh td{background:var(--code);color:var(--mute);font:11.5px system-ui,sans-serif;padding:3px 8px}
 .modal .box.wide{max-width:min(1400px,96vw)}
+.riskbox{margin:8px 0;padding:9px 11px;border-radius:8px;border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent);font-size:13.5px}
+.riskbox b{color:var(--bad)}.riskbox label{display:flex!important;gap:8px;align-items:flex-start;margin-top:8px;color:var(--ink)!important;border-radius:6px;padding:2px}
+.riskbox input{width:auto!important;flex:none;margin-top:3px}
 .longmsg summary{cursor:pointer;color:inherit;opacity:.85;font-size:12.5px;margin-top:6px}
 .pr-item{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
 .pr-item .pr-t{flex:1;min-width:0}.pr-item pre{margin:4px 0 0;font-size:12px;color:var(--mute);white-space:pre-wrap;max-height:3.9em;overflow:hidden}
@@ -735,6 +738,10 @@ function card(ev,closed){
     const ew=c.querySelector('.ew');close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value,enable_writes:!!(ew&&ew.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
+// A red box for commands that can delete or break things, with a tick the user must give.
+function riskBox(list,where){if(!list||!list.length)return '';
+  return '<div class="riskbox"><b>⚠ Risky command</b> on '+esc(where)+'. It '+list.map(esc).join('; it ')+'. Patchbay can\'t undo this, and nothing is backed up first.'+
+    '<label><input type="checkbox" class="risk-ok"> I understand what this can delete or change, and I want to run it.</label></div>'}
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
   const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude',dcmd=ev.kind==='device_command';
   if(dcmd)ev.typing=true;
@@ -746,12 +753,14 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
     (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
+    riskBox(ev.risk,dcmd?ev.device:(ev.computer||'the Mac'))+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
-  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input'),und=c.querySelector('.risk-ok');
   ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
-    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
+    if(und&&!und.checked){und.parentNode.style.outline='2px solid var(--bad)';return}
+    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed,understood:!!(und&&und.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function selfCard(ev,closed){ // a change to Patchbay's own code, or restarting Patchbay
@@ -1161,10 +1170,13 @@ function showPlan(j){
     <div class="msgline">Nothing has been written yet. Every file that gets replaced or deleted is backed up to ${esc(info.computer)} first, and you can undo it.</div>
     <ul>${j.lines.map(l=>'<li>'+esc(l)+'</li>').join('')}${j.more?'<li>…and '+j.more+' more</li>':''}</ul>
     ${j.writes_on?'':'<div class="msgline bad">Writing is turned off for '+esc(j.device)+', so this will be refused. To allow it, set "allow_writes": true in its settings file ('+esc(info.settings_file||'')+').</div>'}
+    ${j.bulk?'<div class="riskbox"><b>⚠ This deletes a lot at once:</b> '+j.bulk.files+' file'+(j.bulk.files===1?'':'s')+(j.bulk.folders?' in '+j.bulk.folders+' folder'+(j.bulk.folders===1?'':'s'):'')+'. Each one is backed up first and can be put back from 🕘 Activity, but check the list.<label><input type="checkbox" id="c-und"> I understand, delete them.</label></div>':''}
     <div class="row confirm">Type <b>${esc(j.device)}</b> to confirm: <input id="c-typed" autocomplete="off"><button class="primary" id="c-ok">Confirm</button><button id="c-no">Cancel</button></div>`,true);
   $('c-typed').focus();$('c-no').onclick=()=>{closeModal();act('Cancelled. Nothing was written.')};
   const go=async()=>{if($('c-typed').value.trim()!==j.device){$('c-typed').style.borderColor='var(--bad)';$('c-typed').focus();return}
-    closeModal();try{await postJSON('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value});
+    if(j.bulk&&!$('c-und').checked){$('c-und').parentNode.style.outline='2px solid var(--bad)';return}
+    const understood=!!(j.bulk&&$('c-und').checked);
+    closeModal();try{await postJSON('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value,understood});
       if(view!=='files'){location.hash='#/d/'+enc(cur)+'/files'}pollQueue()}catch(e){act(e.message,'bad');alert(e.message)}};
   $('c-ok').onclick=go;$('c-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
 function menu(ev,p,e){ // right-click menu on a file or folder

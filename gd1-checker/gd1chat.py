@@ -61,6 +61,7 @@ import library
 import updater
 import selfcheck
 import selfedit
+import risk
 import devices
 import firmware
 import nro
@@ -601,7 +602,7 @@ def runs_by_itself(cfg, kind, extra):
     if kind in AUTO_KINDS:
         return True
     cmd = (extra or {}).get("command") or ""
-    return kind == "command" and bool(SAFE_COMMAND.match(cmd.strip())) and ".." not in cmd
+    return kind == "command" and bool(SAFE_COMMAND.match(cmd.strip())) and ".." not in cmd and not risk.risky(cmd)
 
 
 def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, on_mac=False, extra_fields=None):
@@ -624,7 +625,7 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         pid = uuid.uuid4().hex[:8]
         st.pending[pid] = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
         emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "on_mac": True, "kind": kind,
-              "typing": bool((extra_fields or {}).get("needs_typing")),
+              "typing": bool((extra_fields or {}).get("needs_typing")), "risk": (extra_fields or {}).get("risk") or [],
               "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
         return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must press Confirm. "
                 "Tell the user what it does and ask them to confirm it on the card.")
@@ -1404,7 +1405,7 @@ def t_command(st, emit, a):
     return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
                        "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
                        "In folder: %s\nRun: %s" % (root, cmd), on_mac=True,
-                       extra_fields={"project": pr["name"], "command": cmd})
+                       extra_fields={"project": pr["name"], "command": cmd, "risk": risk.risky(cmd)})
 
 
 @tool("propose_device_command",
@@ -1422,13 +1423,18 @@ def t_device_command(st, emit, a):
     if not cmd or len(cmd) > 2000:
         raise ToolError("Give one command to run.")
     pid = uuid.uuid4().hex[:8]
+    danger = risk.risky(cmd)
     st.pending[pid] = {"kind": "device_command", "remote": cfg["device_name"], "source": "", "command": cmd,
-                       "note": a.get("reason") or "", "needs_typing": True}
+                       "note": a.get("reason") or "", "needs_typing": True, "risk": danger}
     emit({"type": "confirm", "id": pid, "title": "Run a command on %s: %s" % (cfg["device_name"], a.get("reason") or cmd[:60]),
           "remote": cfg["device_name"], "diff": cmd, "on_mac": True, "kind": "device_command", "typing": True,
+          "risk": danger,
           "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
     return ("A confirmation card is now showing. Nothing has run yet. The user must type the device name and press the "
-            "button. Tell them what the command does.")
+            "button. Tell them what the command does.%s" % (
+                " It's marked RISKY (%s), so they also have to tick that they understand. Explain plainly what could be "
+                "lost, and suggest a safer way (a backup first, a smaller command) if there is one." % "; ".join(danger)
+                if danger else ""))
 
 
 def run_device_command(st, cfg, p, emit):
@@ -2368,11 +2374,14 @@ PAST = {"check": "Checked", "look": "Looked", "read": "Read", "scann": "Scanned"
         "open": "Opened", "us": "Used"}
 
 
-def do_confirm(st, pid, typed, emit, enable_writes=False):
+def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
     cfg = st.cfg()
     p = st.pending.get(pid)
     if not p:
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
+    if p.get("risk") and not understood:
+        raise ToolError("This command is marked risky (%s). Tick \"I understand\" on the card to run it."
+                        % "; ".join(p["risk"]))
     if p["kind"] in ("self_edit", "self_restart"):
         if p.get("word") and typed.strip().lower() != p["word"].lower():
             raise ToolError("This change touches one of Patchbay's safety rules, so type %s to confirm it." % p["word"])
@@ -3278,9 +3287,12 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             cfg = st.cfg()
             title, lines, steps = fm.plan(cfg, data.get("op"), data)
             pid = uuid.uuid4().hex[:10]
-            st.file_pending = {pid: {"title": title, "steps": steps}}   # only the newest plan can be confirmed
+            files, folders = risk.bulk_delete(steps)
+            bulk = files >= risk.BULK_DELETE or folders > 0
+            st.file_pending = {pid: {"title": title, "steps": steps, "bulk": bulk}}   # only the newest plan can be confirmed
             self.json({"id": pid, "title": title, "lines": lines[:200], "more": max(0, len(lines) - 200),
-                       "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
+                       "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes")),
+                       "bulk": {"files": files, "folders": folders} if bulk else None})
         elif path == "/api/backup/start":
             cfg = APP.device(data.get("device")).cfg()
             start_backup(cfg, data.get("items"), data.get("label"))
@@ -3482,7 +3494,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
                     else:
                         chat_turn(st, text, emit)
                 elif path == "/api/confirm":
-                    do_confirm(st, data.get("id", ""), data.get("typed", ""), emit, bool(data.get("enable_writes")))
+                    do_confirm(st, data.get("id", ""), data.get("typed", ""), emit, bool(data.get("enable_writes")),
+                               bool(data.get("understood")))
                 else:
                     do_cancel(st, data.get("id", ""), emit)
             except Stopped:
@@ -3533,6 +3546,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             raise fm.FileError("That change is no longer waiting. Try it again.")
         if (data.get("typed") or "").strip() != cfg["device_name"]:
             raise fm.FileError("You need to type %s exactly to confirm." % cfg["device_name"])
+        if p.get("bulk") and not data.get("understood"):
+            raise fm.FileError("This deletes a lot at once. Tick \"I understand\" to go ahead.")
         st.file_pending.pop(data.get("id"), None)
         tr = fm.Transfer(cfg["device_name"], p["title"], "upload")
 
