@@ -55,6 +55,7 @@ import mac_app
 import netscan
 import securitycheck
 import activity
+import health
 import updater
 import selfcheck
 import devices
@@ -2708,6 +2709,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
             self.json(last_scan())
+        elif path == "/api/health":
+            self.json({"alerts": health.check(APP.registry, deep=q.get("deep") == "1"), "checked": time.time()})
         elif path == "/api/activity":
             items = activity.collect(APP.registry)
             writes = {cfg["device_name"]: bool(cfg.get("allow_writes")) for _, cfg in APP.registry.all()}

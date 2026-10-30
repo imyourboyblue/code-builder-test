@@ -196,7 +196,8 @@ border:2px solid var(--line)}
 <main class="view" id="home"><div class="homecols"><div class="devs"><div class="wrap">
   <div class="row" style="margin:0"><span id="homeinfo" class="empty" style="flex:1"></span>
     <button id="netscan-btn" title="Find TVs, consoles, computers and other devices on your network">🔎 Find devices on my network</button>
-    <button id="recheck">Check again</button></div>
+    <button id="recheck">Check again</button><button id="health-btn" title="Backups, damaged files, disk space, security">Check health</button></div>
+  <div id="health"></div>
   <h2>On the network now</h2><div class="grid" id="online"></div>
   <h2 id="offh">Not found on the network right now</h2><div class="grid" id="offline"></div>
   <h2 id="foundh" hidden>Found on your network <small id="foundwhen" style="font-weight:400;color:var(--mute);font-size:13px"></small>
@@ -324,6 +325,7 @@ async function loadHome(force){
     catch(x){b.textContent='Couldn\'t tell';b.disabled=false}});
   document.querySelectorAll('.picbtn').forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();pickPicture(b.dataset.name)});
   if(scanData)renderFound();else if(!scanTimer)pollScan();
+  if(!healthLoaded)loadHealth(false);
 }
 function tile(d,online){
   const inner=`<button class="picbtn" data-name="${esc(d.name)}" title="Change picture">Picture</button>
@@ -336,6 +338,23 @@ function tile(d,online){
     ${online?'<div class="go">Open chat →</div>':''}`;
   return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
 $('recheck').onclick=()=>loadHome(true);
+
+// ---- health checks (when the home screen opens, and when you press Check health; never on a timer)
+let healthLoaded=false;
+async function loadHealth(deep){const box=$('health');if(deep)box.innerHTML='<div class="empty">Checking every device…</div>';
+  let j;try{j=await getJSON('/api/health'+(deep?'?deep=1':''))}catch(e){box.textContent=e.message;return}
+  const IC={bad:'🔴',warn:'🟠',info:'ℹ️'},main=j.alerts.filter(a=>a.level!=='info'),info=j.alerts.filter(a=>a.level==='info');
+  const row=(a,i)=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line,#ddd)"><span>'+IC[a.level]+'</span><div style="flex:1"><b>'+esc(a.title)+'</b><div style="font-size:13px">'+esc(a.advice)+'</div></div>'+
+    (a.action?'<button class="hl-go" data-i="'+i+'">'+(a.action.go==='backups'?'Open Backups':a.action.go==='security'?'Open the report':'Ask the chat')+'</button>':'')+'</div>';
+  box.innerHTML='<h2 style="margin-top:6px">Health <small style="font-weight:400;color:var(--mute);font-size:13px">'+(main.length?main.length+' thing'+(main.length>1?'s':'')+' to look at':'all good')+(deep?' · checked just now':'')+'</small></h2>'+
+    j.alerts.map((a,i)=>a.level==='info'?'':row(a,i)).join('')+
+    (info.length?'<details style="margin-top:4px"><summary style="cursor:pointer;font-size:13px;color:var(--mute)">'+info.length+' note'+(info.length>1?'s':'')+'</summary>'+j.alerts.map((a,i)=>a.level==='info'?row(a,i):'').join('')+'</details>':'');
+  box.querySelectorAll('.hl-go').forEach(b=>b.onclick=()=>{const a=j.alerts[+b.dataset.i],act=a.action;
+    if(act.go==='backups'){location.hash='#/d/'+enc(a.device)+'/backups';return}
+    if(act.go==='security'){openSecurity({ip:act.ip,name:a.device,kind:''});return}
+    location.hash='#/d/'+enc(a.device)+'/chat';setTimeout(()=>{if(busy)return;t.value=act.ask;send.click()},900)});
+  healthLoaded=true}
+$('health-btn').onclick=()=>loadHealth(true);
 
 // ---- find devices on the network (the list stays on the home page until you look again)
 let scanTimer=null,scanData=null;

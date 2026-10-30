@@ -110,6 +110,14 @@ and backups. Changes that can be undone have an **Undo** button. The current ver
 undo is written down too, so you can undo an undo. Undoing a change on a device needs you to type its name.
 Commands run on a device can't be undone by Patchbay.
 
+
+### Health
+
+The Devices screen shows a **Health** list: devices that have never had a full backup or whose newest one is over two
+weeks old, damaged files from the last scan, serious problems from the last security check, writing left on, and
+(with **Check health**, for SSH devices) disks over 90% full. Each one has a button that opens the right place or asks
+the chat. It only checks when the Devices screen opens or you press Check health, never on a timer.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.
