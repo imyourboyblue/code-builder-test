@@ -105,6 +105,18 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 .tk-dot{width:8px;height:8px;border-radius:50%;background:var(--me);animation:tk-pulse 1s ease-in-out infinite alternate;flex:none}
 @keyframes tk-pulse{from{opacity:.3;transform:scale(.8)}to{opacity:1;transform:scale(1.1)}}
 @media (prefers-reduced-motion:reduce){.tk-bar i{animation:none;left:0;width:100%;opacity:.5}.tk-dot{animation:none}}
+.dv-tog{display:flex;gap:4px;margin:6px 0}.dv-tog button{font-size:12px;padding:2px 10px}
+.dv[data-mode=sbs] .dv-tog [data-m=sbs],.dv[data-mode=uni] .dv-tog [data-m=uni]{background:var(--me);color:var(--meink);border-color:var(--me)}
+.dv[data-mode=sbs] .dv-uni,.dv[data-mode=uni] .dv-sbs{display:none}
+.dv-sbs,.dv-big{overflow:auto;max-height:420px;border:1px solid var(--line);border-radius:8px}.dv-big{max-height:72vh}
+.sbs{border-collapse:collapse;width:100%;table-layout:fixed;font:12px/1.45 ui-monospace,Menlo,monospace}
+.sbs th{position:sticky;top:0;background:var(--code);text-align:left;font:600 12px system-ui,sans-serif;padding:5px 8px;border-bottom:1px solid var(--line)}
+.sbs td{padding:0 6px;vertical-align:top;white-space:pre-wrap;word-break:break-word}
+.sbs td.ln{width:3.2em;text-align:right;color:var(--mute);user-select:none;padding-right:6px;border-right:1px solid var(--line)}
+.sbs td.sd{background:color-mix(in srgb,var(--bad) 14%,transparent)}.sbs td.sa{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.sbs td.se{background:repeating-linear-gradient(45deg,transparent 0 6px,color-mix(in srgb,var(--line) 45%,transparent) 6px 7px)}
+.sbs tr.sh td{background:var(--code);color:var(--mute);font:11.5px system-ui,sans-serif;padding:3px 8px}
+.modal .box.wide{max-width:min(1400px,96vw)}
 .longmsg summary{cursor:pointer;color:inherit;opacity:.85;font-size:12.5px;margin-top:6px}
 .pr-item{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
 .pr-item .pr-t{flex:1;min-width:0}.pr-item pre{margin:4px 0 0;font-size:12px;color:var(--mute);white-space:pre-wrap;max-height:3.9em;overflow:hidden}
@@ -587,6 +599,50 @@ async function copyText(text){ // the clipboard API only works on https or this 
   try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}
   const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';
   document.body.appendChild(ta);ta.select();let ok=false;try{ok=document.execCommand('copy')}catch(e){}ta.remove();return ok}
+// Before/after side by side: the old version on the left, the new one on the right, matching lines level.
+// A unified diff of two texts, made in the page (for edits typed on the Files screen).
+function lineDiff(a,b,name){const A=a.split('\n'),B=b.split('\n'),n=A.length,m=B.length;
+  if(n*m>4e6)return 'Too big to compare line by line here ('+n+' and '+m+' lines).';
+  let p=0;while(p<n&&p<m&&A[p]===B[p])p++;let q=0;while(q<n-p&&q<m-p&&A[n-1-q]===B[m-1-q])q++;
+  const a2=A.slice(p,n-q),b2=B.slice(p,m-q),N=a2.length,M=b2.length,T=[];
+  for(let i=0;i<=N;i++)T.push(new Uint32Array(M+1));
+  for(let i=N-1;i>=0;i--)for(let j=M-1;j>=0;j--)T[i][j]=a2[i]===b2[j]?T[i+1][j+1]+1:Math.max(T[i+1][j],T[i][j+1]);
+  const ops=[];for(let i=0;i<p;i++)ops.push(' '+A[i]);let i=0,j=0;
+  while(i<N||j<M){if(i<N&&j<M&&a2[i]===b2[j]){ops.push(' '+a2[i]);i++;j++}else if(j<M&&(i>=N||T[i][j+1]>T[i+1][j])){ops.push('+'+b2[j]);j++}else{ops.push('-'+a2[i]);i++}}
+  for(let k=n-q;k<n;k++)ops.push(' '+A[k]);
+  // keep 3 lines around each change, like a normal diff
+  const out=['--- before: '+name,'+++ after: '+name],keep=ops.map(()=>false);
+  ops.forEach((o,k)=>{if(o[0]!==' ')for(let x=Math.max(0,k-3);x<=Math.min(ops.length-1,k+3);x++)keep[x]=true});
+  let L=1,R=1,k=0;
+  while(k<ops.length){if(!keep[k]){if(ops[k][0]!=='+')L++;if(ops[k][0]!=='-')R++;k++;continue}
+    let e=k;while(e<ops.length&&keep[e])e++;const blk=ops.slice(k,e);
+    out.push('@@ -'+L+','+blk.filter(o=>o[0]!=='+').length+' +'+R+','+blk.filter(o=>o[0]!=='-').length+' @@');
+    blk.forEach(o=>{out.push(o);if(o[0]!=='+')L++;if(o[0]!=='-')R++});k=e}
+  return out.join('\n')}
+function sbsHtml(d){let L=0,R=0,dels=[],adds=[],rows=[],files=[];
+  const cell=(n,txt,cls)=>'<td class="ln">'+(n||'')+'</td><td class="'+cls+'">'+(txt===null?'':esc(txt)||' ')+'</td>';
+  const flush=()=>{for(let i=0;i<Math.max(dels.length,adds.length);i++){const a=dels[i],b=adds[i];
+      rows.push('<tr>'+(a?cell(a[0],a[1],'sd'):cell('',null,'se'))+(b?cell(b[0],b[1],'sa'):cell('',null,'se'))+'</tr>')}dels=[];adds=[]};
+  for(const l of (d||'').split('\n')){
+    if(l.startsWith('--- ')||l.startsWith('+++ ')){if(l.startsWith('+++ '))files.push(l.slice(4).replace(/^after: /,''));continue}
+    const h=l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if(h){flush();L=+h[1];R=+h[2];rows.push('<tr class="sh"><td colspan="4">Line '+R+'</td></tr>');continue}
+    if(l.startsWith('-')){dels.push([L++,l.slice(1)]);continue}
+    if(l.startsWith('+')){adds.push([R++,l.slice(1)]);continue}
+    if(l.startsWith('\\'))continue;
+    if(l&&!/^[ +\-@]/.test(l)){flush();rows.push('<tr class="sh"><td colspan="4">'+esc(l)+'</td></tr>');continue}
+    if(!l)continue;flush();rows.push('<tr>'+cell(L++,l.slice(1),'sc')+cell(R++,l.slice(1),'sc')+'</tr>')}
+  flush();
+  return '<table class="sbs"><colgroup><col style="width:3.4em"><col><col style="width:3.4em"><col></colgroup><thead><tr><th colspan="2">Before'+(files[0]?' · '+esc(files[0]):'')+'</th><th colspan="2">After</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>'}
+let dvN=0;
+function diffView(d){const id='dv'+(++dvN),wide=($('chat').getBoundingClientRect().width||0)>=760;
+  return '<div class="dv" id="'+id+'" data-mode="'+(wide?'sbs':'uni')+'"><div class="dv-tog"><button type="button" data-m="sbs">Side by side</button><button type="button" data-m="uni">One column</button><button type="button" data-m="big" title="Open the before and after big, side by side">⤢ Open large</button></div>'+
+    '<div class="dv-sbs">'+sbsHtml(d)+'</div><pre class="dv-uni">'+diffHtml(d)+'</pre></div>'}
+document.addEventListener('click',e=>{const b=e.target.closest('.dv-tog button');if(!b)return;const dv=b.closest('.dv');
+  if(b.dataset.m==='big'){const card=dv.closest('.card'),title=card&&card.querySelector('h3')?card.querySelector('h3').textContent:'The change';
+    modal('<h3>'+esc(title)+'</h3><div class="dv-big">'+dv.querySelector('.dv-sbs').innerHTML+'</div><div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');
+    $('box').classList.add('wide');return}
+  dv.dataset.mode=b.dataset.m});
 function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
   if(l.startsWith('+')&&!l.startsWith('+++'))return '<span class="add">'+e+'</span>';
   if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
@@ -670,7 +726,7 @@ function card(ev,closed){
     '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
     (/\.(nro|nsp|ovl|3dsx|elf)$/i.test(ev.remote||'')?'<div>If this app is open on '+esc(ev.device)+', close it first.</div>':'')+
     (ev.writes_on?'':'<label style="display:block;margin-top:6px"><input type="checkbox" class="ew" checked style="width:auto"> Also turn on writing for '+esc(ev.device)+' (it\'s off right now, and this change needs it). You can turn it off again any time by asking.</label>')+
-    (ev.diff?'<details open><summary>Exact change</summary><pre>'+diffHtml(ev.diff)+'</pre></details>':'')+
+    (ev.diff?'<details open><summary>Exact change</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre>'+diffHtml(ev.diff)+'</pre>')+'</details>':'')+
     '<div class="row">Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off"><button class="primary">Confirm</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
@@ -689,7 +745,7 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
     '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by Patchbay, so read it first.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
@@ -705,7 +761,7 @@ function selfCard(ev,closed){ // a change to Patchbay's own code, or restarting 
       '<div>This changes <b>Patchbay itself</b> ('+esc(ev.remote)+' on '+esc(ev.computer)+'). None of your devices are touched. It was checked for mistakes, the old version is backed up first, and <b>Undo</b> is in 🕘 Activity.</div>'+
       '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">'+esc(ev.stats||'')+(ev.page_only?' · takes effect when you reload the page':' · takes effect after a restart')+'</div>'+
       (ev.word?'<div style="margin-top:6px;padding:8px 10px;border-radius:8px;border:1px solid var(--bad);color:var(--bad)"><b>⚠ This touches one of Patchbay\'s safety rules</b> ('+esc((ev.safety||[]).join(', '))+'). Only confirm if you asked for exactly this.</div>':''))+
-    '<details'+(rs||(ev.diff||'').split('\n').length<80?' open':'')+'><summary>'+(rs?'Changes it will use':'Exact change')+'</summary><pre>'+(rs?esc(ev.diff||''):diffHtml(ev.diff||''))+'</pre></details>'+
+    '<details'+(rs||(ev.diff||'').split('\n').length<80?' open':'')+'><summary>'+(rs?'Changes it will use':'Exact change')+'</summary>'+(rs?'<pre>'+esc(ev.diff||'')+'</pre>':diffView(ev.diff||''))+'</details>'+
     '<div class="row">'+(ev.word?'Type <b>'+esc(ev.word)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+(rs?'Restart Patchbay':'Save the change')+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
@@ -1183,16 +1239,21 @@ async function preview(side,path){
   $('pv-close').onclick=closeModal;$('pv-ai').onclick=()=>{closeModal();askAI(side,path,'file')};
   if($('pv-dl'))$('pv-dl').onclick=()=>download(path);
   if($('pv-edit'))$('pv-edit').onclick=()=>editText(side,path,j.text)}
-function editText(side,path,text){
-  $('box').innerHTML=`<div class="pv"><h3>Edit ${esc(path)}</h3><div class="note">${side==='dev'?'Saving shows you exactly what changes on '+esc(cur)+', and the old file is backed up first.':'The old version is backed up on '+esc(info.computer||'the Mac')+' first.'}</div>
+function editText(side,path,text,draft){
+  $('box').className='box';$('box').innerHTML=`<div class="pv"><h3>Edit ${esc(path)}</h3><div class="note">${side==='dev'?'Saving shows you exactly what changes on '+esc(cur)+', and the old file is backed up first.':'The old version is backed up on '+esc(info.computer||'the Mac')+' first.'}</div>
     <textarea id="pv-area" spellcheck="false"></textarea><div class="row"><button class="primary" id="pv-save">Save</button><button id="pv-cancel">Cancel</button></div></div>`;
-  $('pv-area').value=text;$('pv-area').focus();$('pv-cancel').onclick=closeModal;
+  $('pv-area').value=draft===undefined?text:draft;$('pv-area').focus();$('pv-cancel').onclick=closeModal;
   $('pv-save').onclick=async()=>{const val=$('pv-area').value;if(val===text){closeModal();return}
     const name=path.split('/').pop(),folder=path.slice(0,path.length-name.length).replace(/\/$/,'')||'/';
     if(side==='mac'){if(!confirm('Save the changes to '+path+'?'))return;
       try{const r=await postJSON('/api/files/mac_save',{device:cur,path,text:val});closeModal();act('Saved '+path+'. The old version is in '+r.backup,'good');load(panes.mac,panes.mac.path)}catch(e){alert(e.message)}return}
-    try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(name),{method:'POST',body:new Blob([val])});const j=await r.json();if(!r.ok)throw new Error(j.error);
-      closeModal();plan({op:'upload',target:folder,items:[{from:'staged',ref:j.ref}]})}catch(e){alert(e.message)}}}
+    // Show exactly what changes, before and after side by side, before anything goes to the device.
+    modal('<h3>Check the change to '+esc(path)+'</h3><div style="font-size:13.5px;margin-bottom:6px">Nothing has been written yet. Next you confirm it for '+esc(cur)+' (the current file is backed up first).</div>'+
+      '<div class="dv-big">'+sbsHtml(lineDiff(text,val,path))+'</div><div class="row" style="display:flex;gap:6px;margin-top:10px"><button class="primary" id="pv-go">Looks right, continue</button><button id="pv-back">Back to editing</button></div>');
+    $('box').classList.add('wide');
+    $('pv-back').onclick=()=>editText(side,path,text,val);
+    $('pv-go').onclick=async()=>{try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(name),{method:'POST',body:new Blob([val])});const j=await r.json();if(!r.ok)throw new Error(j.error);
+      closeModal();plan({op:'upload',target:folder,items:[{from:'staged',ref:j.ref}]})}catch(e){alert(e.message)}}}}
 
 /* compare */
 async function compareFiles(a,b){

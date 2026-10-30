@@ -392,6 +392,34 @@ def fetch_from_device(cfg, emit, path, limit):
     return got[0]
 
 
+def preview_diff(cfg, emit, remote, local):
+    """Before/after of putting a Mac file onto the device, for the card. Text: the exact lines that change.
+    Other files: the sizes. Never fails: if the device can't be read, it says so."""
+    local = Path(local)
+    try:
+        new = local.read_bytes() if local.stat().st_size <= TEXT_EDIT_LIMIT else None
+    except OSError:
+        return None
+    try:
+        old = fetch_from_device(cfg, emit, remote, TEXT_EDIT_LIMIT)
+    except ToolError as e:
+        if "too big" in str(e):
+            old = None
+        else:
+            old = b""   # not on the device yet (or unreadable): everything is new
+    if new is None or old is None or not core.looks_like_text(new[:4096]) or (old and not core.looks_like_text(old[:4096])):
+        if old is not None and new is not None and old == new:
+            return "The copy is exactly the same as what's on the device now (nothing would change)."
+        return "Not a text file, so there are no lines to compare.\nOn the device now: %s\nAfter: %s" % (
+            core.human_size(len(old)) if old is not None else "too big to read here",
+            core.human_size(local.stat().st_size))
+    a, b = old.decode("utf-8", "replace"), new.decode("utf-8", "replace")
+    if a == b:
+        return "The copy is exactly the same as what's on the device now (nothing would change)."
+    return "".join(difflib.unified_diff(a.splitlines(True), b.splitlines(True), "before: " + remote,
+                                        "after: " + remote, n=3))
+
+
 def snapshot_dir(cfg, name):
     root = core.data_dir(cfg) / "snapshots"
     snaps = sorted(p for p in root.glob("*") if p.is_dir())
@@ -637,7 +665,8 @@ def t_prop_restore(st, emit, a):
         b, local, ok = hit[0]
         return add_pending(st, emit, "restore", cfg, remote, local, "from backup %s" % b["name"],
                            "Restore %s from backup %s (%s)%s" % (remote, b["name"], core.human_size(local.stat().st_size),
-                                                                "" if ok else " WARNING: this copy also fails the checks"))
+                                                                "" if ok else " WARNING: this copy also fails the checks"),
+                           preview_diff(cfg, emit, remote, local))
     if a.get("snapshot"):
         chosen = snapshot_dir(cfg, a["snapshot"])
     else:
@@ -652,13 +681,15 @@ def t_prop_restore(st, emit, a):
             if good:
                 b, local, _ = good[0]
                 return add_pending(st, emit, "restore", cfg, remote, local, "from backup %s" % b["name"],
-                                   "Restore %s from backup %s (%s)" % (remote, b["name"], core.human_size(local.stat().st_size)))
+                                   "Restore %s from backup %s (%s)" % (remote, b["name"], core.human_size(local.stat().st_size)),
+                                   preview_diff(cfg, emit, remote, local))
             raise ToolError("No snapshot or backup has a good copy of %s." % remote)
     source = core.local_path_for(chosen, remote)
     if not source.exists():
         raise ToolError("%s isn't in snapshot %s." % (remote, chosen.name))
     return add_pending(st, emit, "restore", cfg, remote, source, "from snapshot %s" % chosen.name,
-                       "Restore %s from snapshot %s (%s)" % (remote, chosen.name, core.human_size(source.stat().st_size)))
+                       "Restore %s from snapshot %s (%s)" % (remote, chosen.name, core.human_size(source.stat().st_size)),
+                       preview_diff(cfg, emit, remote, source))
 
 
 @tool("propose_edit",
@@ -716,7 +747,8 @@ def t_prop_undo(st, emit, a):
         raise ToolError("Change #%d created a new file or folder, so there's no earlier version to put back. "
                         "To undo it, delete %s on the Files screen." % (h["id"], h["remote"]))
     return add_pending(st, emit, "undo", cfg, h["remote"], h["backup"], "undo of change #%d" % h["id"],
-                       "Undo change #%d (%s %s)" % (h["id"], h["action"], h["remote"]))
+                       "Undo change #%d (%s %s)" % (h["id"], h["action"], h["remote"]),
+                       preview_diff(cfg, emit, h["remote"], h["backup"]))
 
 
 # ---- .nro programs
