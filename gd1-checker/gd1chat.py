@@ -56,6 +56,7 @@ import netscan
 import securitycheck
 import activity
 import health
+import library
 import updater
 import selfcheck
 import devices
@@ -1542,6 +1543,7 @@ def h_scan_network(st, emit, a):
 
 
 SECURITY = {}
+LIBRARY_JOBS = {}
 
 
 @home_tool("security_check",
@@ -2709,6 +2711,24 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
             self.json(last_scan())
+        elif path == "/api/library":
+            cfg = APP.device(q.get("device")).cfg()
+            job = LIBRARY_JOBS.get(cfg["device_name"])
+            self.json({"job": job.status() if job else None, "library": library.saved(cfg)})
+        elif path == "/api/library/icon":
+            cfg = APP.device(q.get("device")).cfg()
+            key = q.get("id") or ""
+            f = core.data_dir(cfg) / "library" / "icons" / (key + ".jpg")
+            if not re.match(r"^[0-9a-f]{16}$", key) or not f.exists():
+                self.send_error(404)
+                return
+            data = f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(data)
         elif path == "/api/health":
             self.json({"alerts": health.check(APP.registry, deep=q.get("deep") == "1"), "checked": time.time()})
         elif path == "/api/activity":
@@ -2893,6 +2913,26 @@ class Handler(BaseHTTPRequestHandler):
             if job and not job.done:
                 STOP.set()
             self.json({"ok": True})
+        elif path == "/api/library/scan":
+            cfg = APP.device(data.get("device")).cfg()
+            job = LIBRARY_JOBS.get(cfg["device_name"])
+            if not (job and job.finished is None):
+                LIBRARY_JOBS[cfg["device_name"]] = library.ScanJob(cfg)
+            self.json({"ok": True})
+        elif path == "/api/library/updates":
+            cfg = APP.device(data.get("device")).cfg()
+            try:
+                lib, errors = library.check_updates(cfg)
+            except ValueError as e:
+                raise ToolError(str(e))
+            self.json({"library": lib, "errors": errors})
+        elif path == "/api/library/repo":
+            cfg = APP.device(data.get("device")).cfg()
+            try:
+                repo = library.set_repo(cfg, data.get("path") or "", data.get("repo") or "")
+            except ValueError as e:
+                raise ToolError(str(e))
+            self.json({"repo": repo})
         elif path == "/api/activity/undo":
             item = str(data.get("id") or "")
             name, kind = (item.split("|") + ["", ""])[:2]

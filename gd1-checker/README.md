@@ -118,6 +118,15 @@ weeks old, damaged files from the last scan, serious problems from the last secu
 (with **Check health**, for SSH devices) disks over 90% full. Each one has a button that opens the right place or asks
 the chat. It only checks when the Devices screen opens or you press Check health, never on a timer.
 
+
+### Apps (homebrew library)
+
+Open a Switch and click the **Apps** tab, then **Read the apps**. Patchbay lists every app in /switch with its icon,
+name, version and author (read from the file itself), flags damaged ones, and lists the background programs
+(sysmodules). **Check for updates** looks up each app's newest release on GitHub (only the project name is sent);
+**Update** hands it to the chat's guided update, which backs up the current file first. If Patchbay doesn't know an
+app's GitHub project, click **set it**. The first read downloads each app once; after that only new or changed ones.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.

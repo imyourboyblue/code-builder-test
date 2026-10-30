@@ -152,6 +152,10 @@ padding:6px 2px 10px;white-space:pre-wrap}
 
 /* backups */
 #backups{flex-direction:column;overflow-y:auto;padding:20px 16px}
+#apps{flex-direction:column;overflow-y:auto;padding:20px 16px}#apps .wrap{max-width:980px;width:100%;margin:0 auto}
+.apgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px}
+.apcard{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;gap:10px;align-items:flex-start}
+.apcard img,.apcard .noicon{width:56px;height:56px;border-radius:8px;flex:none;object-fit:cover;background:var(--line)}
 #backups .wrap{max-width:860px;width:100%;margin:0 auto}
 #backups h2{font-size:16px;margin:0 0 8px}#backups h3{font-size:15px;color:var(--mute);font-weight:500;margin:22px 0 8px}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
@@ -185,7 +189,7 @@ border:2px solid var(--line)}
 <header>
   <a href="#/" title="All devices"><h1>Patchbay</h1></a>
   <span id="crumb"></span>
-  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a></nav>
+  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a></nav>
   <span id="info"></span>
   <button id="activity-btn" type="button" title="Everything Patchbay did, with Undo">🕘 Activity</button>
   <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
@@ -230,6 +234,12 @@ border:2px solid var(--line)}
   <div id="queue"></div>
   <div id="activity"></div>
 </main>
+
+<main class="view" id="apps"><div class="wrap">
+  <div class="row" style="margin:0 0 10px"><span id="ap-info" class="empty" style="flex:1"></span>
+    <button id="ap-scan" class="primary">Read the apps</button><button id="ap-upd">Check for updates</button></div>
+  <div id="ap-body"></div>
+</div></main>
 
 <main class="view" id="backups"><div class="wrap">
   <section class="panel">
@@ -287,7 +297,7 @@ async function stream(url,body,on){ // reads the server's live, line-by-line rep
 
 /* ---------- routing: #/  #/d/NAME/chat  #/d/NAME/files */
 function route(){
-  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups)/);
+  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups|apps)/);
   clearInterval(bkTimer);
   clearInterval(homeTimer);
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
@@ -298,10 +308,11 @@ function route(){
   document.body.insertBefore($('chat'),$('files'));
   const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
   $(view).classList.add('on');$('tabs').hidden=false;$('reset').hidden=view!=='chat';
-  for(const v of ['chat','files','backups']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
+  for(const v of ['chat','files','backups','apps']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
   if(changed){loadInfo();loadChat();bkOptsLoaded=false}
   if(view==='files')openFiles(changed);
   else if(view==='backups'){loadBackups();bkTimer=setInterval(loadBackups,1500)}
+  else if(view==='apps')loadApps()
   else $('t').focus();
 }
 window.addEventListener('hashchange',route);
@@ -693,6 +704,46 @@ async function openSetup(msg){
     if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
 }
 $('setup-btn').onclick=()=>openSetup();
+
+// ---- Apps: the homebrew library with update checks
+let apTimer=null;
+async function loadApps(){clearInterval(apTimer);const dev=cur;let j;
+  try{j=await getJSON('/api/library?device='+enc(dev))}catch(e){$('ap-body').textContent=e.message;return}
+  if(view!=='apps'||cur!==dev)return;
+  if(j.job&&j.job.running){$('ap-scan').disabled=true;$('ap-body').innerHTML='<div>'+esc(j.job.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round(j.job.progress*100)+'%"></div></div>';
+    apTimer=setTimeout(loadApps,1200);return}
+  $('ap-scan').disabled=false;
+  const lib=j.library;
+  if(!lib){$('ap-info').textContent='';$('ap-body').innerHTML=(j.job&&j.job.error?'<div style="color:var(--bad)">'+esc(j.job.error)+'</div>':'')+'<div class="empty">Press <b>Read the apps</b> to list every homebrew app on '+esc(dev)+' with its version and icon. The first time it reads each app once (this can take a minute); after that only new or changed ones.</div>';return}
+  drawApps(dev,lib,j.job&&j.job.error)}
+function drawApps(dev,lib,err){
+  const upd=lib.apps.concat(lib.sysmodules||[]).filter(a=>a.latest&&a.latest.status==='newer').length;
+  $('ap-info').textContent=lib.apps.length+' apps'+((lib.sysmodules||[]).length?', '+lib.sysmodules.length+' background programs':'')+' · read '+ago(lib.checked).replace(/^seen /,'')+
+    (lib.updates_checked?' · '+(upd?upd+' update'+(upd>1?'s':'')+' available':'everything known is up to date'):'');
+  const card=(a,i)=>{const L=a.latest,st=L?L.status:null;
+    return '<div class="apcard">'+(a.icon?'<img src="/api/library/icon?device='+enc(dev)+'&id='+a.icon+'" alt="">':'<div class="noicon"></div>')+
+    '<div style="flex:1;min-width:0"><b>'+esc(a.name)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(a.version||'')+'</span>'+
+    '<div style="font-size:12.5px;color:var(--mute);overflow-wrap:anywhere">'+esc(a.author?a.author+' · ':'')+esc(a.path)+(a.boot2?' · starts at boot':'')+'</div>'+
+    (a.problems&&a.problems.length?'<div style="font-size:13px;color:var(--bad)">⚠ Damaged: '+esc(a.problems[0])+'</div>':'')+(a.note?'<div style="font-size:13px">'+esc(a.note)+'</div>':'')+
+    (L?'<div style="font-size:13px;margin-top:2px">'+(st==='newer'?'🆕 <b>'+esc(L.tag)+'</b> is out ('+esc(L.date)+')':st==='same'?'✅ Up to date ('+esc(L.tag)+')':st==='older'?'Yours is newer than the latest release ('+esc(L.tag)+'), maybe your own build':st==='none'?'No releases on GitHub':'Newest release: '+esc(L.tag)+' ('+esc(L.date)+')')+'</div>':'')+
+    '<div style="font-size:12px;color:var(--mute)">'+(a.repo?'GitHub: '+link('https://github.com/'+a.repo,esc(a.repo))+(a.repo_guessed?' (guessed)':''):'No GitHub project known')+' · <a href="#" class="ap-repo" data-i="'+i+'">'+(a.repo?'change':'set it')+'</a></div>'+
+    '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(st==='newer'?'<button class="primary ap-up" data-i="'+i+'">Update</button>':'')+
+      (a.problems&&a.problems.length?'<button class="ap-fix" data-i="'+i+'">Help me fix it</button>':'')+'</div></div></div>'};
+  const all=lib.apps.concat(lib.sysmodules||[]);
+  $('ap-body').innerHTML=(err?'<div style="color:var(--bad)">'+esc(err)+'</div>':'')+'<div class="apgrid">'+lib.apps.map((a,i)=>card(a,i)).join('')+'</div>'+
+    ((lib.sysmodules||[]).length?'<h3>Background programs (sysmodules)</h3><div class="apgrid">'+lib.sysmodules.map((a,i)=>card(a,lib.apps.length+i)).join('')+'</div>':'');
+  const ask=q=>{location.hash='#/d/'+enc(dev)+'/chat';setTimeout(()=>{if(busy)return;t.value=q;send.click()},900)};
+  document.querySelectorAll('.ap-up').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];
+    ask('Update '+a.name+' ('+a.path+', version '+(a.version||'unknown')+') to the newest release '+a.latest.tag+' from github.com/'+a.repo+'. Back up the current file first.')});
+  document.querySelectorAll('.ap-fix').forEach(b=>b.onclick=()=>{const a=all[+b.dataset.i];ask(a.path+' looks damaged ('+a.problems[0]+'). Can you fix it?')});
+  document.querySelectorAll('.ap-repo').forEach(b=>b.onclick=async e=>{e.preventDefault();const a=all[+b.dataset.i];
+    const r=prompt('GitHub project for '+a.name+' (owner/name, like mtheall/ftpd). Leave empty to forget it.',a.repo||'');if(r===null)return;
+    try{await postJSON('/api/library/repo',{device:dev,path:a.path,repo:r});loadApps()}catch(x){alert(x.message)}});
+}
+$('ap-scan').onclick=async()=>{try{await postJSON('/api/library/scan',{device:cur});loadApps()}catch(e){$('ap-body').textContent=e.message}};
+$('ap-upd').onclick=async()=>{const b=$('ap-upd');b.disabled=true;b.textContent='Checking…';
+  try{const r=await postJSON('/api/library/updates',{device:cur});drawApps(cur,r.library,r.errors.length?'Couldn\'t check: '+r.errors.join('; '):'')}catch(e){$('ap-info').textContent=e.message}
+  b.disabled=false;b.textContent='Check for updates'};
 
 // ---- activity log with undo
 async function openActivity(msg,dev){
