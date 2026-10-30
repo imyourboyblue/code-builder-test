@@ -365,12 +365,50 @@ function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
       '<div style="font-size:13.5px">'+(d.port_names.length?'Open: '+esc(d.port_names.join(', ')):'No open doors Patchbay knows yet')+'</div>'+
       (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!sv?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
-      '<button class="ns-ask" data-i="'+i+'">Help me see its files</button></div></details>'}).join('');
+      '<button class="ns-ask" data-i="'+i+'">Help me see its files</button><button class="ns-sec" data-i="'+i+'">🛡 Security check</button></div></details>'}).join('');
   document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
     $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
   document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];if(busy)return;
     const q='Help me connect Patchbay to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+' so I can look at its files. Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'. Find the documented way for Patchbay to see its files (FTP, SFTP/SSH, file sharing, or a developer mode or debug bridge) and walk me through turning it on. If this kind of device has no way to see its files, say so plainly and tell me what it does allow. No screen mirroring or casting steps.';
-    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})})}
+    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})});
+  document.querySelectorAll('.ns-sec').forEach(b=>b.onclick=()=>openSecurity(r[+b.dataset.i]));}
+// ---- security check of one of your own devices (only looks: no break-in attempts, no password guessing)
+let secTimer=null;
+const SEV={critical:['Critical','#b3261e'],high:['High','#d9480f'],medium:['Medium','#b7791f'],low:['Low','#2b6cdf'],info:['Info','#6b7280']};
+async function openSecurity(d){
+  const label=d.name||d.model||d.kind;
+  modal('<h3>🛡 Security check: '+esc(label)+' <span style="font-weight:400;color:var(--mute);font-size:14px">'+esc(d.ip)+'</span></h3><div id="sec-body"></div>');
+  $('box').classList.add('wide');
+  const ask=()=>{$('sec-body').innerHTML='<div style="font-size:13.5px">Patchbay checks which doors are open, what software answers and whether that version has known security problems, its secure-page setup, and risky settings. It only looks: it doesn\'t try to break in or guess passwords. The only login it tries is FTP\'s public "anonymous" login.</div>'+
+      '<label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="sec-own"> This is my device (or I\'m allowed to check it).</label>'+
+      '<div class="row" style="margin-top:10px"><button class="primary" id="sec-go" disabled>Start the check</button><button onclick="closeModal()">Cancel</button></div>';
+    $('sec-own').onchange=()=>$('sec-go').disabled=!$('sec-own').checked;
+    $('sec-go').onclick=async()=>{try{await postJSON('/api/security/start',{ip:d.ip,kind:d.kind,owner_confirmed:true})}catch(e){$('sec-body').insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>');return}poll()}};
+  const draw=async()=>{if(!$('sec-body'))return clearInterval(secTimer);let j;try{j=await getJSON('/api/security?ip='+enc(d.ip))}catch(e){return}
+    if(j.running){$('sec-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="sec-stop">Stop</button></div>';
+      $('sec-stop').onclick=()=>postJSON('/api/security/stop',{ip:d.ip});return}
+    clearInterval(secTimer);
+    if(j.error){$('sec-body').innerHTML='<div style="color:var(--bad)">'+esc(j.error)+'</div>';return}
+    if(!j.report)return ask();
+    secReport(d,j.report)};
+  const poll=()=>{clearInterval(secTimer);draw();secTimer=setInterval(draw,1200)};
+  poll();
+}
+function secReport(d,rep){const f=rep.findings||[],n={};f.forEach(x=>n[x.severity]=(n[x.severity]||0)+1);
+  const fix=f.filter(x=>x.severity!=='info').length;
+  $('sec-body').innerHTML='<div style="font-size:14px;margin-bottom:6px">'+(fix?'<b>'+fix+' thing'+(fix>1?'s':'')+' to fix</b>: ':'<b>Nothing serious found.</b> ')+
+      Object.keys(SEV).filter(k=>n[k]).map(k=>n[k]+' '+SEV[k][0].toLowerCase()).join(', ')+' <span style="color:var(--mute);font-size:12.5px">· checked '+esc(ago(rep.checked).replace(/^seen /,''))+'</span></div>'+
+    f.map((x,i)=>'<div style="border-top:1px solid var(--line,#ddd);padding:8px 0"><span style="background:'+SEV[x.severity][1]+';color:#fff;border-radius:4px;padding:1px 6px;font-size:12px">'+SEV[x.severity][0]+'</span> <b>'+esc(x.title)+'</b>'+(x.port?' <span style="color:var(--mute);font-size:12.5px">port '+x.port+'</span>':'')+
+      '<div style="font-size:13.5px;margin-top:3px">'+esc(x.why)+'</div><div style="font-size:13.5px;margin-top:3px"><b>Fix:</b> '+esc(x.fix)+'</div>'+
+      (x.cves.length?'<ul style="margin:4px 0;font-size:13px">'+x.cves.map(c=>'<li>'+link('https://nvd.nist.gov/vuln/detail/'+enc(c.id),esc(c.id))+' (score '+c.score.toFixed(1)+'): '+esc(c.summary)+'</li>').join('')+'</ul>':'')+
+      (x.severity!=='info'?'<button class="sec-help" data-i="'+i+'" style="margin-top:4px">Help me fix this</button>':'')+'</div>').join('')+
+    '<div style="font-size:13px;color:var(--mute);border-top:1px solid var(--line,#ddd);padding-top:8px">Open doors: '+(rep.services.map(s=>s.port+' ('+esc(s.name)+(s.software.length?', '+esc(s.software.map(w=>w.product+' '+w.version).join(', ')):'')+')').join(', ')||'none')+'</div>'+
+    '<div class="row" style="margin-top:10px"><button id="sec-again">Check again</button><button onclick="closeModal()">Close</button></div>';
+  $('sec-again').onclick=async()=>{try{await postJSON('/api/security/start',{ip:d.ip,kind:d.kind,owner_confirmed:true});openSecurity(d)}catch(e){alert(e.message)}};
+  document.querySelectorAll('.sec-help').forEach(b=>b.onclick=async()=>{const x=f[+b.dataset.i];closeModal();if(busy)return;
+    const q='Help me fix this security problem on my '+(d.name||d.model||d.kind)+(d.model&&d.name?' (model '+d.model+')':'')+' at '+d.ip+': '+x.title+'. '+x.why+' Suggested fix: '+x.fix+(x.cves.length?' Known problems: '+x.cves.slice(0,3).map(c=>c.id).join(', ')+'.':'')+' Walk me through it step by step for this model.';
+    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})});
+}
 $('netscan-btn').onclick=startScan;$('ns-again').onclick=startScan;
 
 let picFor=null;

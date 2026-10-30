@@ -53,6 +53,7 @@ import claude
 import collections
 import mac_app
 import netscan
+import securitycheck
 import selfcheck
 import devices
 import firmware
@@ -1468,6 +1469,40 @@ def h_scan_network(st, emit, a):
                                         "using generic words only. Never try passwords or try to break in.")
 
 
+SECURITY = {}
+
+
+@home_tool("security_check",
+           "Check one of the user's OWN devices for security problems: open doors, software versions with known "
+           "problems (CVEs), old encryption, risky settings like Telnet or FTP without a password. Only looks: no "
+           "exploits, no password guessing. Only call it after the user has said in this chat that the device is "
+           "theirs (or they're allowed to check it); set owner_confirmed only then. Takes up to a few minutes.",
+           {"ip": S, "owner_confirmed": {"type": "boolean"}}, ["ip", "owner_confirmed"])
+def h_security_check(st, emit, a):
+    if a.get("owner_confirmed") is not True:
+        return ("Ask the user to confirm the device is theirs (or that they're allowed to check it) before running the "
+                "security check.")
+    try:
+        ip = securitycheck.check_target(str(a.get("ip") or ""))
+    except securitycheck.NotAllowed as e:
+        raise ToolError(str(e))
+    job = SECURITY.get(ip)
+    if not (job and job.finished is None):
+        kind = next((d.get("kind") for d in (last_scan().get("results") or []) if d.get("ip") == ip), None)
+        job = SECURITY[ip] = securitycheck.SecurityCheck(ip, kind)
+    while job.finished is None:
+        if STOP.is_set():
+            job.stop.set()
+        check_stop()
+        emit({"type": "status", "text": job.note})
+        time.sleep(1)
+    if job.error:
+        raise ToolError("The security check didn't work: %s" % job.error)
+    return (securitycheck.summary(job.report) + "\n\nExplain the findings in plain words, worst first, and offer to "
+            "walk the user through each fix (device settings, firmware update, turning a service off). Never try to "
+            "exploit a problem or guess passwords.")
+
+
 @home_tool("check_address", "See whether anything answers at an IP address and port, and what it says (FTP, SSH, "
            "web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
 def h_check(st, emit, a):
@@ -1543,6 +1578,8 @@ device say in plain words what it is and the normal way to connect (its "Ways in
 that has no open door yet, look up that model's documented way to turn on access (developer mode, network/remote \
 settings, file sharing) with web_search using generic words, and walk them through it step by step. Connect only \
 with the user's own login. Never guess or try passwords, and never try to break in.
+- For "is my X secure", "check my devices for security problems" and the like: security_check, only after the user \
+confirms the device is theirs. Never exploit a problem or try passwords, even if asked; help them fix it instead.
 - When the user wants to connect Patchbay to a found device or "see its files": the goal is a way for PATCHBAY to \
 read the device's files (FTP, SFTP/SSH, SMB file sharing, or a documented developer mode / debug bridge such as ADB \
 on Android/Google/Fire TV). Look up that model's documented options with web_search (generic words, no addresses). \
@@ -2589,6 +2626,13 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
             self.json(last_scan())
+        elif path == "/api/security":
+            ip = (q.get("ip") or "").strip()
+            job = SECURITY.get(ip)
+            if job:
+                self.json(job.status())
+            else:
+                self.json({"ip": ip, "running": False, "report": securitycheck.load_report(ip), "error": None})
         elif path == "/api/selfcheck":
             self.json({"checks": selfcheck.run_checks(APP), "app": mac_app.status()})
         elif path == "/api/report":
@@ -2757,6 +2801,22 @@ class Handler(BaseHTTPRequestHandler):
             job = APP.chat_job
             if job and not job.done:
                 STOP.set()
+            self.json({"ok": True})
+        elif path == "/api/security/start":
+            if not data.get("owner_confirmed"):
+                raise ToolError("First confirm that this device is yours (or that you're allowed to check it).")
+            try:
+                ip = securitycheck.check_target(str(data.get("ip") or ""))
+            except securitycheck.NotAllowed as e:
+                raise ToolError(str(e))
+            job = SECURITY.get(ip)
+            if not (job and job.finished is None):
+                job = SECURITY[ip] = securitycheck.SecurityCheck(ip, data.get("kind"))
+            self.json(job.status())
+        elif path == "/api/security/stop":
+            job = SECURITY.get(str(data.get("ip") or ""))
+            if job:
+                job.stop.set()
             self.json({"ok": True})
         elif path == "/api/netscan/start":
             job = getattr(APP, "netscan", None)

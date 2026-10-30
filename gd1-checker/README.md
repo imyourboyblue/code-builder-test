@@ -67,6 +67,17 @@ The list stays on the Devices screen (also after a restart) until you press **Lo
 
 It only looks at your own network, only when you ask, and only through the doors a device openly offers with your own login. It never tries passwords or tries to break in. On a newer Mac, the first time you'll be asked whether Python may find devices on your local network: click **Allow**.
 
+
+### Security check for your own devices
+
+In the "Found on your network" list, open a device and click **🛡 Security check**, tick that it's your device, and
+start it (or ask the chat "is my router secure?"). Patchbay checks which doors are open, what software answers and
+whether that version has known security problems (looked up in the public US vulnerability database, sending only the
+product name and version), the secure-page (TLS) setup, and risky settings such as Telnet, Android debugging, open
+databases, or FTP that lets anyone in. You get a plain-language report, worst first, with how to fix each item, and
+**Help me fix this** walks you through it in the chat. It only looks: no break-in attempts and no password guessing
+(the only login it tries is FTP's public "anonymous" one). It only checks private addresses on your own network.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.
