@@ -97,6 +97,9 @@ class ToolError(Exception):
     pass
 
 
+HOME = "__home__"
+
+
 class LineSink(io.TextIOBase):
     """Catches what the checker prints and passes each line to the page."""
 
@@ -865,6 +868,135 @@ def t_web(st, emit, a):
     return clip(text)
 
 
+# ----------------------------------------------------------------- the home screen's chat
+
+class HomeState(State):
+    """The chat on the home screen: about all devices, not one."""
+    home = True
+
+
+HOME_TOOLS, HOME_HANDLERS = [], {}
+
+
+def home_tool(name, description, params=None, required=()):
+    def deco(fn):
+        HOME_TOOLS.append({"type": "function", "function": {
+            "name": name, "description": description,
+            "parameters": {"type": "object", "properties": params or {}, "required": list(required)}}})
+        HOME_HANDLERS[name] = fn
+        return fn
+    return deco
+
+
+def for_device(name, a):
+    st = APP.device(a.get("device") or "")
+    if getattr(st, "home", False):
+        raise ToolError("Say which device.")
+    return st
+
+
+@home_tool("list_devices", "List every saved device: address, whether it's on the network now, its firmware, "
+           "and whether writing to it is on.")
+def h_list(st, emit, a):
+    rows = APP.registry.summary()
+    if not rows:
+        return "No devices saved yet."
+    return "\n".join("%s at %s: %s; firmware: %s; writing %s" % (
+        d["name"], d["host"], "on the network" if d["online"] else "NOT found on the network",
+        d.get("firmware") or "unknown", "ON" if d["writes_on"] else "off") for d in rows)
+
+
+@home_tool("open_device", "Open a device's own screen (its chat, files and backups) on the page. Use this when the "
+           "user wants to work on one device: check it, read or fix files, scan, back up, or update its homebrew.",
+           {"device": S, "tab": dict(S, description="chat, files or backups (default chat)")}, ["device"])
+def h_open(st, emit, a):
+    d = for_device(st, a)
+    name = d.cfg()["device_name"]
+    tab = a.get("tab") if a.get("tab") in ("chat", "files", "backups") else "chat"
+    emit({"type": "open", "device": name, "tab": tab})
+    return "Opened %s's %s screen for the user." % (name, tab)
+
+
+@home_tool("check_address", "See whether anything answers at an IP address and port, and what it says (FTP, SSH, "
+           "web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
+def h_check(st, emit, a):
+    return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
+
+
+@home_tool("add_device", "Save a new device after checking its FTP server answers. It then gets a picture on the "
+           "home screen.", {"name": dict(S, description="Short name like GD2"), "host": S,
+           "ports": {"type": "array", "items": I}, "username": S, "password": S, "about": S}, ["name", "host"])
+def h_add(st, emit, a):
+    result = HANDLERS["add_device"](st, emit, a)
+    emit({"type": "devices_changed"})
+    return result
+
+
+@home_tool("identify_firmware", "Work out which firmware / operating system a device runs (read-only) and show it on "
+           "its picture.", {"device": S}, ["device"])
+def h_identify(st, emit, a):
+    result = HANDLERS["identify_firmware"](for_device(st, a), emit, {})
+    emit({"type": "devices_changed"})
+    return result
+
+
+@home_tool("save_firmware_name", "Save a short firmware name for a device once you're sure.", {"device": S, "name": S},
+           ["device", "name"])
+def h_save_fw(st, emit, a):
+    result = HANDLERS["save_firmware_name"](for_device(st, a), emit, a)
+    emit({"type": "devices_changed"})
+    return result
+
+
+@home_tool("show_settings", "Show every setting of one device, plus the shared app settings.", {"device": S}, ["device"])
+def h_show(st, emit, a):
+    return HANDLERS["show_settings"](for_device(st, a), emit, {})
+
+
+@home_tool("propose_settings", "Suggest changing settings of one device (or shared ones), e.g. {\"host\": "
+           "\"192.168.50.203\", \"ports\": [8080]}. Shows a card the user confirms; settings are backed up first.",
+           {"device": S, "changes": {"type": "object"}, "reason": S}, ["device", "changes"])
+def h_settings(st, emit, a):
+    target = for_device(st, a)
+    shown = []
+    result = HANDLERS["propose_settings"](target, shown.append, a)
+    # The card belongs to this chat, so move it here and remember which device it's for.
+    for ev in shown:
+        if ev.get("type") == "confirm":
+            p = target.pending.pop(ev["id"])
+            p["device"] = target.cfg()["device_name"]
+            st.pending[ev["id"]] = p
+        emit(ev)
+    return result
+
+
+@home_tool("test_connection", "Check that the Mac can reach one device over FTP.", {"device": S}, ["device"])
+def h_test(st, emit, a):
+    return HANDLERS["test_connection"](for_device(st, a), emit, {})
+
+
+for _n in ("check_build_tools", "latest_release", "web_search", "read_web_page"):
+    _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
+    HOME_TOOLS.append(_spec)
+    HOME_HANDLERS[_n] = HANDLERS[_n]
+
+
+def home_system():
+    return """You are Patchbay, an assistant running fully on the user's own Mac (%s). This is the home screen chat, \
+about all of the user's devices rather than one. The user is not a programmer: answer in short, plain sentences.
+
+Use tools instead of guessing.
+- list_devices shows every saved device and whether it's on the network.
+- For "search <address> port <n>" or "find/connect <address>": check_address. If an FTP server answers and it isn't \
+a saved device, offer add_device (ask for a short name if they didn't give one). If they mean a saved device moved, \
+propose_settings for its host/ports, then test_connection.
+- Settings: show_settings, then propose_settings. That only shows a card; never say it's changed until you're told.
+- Work on one device (checking, files, scans, backups, fixing, updating homebrew): open_device, and tell the user \
+they can carry on in that device's chat.
+- identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.""" % (
+        APP.computer if APP else "the Mac")
+
+
 # ----------------------------------------------------------------- the AI
 
 SYSTEM = """You are Patchbay, an assistant running fully on the user's own Mac. You help the user find and fix \
@@ -927,8 +1059,8 @@ def ollama_url(cfg):
     return url
 
 
-def ask_model(cfg, messages):
-    body = json.dumps({"model": cfg["ollama_model"], "stream": False, "messages": messages, "tools": TOOLS,
+def ask_model(cfg, messages, tools=None):
+    body = json.dumps({"model": cfg["ollama_model"], "stream": False, "messages": messages, "tools": tools or TOOLS,
                        "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
@@ -950,14 +1082,20 @@ def clean_answer(text):
 
 def chat_turn(st, user_text, emit):
     cfg = st.cfg()
+    if getattr(st, "home", False):
+        return chat_loop(st, user_text, emit, cfg, home_system(), HOME_TOOLS, HOME_HANDLERS)
     system = SYSTEM % {"device": cfg["device_name"], "host": cfg["host"], "about": devices.about_text(cfg),
                        "folders": ", ".join(cfg["remote_folders"]),
                        "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"}
+    return chat_loop(st, user_text, emit, cfg, system, TOOLS, HANDLERS)
+
+
+def chat_loop(st, user_text, emit, cfg, system, tools, handlers):
     if user_text:
         st.messages.append({"role": "user", "content": user_text})
     for _ in range(MAX_TOOL_ROUNDS):
         emit({"type": "status", "text": "Thinking..."})
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages)
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, tools)
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
                            if calls else {"role": "assistant", "content": msg.get("content") or ""})
@@ -977,9 +1115,9 @@ def chat_turn(st, user_text, emit):
                     args = {}
             emit({"type": "tool", "name": name, "args": args})
             try:
-                if name not in HANDLERS:
+                if name not in handlers:
                     raise ToolError("There's no tool called %s." % name)
-                result = HANDLERS[name](st, emit, args)
+                result = handlers[name](st, emit, args)
             except ToolError as e:
                 result = "Error: %s" % e
             except Exception as e:  # keep the chat alive and let the AI explain
@@ -997,6 +1135,8 @@ def do_confirm(st, pid, typed, emit):
     p = st.pending.get(pid)
     if not p:
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
+    if getattr(st, "home", False):
+        cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
     if p["kind"] in ("project_edit", "build", "get_source", "command", "settings"):
         if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
             raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
@@ -1113,11 +1253,15 @@ class App:
         self.access = webauth.Access(Path(config_path).parent / "access.json")
         self.states = {}
         self.backups = {}       # device name -> the backup running (or last run) for it
+        self.home = HomeState(config_path)
+        self.chat_job = None
         self.lock = threading.Lock()
         self.computer = computer_name()
 
     def device(self, name):
-        """The chat state for one saved device, by name."""
+        """The chat state for one saved device, by name. "__home__" is the home screen's own chat."""
+        if name == HOME:
+            return self.home
         try:
             path = self.registry.path_for(name)
         except devices.DeviceError as e:
@@ -1227,8 +1371,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write((json.dumps(ev) + "\n").encode())
                 self.wfile.flush()
+                return True
             except OSError:
-                pass
+                return False
         return emit
 
     # ---- GET
@@ -1267,7 +1412,10 @@ class Handler(BaseHTTPRequestHandler):
                        if Path(st.config_path).is_relative_to(core.HERE) else st.config_path})
         elif path == "/api/history":
             st = APP.device(q.get("device"))
-            self.json({"events": st.transcript, "pending": list(st.pending)})
+            job = APP.chat_job
+            running = bool(job and not job.done and job.device == q.get("device"))
+            self.json({"events": st.transcript, "pending": list(st.pending), "running": running,
+                       "job_at": len(job.events) if running else 0})
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()
             f = APP.registry.portrait_file(cfg)
@@ -1379,6 +1527,13 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"ok": True})
         elif path in ("/api/chat", "/api/confirm", "/api/cancel"):
             self.chat(path, data)
+        elif path == "/api/follow":
+            emit = self.start_stream()
+            job = APP.chat_job
+            if job and job.device == data.get("device"):
+                self.follow(job, int(data.get("since") or 0), emit)
+            else:
+                emit({"type": "done"})
         elif path == "/api/files/plan":
             st = APP.device(data.get("device"))
             cfg = st.cfg()
@@ -1460,37 +1615,64 @@ class Handler(BaseHTTPRequestHandler):
         self.json({"ok": True, "settings_file": str(f.relative_to(core.HERE))})
 
     def chat(self, path, data):
+        """Chat work runs in the background. This request only follows along, so if the page loses its
+        connection (Wi-Fi blip, laptop asleep, a very slow AI answer) the work carries on and the page
+        picks it up again with /api/follow."""
         st = APP.device(data.get("device"))
         emit_raw = self.start_stream()
-
-        def emit(ev):
-            st.record(ev)
-            emit_raw(ev)
-
         if not BUSY.acquire(blocking=False):
             emit_raw({"type": "error", "text": "I'm still working on a request for %s. Wait for it to finish."
                       % BUSY_WITH[0]})
             emit_raw({"type": "done"})
             return
-        BUSY_WITH[0] = st.cfg()["device_name"]
-        try:
-            if path == "/api/chat":
-                text = (data.get("text") or "").strip()
-                if text:
-                    st.record({"type": "user", "text": text})
-                chat_turn(st, text, emit)
-            elif path == "/api/confirm":
-                do_confirm(st, data.get("id", ""), data.get("typed", ""), emit)
-            else:
-                do_cancel(st, data.get("id", ""), emit)
-        except ToolError as e:
-            emit({"type": "error", "text": str(e)})
-        except Exception as e:
-            traceback.print_exc()
-            emit({"type": "error", "text": "Something went wrong: %s" % e})
-        finally:
-            BUSY.release()
-            emit_raw({"type": "done"})
+        BUSY_WITH[0] = "the home chat" if getattr(st, "home", False) else st.cfg()["device_name"]
+        job = ChatJob(data.get("device"))
+        APP.chat_job = job
+
+        def work():
+            def emit(ev):
+                st.record(ev)
+                job.emit(ev)
+            try:
+                if path == "/api/chat":
+                    text = (data.get("text") or "").strip()
+                    if text:
+                        st.record({"type": "user", "text": text})
+                    chat_turn(st, text, emit)
+                elif path == "/api/confirm":
+                    do_confirm(st, data.get("id", ""), data.get("typed", ""), emit)
+                else:
+                    do_cancel(st, data.get("id", ""), emit)
+            except ToolError as e:
+                emit({"type": "error", "text": str(e)})
+            except Exception as e:
+                traceback.print_exc()
+                emit({"type": "error", "text": "Something went wrong: %s" % e})
+            finally:
+                BUSY.release()
+                job.finish()
+        threading.Thread(target=work, daemon=True).start()
+        self.follow(job, 0, emit_raw)
+
+    def follow(self, job, since, emit_raw):
+        """Send the job's events from number `since` on, with a ping every few seconds so nothing
+        between here and the browser decides the connection is dead."""
+        i = since
+        while True:
+            with job.cond:
+                if len(job.events) <= i and not job.done:
+                    job.cond.wait(5)
+                new = job.events[i:]
+                done = job.done
+            for ev in new:
+                if not emit_raw(ev):
+                    return   # the page went away; the work carries on
+            i += len(new)
+            if done and i >= len(job.events):
+                emit_raw({"type": "done"})
+                return
+            if not new and not emit_raw({"type": "ping"}):
+                return
 
     def files_apply(self, data):
         st = APP.device(data.get("device"))
@@ -1517,6 +1699,26 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             emit({"type": "error", "text": "Something went wrong: %s" % e})
         emit({"type": "done"})
+
+
+class ChatJob:
+    """One chat request being worked on: everything it has shown so far."""
+
+    def __init__(self, device):
+        self.device = device
+        self.events = []
+        self.done = False
+        self.cond = threading.Condition()
+
+    def emit(self, ev):
+        with self.cond:
+            self.events.append(ev)
+            self.cond.notify_all()
+
+    def finish(self):
+        with self.cond:
+            self.done = True
+            self.cond.notify_all()
 
 
 class DualStackServer(ThreadingHTTPServer):

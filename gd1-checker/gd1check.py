@@ -204,7 +204,17 @@ class GD1:
                 self.connect(quiet=True)
             try:
                 return getattr(self.ftp, fn_name)(*args, **kwargs)
-            except (OSError, EOFError, ftplib.error_temp) as e:
+            except ftplib.error_temp as e:
+                if not str(e).startswith("421"):
+                    # 450/451/452 mean "that file isn't there / can't be used right now", not a dropped line.
+                    # Some servers (like the Switch's ftpd) say 450 for a missing file, so treat it like 550.
+                    raise ftplib.error_perm(str(e))
+                self.close()
+                if attempt == 1:
+                    raise
+                say("  %s closed the connection (%s), reconnecting..." % (self.cfg["device_name"], e))
+                time.sleep(2)
+            except (OSError, EOFError) as e:
                 self.close()
                 if attempt == 1:
                     raise
