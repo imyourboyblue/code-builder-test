@@ -2581,8 +2581,7 @@ class Handler(BaseHTTPRequestHandler):
             st.ensure_loaded()
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
-            job = getattr(APP, "netscan", None)
-            self.json(job.status() if job else {"running": False, "results": [], "finished": None})
+            self.json(last_scan())
         elif path == "/api/selfcheck":
             self.json({"checks": selfcheck.run_checks(APP), "app": mac_app.status()})
         elif path == "/api/report":
@@ -3132,6 +3131,8 @@ class NetScanJob:
                 d["saved_as"] = saved.get(d["ip"])
             self.results = found
             self.note = "Found %d device(s)." % len(found)
+            if not self.stop.is_set():
+                save_scan({"results": found, "finished": time.time()})
         except Exception as e:  # keep the page alive
             traceback.print_exc()
             self.error = str(e)
@@ -3144,15 +3145,42 @@ class NetScanJob:
                 "results": self.results, "error": self.error, "finished": self.finished}
 
 
+SCAN_FILE = core.HERE / "data-cache" / "netscan-last.json"
+
+
+def save_scan(data):
+    """Keep the last finished scan, so the list is still there after a restart."""
+    try:
+        SCAN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SCAN_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.replace(SCAN_FILE)
+    except OSError:
+        pass
+
+
+def last_scan():
+    job = getattr(APP, "netscan", None)
+    if job and (job.finished is None or job.results or job.error):
+        return job.status()
+    try:
+        data = json.loads(SCAN_FILE.read_text())
+        return {"running": False, "progress": 1.0, "note": "", "results": data.get("results") or [],
+                "error": None, "finished": data.get("finished")}
+    except (OSError, ValueError):
+        return {"running": False, "results": [], "finished": None}
+
+
 def scan_summary(found):
     if not found:
         return "No other devices answered on your network."
     rows = []
     for d in found:
         ways = ", ".join(a["name"] for a in d["access"]) or "no open doors Patchbay knows"
-        rows.append("%s — %s%s%s. Ways in: %s.%s" % (
+        rows.append("%s — %s%s%s%s. Ways in: %s.%s" % (
             d["ip"], d["kind"], (" called %s" % d["name"]) if d["name"] else "",
-            (" (made by %s)" % d["vendor"]) if d["vendor"] else "", ways,
+            (", model %s" % d["model"]) if d.get("model") else "",
+            (" (made by %s)" % d["vendor"]) if d["vendor"] and d["vendor"] != "Private address" else "", ways,
             (" Already saved as %s." % d["saved_as"]) if d.get("saved_as") else ""))
     return "Devices on your network:\n" + "\n".join(rows)
 

@@ -60,6 +60,8 @@ Your browser opens the **Devices** screen. Leave the Terminal window open while 
 
 On the Devices screen, click **🔎 Find devices on my network** (or ask the chat "what's on my network?"). In about 20 seconds Patchbay lists the TVs, consoles, computers, printers and other devices on your own network: their address, any name they announce, the maker, what each probably is, and the normal ways to connect to it (FTP, SSH, file sharing, a TV's developer mode and so on).
 
+The list stays on the Devices screen (also after a restart) until you press **Look again**. Names and models come from what devices say about themselves: Bonjour, UPnP, the router's names, Windows names, the PlayStation and Roku/Chromecast discovery, and the title of a device's own web page. The maker comes from the public list of hardware-address makers, downloaded once into data-cache. Phones and laptops that use a private Wi-Fi address don't reveal their maker.
+
 - **Add as a device** appears for anything with an FTP server, with the address and port filled in.
 - **How do I connect to it?** asks the chat, which explains the normal way in for that kind of device and, if it needs turning on first (like a TV's developer mode), looks up that model's steps and walks you through them.
 

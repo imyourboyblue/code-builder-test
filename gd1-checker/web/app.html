@@ -34,6 +34,7 @@ font-weight:600;color:#fff;font-size:12px}
 .tile .go{font-size:12.5px;color:var(--me);font-weight:600}
 #home .wrap{max-width:1000px;width:100%;margin:0 auto}
 #home h2{font-size:15px;color:var(--mute);font-weight:500;margin:18px 0 10px}
+.nsdev{border-bottom:1px solid var(--line);padding:8px 0}.nsdev summary{cursor:pointer}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
 .tile{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 12px 14px;
 text-align:center;color:inherit;text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:6px}
@@ -197,6 +198,8 @@ border:2px solid var(--line)}
     <button id="recheck">Check again</button></div>
   <h2>On the network now</h2><div class="grid" id="online"></div>
   <h2 id="offh">Not found on the network right now</h2><div class="grid" id="offline"></div>
+  <h2 id="foundh" hidden>Found on your network <small id="foundwhen" style="font-weight:400;color:var(--mute);font-size:13px"></small>
+    <button id="ns-again" style="font-size:13px;margin-left:8px">Look again</button></h2><div id="found"></div>
 </div></div>
 <aside id="homechat"><div class="hc-head">Ask Patchbay<small>About all your devices. Click a picture to chat about one device.</small></div></aside>
 </div></main>
@@ -319,6 +322,7 @@ async function loadHome(force){
     try{const j=await postJSON('/api/identify',{device:b.dataset.name});b.replaceWith(document.createTextNode(j.firmware||'Not sure: ask in the chat'))}
     catch(x){b.textContent='Couldn\'t tell';b.disabled=false}});
   document.querySelectorAll('.picbtn').forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();pickPicture(b.dataset.name)});
+  if(scanData)renderFound();else if(!scanTimer)pollScan();
 }
 function tile(d,online){
   const inner=`<button class="picbtn" data-name="${esc(d.name)}" title="Change picture">Picture</button>
@@ -332,36 +336,42 @@ function tile(d,online){
   return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
 $('recheck').onclick=()=>loadHome(true);
 
-// ---- find devices on the network
-let scanTimer=null;
-async function openScan(start){
-  modal('<h3>🔎 Devices on your network</h3><div style="font-size:13.5px">Patchbay looks at your own network for devices and the normal ways to connect to them. It only looks: it doesn\'t change anything or try any passwords.</div><div id="ns-body" style="margin-top:10px"></div>');
-  $('box').classList.add('wide');
-  if(start){try{await postJSON('/api/netscan/start',{})}catch(e){$('ns-body').textContent=e.message;return}}
-  const draw=async()=>{if(!$('ns-body'))return clearInterval(scanTimer);let j;try{j=await getJSON('/api/netscan')}catch(e){return}
-    if(j.running){$('ns-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
-      $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
-    clearInterval(scanTimer);
-    if(j.error){$('ns-body').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
-    if(!j.finished){$('ns-body').innerHTML='<button class="primary" id="ns-go">Start looking</button>';$('ns-go').onclick=()=>openScan(true);return}
-    const r=j.results||[];
-    $('ns-body').innerHTML=(r.length?'':'<div>No other devices answered. Make sure they\'re switched on and on the same Wi-Fi or network.</div>')+
-      r.map((d,i)=>'<div style="border-bottom:1px solid var(--line,#ddd);padding:8px 0"><b>'+esc(d.name||d.kind)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(d.ip)+(d.vendor?' · '+esc(d.vendor):'')+'</span>'+
-        (d.saved_as?' <span style="font-size:12px">✅ saved as '+esc(d.saved_as)+'</span>':'')+
-        '<div style="font-size:13.5px">'+esc(d.name?d.kind:'')+(d.port_names.length?(d.name?' · ':'')+'Open: '+esc(d.port_names.join(', ')):(d.name?'':'No open doors Patchbay knows yet'))+'</div>'+
-        (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
-        '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!d.saved_as?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
-        '<button class="ns-ask" data-i="'+i+'">How do I connect to it?</button></div></div>').join('')+
-      '<div class="row" style="margin-top:10px;display:flex;gap:6px"><button id="ns-again">Look again</button><button onclick="closeModal()">Close</button></div>';
-    $('ns-again').onclick=()=>openScan(true);
-    document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
-      $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
-    document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];closeModal();if(busy)return;
-      const q='How do I connect to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.vendor?' made by '+d.vendor:'')+' at '+d.ip+'? Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'.';
-      add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})})};
-  await draw();clearInterval(scanTimer);scanTimer=setInterval(draw,1200);
-}
-$('netscan-btn').onclick=()=>openScan(false);
+// ---- find devices on the network (the list stays on the home page until you look again)
+let scanTimer=null,scanData=null;
+function savedAs(d){const m=homeData&&homeData.devices.find(x=>x.host===d.ip);return m?m.name:d.saved_as}
+async function startScan(){$('foundh').hidden=false;$('found').innerHTML='<div>Starting...</div>';
+  try{await postJSON('/api/netscan/start',{})}catch(e){$('found').textContent=e.message;return}
+  pollScan()}
+function pollScan(){clearInterval(scanTimer);drawScan();scanTimer=setInterval(drawScan,1200)}
+async function drawScan(){let j;try{j=await getJSON('/api/netscan')}catch(e){return}
+  if(!j.running)clearInterval(scanTimer);
+  if(!j.running&&!j.finished&&!j.error){$('foundh').hidden=true;return}
+  $('foundh').hidden=false;
+  if(j.running){$('foundwhen').textContent='looking now...';
+    $('found').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
+    $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
+  if(j.error){$('foundwhen').textContent='';$('found').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
+  scanData=j;renderFound()}
+function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
+  $('foundwhen').textContent=j.finished?'looked '+ago(j.finished).replace(/^seen /,''):'';
+  const open=new Set([...document.querySelectorAll('#found details[open]')].map(x=>x.dataset.ip));
+  $('found').innerHTML=(r.length?'':'<div class="empty">No other devices answered. Make sure they\'re switched on and on the same Wi-Fi or network, then press Look again.</div>')+
+    r.map((d,i)=>{const sv=savedAs(d),mk=d.vendor&&d.vendor!=='Private address'?d.vendor:'';
+      return '<details class="nsdev" data-ip="'+esc(d.ip)+'"'+(open.has(d.ip)?' open':'')+'><summary><b>'+esc(d.name||d.model||d.kind)+'</b> <span style="color:var(--mute);font-size:13px">'+esc(d.ip)+(d.name||d.model?' · '+esc(d.kind):'')+(mk&&!(d.kind||'').includes(mk)?' · '+esc(mk):'')+'</span>'+
+      (sv?' <span style="font-size:12px">✅ saved as '+esc(sv)+'</span>':'')+'</summary>'+
+      ((d.model&&d.model!==(d.name||d.model)?'<div style="font-size:13.5px">Model: '+esc(d.model)+'</div>':'')+
+       (d.page_title?'<div style="font-size:13.5px">Its web page says: '+esc(d.page_title)+'</div>':'')+
+       (mk?'<div style="font-size:13.5px">Made by: '+esc(mk)+'</div>':d.vendor?'<div style="font-size:13.5px">Uses a private Wi-Fi address, so the maker is hidden (usually a phone, tablet or laptop).</div>':''))+
+      '<div style="font-size:13.5px">'+(d.port_names.length?'Open: '+esc(d.port_names.join(', ')):'No open doors Patchbay knows yet')+'</div>'+
+      (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!sv?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
+      '<button class="ns-ask" data-i="'+i+'">How do I connect to it?</button></div></details>'}).join('');
+  document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
+    $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
+  document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];if(busy)return;
+    const q='How do I connect to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+'? Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'.';
+    add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})})}
+$('netscan-btn').onclick=startScan;$('ns-again').onclick=startScan;
 
 let picFor=null;
 function pickPicture(name){picFor=name;$('picfile').value='';$('picfile').click()}
