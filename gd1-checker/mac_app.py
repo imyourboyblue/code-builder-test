@@ -113,10 +113,14 @@ def _build_native(target):
         found = subprocess.run(["/usr/bin/xcrun", "--find", "swiftc"], capture_output=True, text=True, timeout=60,
                                stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return False, "Apple's command line tools aren't installed."
+        return False, "NO_TOOLS"
     if found.returncode:
-        return False, "Apple's command line tools (swiftc) aren't installed."
+        return False, "NO_TOOLS"
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        (BUILD_DIR / "build-error.txt").unlink()
+    except OSError:
+        pass
     src = SWIFT_SRC.read_text()
     src = src.replace("__PYTHON__", _swift_string(python_exe())).replace("__FOLDER__", _swift_string(HERE)) \
              .replace("__PORT__", str(_port()))
@@ -139,7 +143,16 @@ def _build_native(target):
     return True, "Built the Patchbay app with its own window."
 
 
+_BUILD_LOCK = __import__("threading").Lock()
+
+
 def make_app(native=True):
+    """See _make_app. Only one build at a time (the start-up refresh and the Setup button could overlap)."""
+    with _BUILD_LOCK:
+        return _make_app(native)
+
+
+def _make_app(native=True):
     """Create (or refresh) ~/Applications/Patchbay.app. Returns its path.
     It's a real Mac app with its own window when Apple's command line tools are there (they come with git and
     devkitPro setups); otherwise a small launcher that opens Patchbay in the browser."""
@@ -176,7 +189,7 @@ def make_app(native=True):
         info["CFBundleIconFile"] = "Patchbay"
     with open(APP_DIR / "Contents" / "Info.plist", "wb") as f:
         plistlib.dump(info, f)
-    (res / "patchbay-build.json").write_text(__import__("json").dumps(dict(_stamp(), native=ok)))
+    (res / "patchbay-build.json").write_text(__import__("json").dumps(dict(_stamp(), native=ok, note=note)))
     for cmd in (["/usr/bin/codesign", "--force", "--deep", "-s", "-", str(APP_DIR)], ["/usr/bin/touch", str(APP_DIR)]):
         try:   # an ad-hoc signature so Apple silicon Macs run it; touch so Finder notices the change
             subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -200,7 +213,7 @@ def refresh_app():
         return False
     try:
         # Rebuild in the background-friendly way: same kind as before (native if it was, or if it never was tried).
-        make_app(native=built.get("native", True) is not False or not built)
+        make_app(native=True)
         return True
     except OSError:
         return False
@@ -240,6 +253,14 @@ def make_icon(res_dir):
     except (OSError, subprocess.SubprocessError):
         pass
     return False
+
+
+def install_tools():
+    """Open Apple's own installer for the free command line tools (it asks the user before installing anything)."""
+    if not is_mac():
+        raise OSError("This is a macOS feature.")
+    subprocess.Popen(["/usr/bin/xcode-select", "--install"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     stdin=subprocess.DEVNULL)
 
 
 def remove_app():
@@ -287,12 +308,22 @@ def _launchctl(action, plist):
 
 
 def status():
-    native = None
+    native, note = None, ""
     try:
         import json
-        native = json.loads((APP_DIR / "Contents" / "Resources" / "patchbay-build.json").read_text()).get("native")
+        built = json.loads((APP_DIR / "Contents" / "Resources" / "patchbay-build.json").read_text())
+        native, note = built.get("native"), built.get("note") or ""
     except (OSError, ValueError):
         pass
+    error = ""
+    try:
+        error = (BUILD_DIR / "build-error.txt").read_text("utf-8", "replace")
+        error = error.replace(str(Path.home()), "~")[-6000:]
+    except OSError:
+        pass
+    no_tools = "NO_TOOLS" in (LAST.get("note") or note)
+    note = (LAST.get("note") or note).replace("NO_TOOLS", "Apple's command line tools aren't installed.")
     return {"mac": is_mac(), "app": APP_DIR.exists(), "app_path": str(APP_DIR), "native": native,
-            "note": LAST.get("note") or "",
+            "note": note, "build_error": "" if native else error, "no_tools": no_tools and not native,
+            "building": _BUILD_LOCK.locked(),
             "login": AGENT.exists(), "script": str(SCRIPT)}

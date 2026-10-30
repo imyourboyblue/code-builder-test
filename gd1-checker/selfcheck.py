@@ -154,7 +154,14 @@ def report(app):
         lines.append("[%s] %s — %s" % ({"ok": "OK", "warn": "!", "bad": "X"}.get(c["level"], "?"),
                                        c["name"], c["detail"]))
     m = mac_app.status()
-    lines.append("[.] App icon: %s, start at login: %s" % ("yes" if m["app"] else "no", "on" if m["login"] else "off"))
+    lines.append("[.] App icon: %s (%s), start at login: %s" % (
+        "yes" if m["app"] else "no", "own window" if m.get("native") else "browser launcher",
+        "on" if m["login"] else "off"))
+    if m.get("note") and not m.get("native"):
+        lines.append("    " + m["note"])
+    if m.get("build_error"):
+        lines.append("    Window version build error (last part):")
+        lines += ["      " + x for x in m["build_error"].splitlines()[-30:]]
     try:
         cm = app.claude.settings()
         lines.append("[.] Claude help: mode %s, key %s, model %s" % (cm["mode"], "set" if cm.get("key") else "none",

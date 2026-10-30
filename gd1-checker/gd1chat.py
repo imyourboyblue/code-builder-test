@@ -3005,6 +3005,8 @@ class Handler(BaseHTTPRequestHandler):
                     mac_app.make_app()
                 elif act == "remove_app":
                     mac_app.remove_app()
+                elif act == "install_tools":
+                    mac_app.install_tools()
                 elif act in ("login_on", "login_off"):
                     mac_app.set_login(act == "login_on")
                 else:

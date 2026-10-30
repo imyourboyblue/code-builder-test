@@ -54,8 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             if !self.isUp() { self.startServer() }
             var tries = 0
             while !self.isUp() && tries < 120 { Thread.sleep(forTimeInterval: 0.5); tries += 1 }
+            let failed = tries >= 120
             DispatchQueue.main.async {
-                if tries >= 120 {
+                if failed {
                     self.status.stringValue = "Patchbay didn't start. See data-cache/patchbay.log in \(FOLDER)."
                     return
                 }
@@ -68,16 +69,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     // Is Patchbay's page answering?
     func isUp() -> Bool {
-        var ok = false
+        final class Answer { var ok = false }
+        let answer = Answer()
         let done = DispatchSemaphore(value: 0)
         var req = URLRequest(url: HOME_URL)
         req.timeoutInterval = 2
         URLSession.shared.dataTask(with: req) { _, resp, _ in
-            ok = resp != nil
+            answer.ok = resp != nil
             done.signal()
         }.resume()
         _ = done.wait(timeout: .now() + 3)
-        return ok
+        return answer.ok
     }
 
     func startServer() {

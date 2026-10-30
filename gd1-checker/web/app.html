@@ -688,7 +688,10 @@ async function openSetup(msg){
     (a.mac?'<h3 style="margin-top:14px">Starting Patchbay</h3>'+
       '<div style="font-size:13.5px">'+(a.app?(a.native?'✅ The Patchbay app (with its own window) is in your Applications folder. Drag it onto the Dock to start Patchbay with one click.':'✅ The Patchbay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a Patchbay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the Patchbay app')+'</button>'+
-      '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>':'')+
+      (a.no_tools?'<button id="sc-tools" class="primary">Install Apple\'s free tools</button>':'')+(a.build_error?'<button id="sc-berr">Copy the build error</button>':'')+
+      '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>'+
+      (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
+      (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
     '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
     '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
@@ -698,6 +701,8 @@ async function openSetup(msg){
   const ap=$('sc-app');if(ap)ap.onclick=async()=>{ap.disabled=true;ap.textContent='Building the app… (about a minute)';
     try{const r=await postJSON('/api/macapp',{action:'make_app'});openSetup(r.native?'Made the Patchbay app with its own window. Open Applications in Finder and drag Patchbay onto the Dock (if an older Patchbay icon is there, remove it first).':'Made the Patchbay app as a simple launcher. '+(r.note||''))}
     catch(e){ap.disabled=false;ap.textContent='Try again';say(esc(e.message))}};
+  const tl=$('sc-tools');if(tl)tl.onclick=async()=>{tl.disabled=true;try{await postJSON('/api/macapp',{action:'install_tools'});say('Apple\'s installer should be open now (it may be behind this window). Click Install, wait for it to finish, then press Rebuild the app.')}catch(e){tl.disabled=false;say(esc(e.message))}};
+  const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'Patchbay will now start by itself when you log in.':'Patchbay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
