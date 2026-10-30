@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 import tlsfix
+import core
 
 
 def _ollama(app):
@@ -23,6 +24,9 @@ def _ollama(app):
         with urllib.request.urlopen(server.ollama_url(cfg) + "/api/tags", timeout=8) as r:
             models = [m.get("name") for m in json.loads(r.read()).get("models", [])]
     except Exception as e:
+        if core.ai_where(cfg) != "this Mac":
+            return bad("ollama", "Ollama (the AI)", "Can't reach the AI on %s: %s" % (core.ai_where(cfg), tlsfix.explain(e)),
+                       "Turn that computer on and open Ollama there, or switch back under Where the AI runs below.")
         return bad("ollama", "Ollama (the AI)", "Can't reach Ollama: %s" % tlsfix.explain(e),
                    "The AI runs in the Ollama app. Make sure it's installed (ollama.com) and open.", fix="Start Ollama")
     want = cfg.get("ollama_model")
@@ -32,13 +36,13 @@ def _ollama(app):
         if not fast:
             return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
                         "In Terminal run: ollama pull qwen3.6:35b-a3b")
-        return ok("ollama", "Ollama (the AI)", "Running. Automatic uses %s for quick things and %s for hard jobs."
-                  % (model_labels.local(fast)[0], model_labels.local(strong)[0]))
+        return ok("ollama", "Ollama (the AI)", "Running on %s. Automatic uses %s for quick things and %s for hard jobs."
+                  % (core.ai_where(cfg), model_labels.local(fast)[0], model_labels.local(strong)[0]))
     if models and want and want not in models:
         return warn("ollama", "Ollama (the AI)", "Running, but the chosen model %s isn't downloaded. You have: %s"
                     % (want, ", ".join(models[:6]) or "none"),
                     "In Terminal run: ollama pull %s" % want)
-    return ok("ollama", "Ollama (the AI)", "Running, %d model%s ready." % (len(models), "" if len(models) == 1 else "s"))
+    return ok("ollama", "Ollama (the AI)", "Running on %s, %d model%s ready." % (core.ai_where(cfg), len(models), "" if len(models) == 1 else "s"))
 
 
 def _certs(app):

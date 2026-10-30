@@ -16,7 +16,8 @@ Safety
   - Nothing is written to a device until you type the device's name on a
     card and press Confirm. The old file is backed up first and can be undone.
   - From another computer you must sign in with your password first.
-  - The AI must be Ollama on this Mac (localhost). Nothing goes to the internet.
+  - The AI is Ollama on this Mac, or on another computer on your home network
+    (🩺 Setup → Where the AI runs). Never on the internet.
 
 Only uses Python's built-in parts, so there is nothing to install.
 """
@@ -28,6 +29,7 @@ import difflib
 import errno
 import ftplib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -2145,11 +2147,40 @@ Scanning settings: folders %(folders)s. Writing to the device is currently %(wri
 
 
 def ollama_url(cfg):
-    url = cfg["ollama_url"].rstrip("/")
-    host = re.sub(r"^https?://", "", url).split("/")[0].rsplit(":", 1)[0].strip("[]")
-    if host not in ("localhost", "127.0.0.1", "::1"):
-        raise ToolError("ollama_url must point at this Mac (localhost) so your files never leave it.")
-    return url
+    """Where the AI runs: this Mac, or another computer on the home network (never the internet)."""
+    try:
+        return core.check_ai_url(cfg["ollama_url"])
+    except ValueError as e:
+        raise ToolError(str(e))
+
+
+def ai_down(cfg):
+    """What to check when the AI doesn't answer."""
+    where = core.ai_where(cfg)
+    if where == "this Mac":
+        return "Is the Ollama app running?"
+    return ("Is %s on, with Ollama open and shared to the network? (🩺 Setup → Where the AI runs)" % where)
+
+
+def ai_computer_test(url, timeout=6):
+    """Ask the Ollama at url for its models. Returns (models, None) or ([], plain reason)."""
+    try:
+        url = core.check_ai_url(url)
+    except ValueError as e:
+        return [], str(e)
+    try:
+        with urllib.request.urlopen(url + "/api/tags", timeout=timeout) as r:
+            return [m.get("name") for m in json.loads(r.read()).get("models", [])], None
+    except urllib.error.HTTPError as e:
+        return [], "Something answered there, but it isn't Ollama (it said %s)." % e.code
+    except (OSError, ValueError) as e:
+        why = str(getattr(e, "reason", e))
+        if core.ai_where({"ollama_url": url}) == "this Mac":
+            return [], "Ollama isn't answering on this computer (%s). Is the Ollama app open?" % why
+        if "refused" in why.lower():
+            return [], ("That computer is there, but Ollama isn't letting other computers in yet. On it, turn on "
+                        "Ollama's \"Expose Ollama to the network\" setting and restart Ollama.")
+        return [], "No answer from %s (%s). Is it on and is Ollama open?" % (url, why)
 
 
 class ThinkFilter:
@@ -2486,7 +2517,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
             return ask_model(cfg, plain, tools, emit, model)
         raise ToolError("Ollama said: %s" % detail)
     except OSError as e:
-        raise ToolError("Couldn't reach Ollama (%s). Is the Ollama app running?" % e)
+        raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
 
 
 def clean_answer(text):
@@ -2992,6 +3023,7 @@ class App:
         self.transfers = {}     # transfer id -> fm.Transfer (copies shown in the Files transfer queue)
         self.lock = threading.Lock()
         self.computer = computer_name()
+        self.port = 8765
         self.claude = claude.Claude(Path(config_path).parent)
 
     def device(self, name):
@@ -3040,7 +3072,14 @@ def lan_addresses():
         s.close()
     except OSError:
         pass
-    return names
+    try:   # every network card (Wi-Fi and Ethernet), in case the one above isn't the one the laptop is on
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
+        for ip in re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", out):
+            if ip not in names and ipaddress.ip_address(ip).is_private and not ip.startswith(("127.", "169.254.")):
+                names.append(ip)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return [n for n in names if n != "0.0.0.0"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3275,6 +3314,16 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                               "found": it.get("found"), "good_backup": good, "good_copy": bool(it.get("good_copy")),
                               "release": p.lower().endswith((".nro", ".nsp", ".ovl"))})
             self.json({"items": items})
+        elif path == "/api/laptop":
+            cfg = APP.home.cfg()
+            self.json({"on": APP.lan, "saved": bool(cfg.get("lan_access")), "has_password": APP.access.has_password(),
+                       "addresses": ["http://%s:%d" % (a, APP.port) for a in lan_addresses()] if APP.lan else [],
+                       "port": APP.port, "here": self.from_this_mac()})
+        elif path == "/api/ai-computer":
+            cfg = APP.home.cfg()
+            names, err = ai_computer_test(cfg["ollama_url"], timeout=4)
+            self.json({"url": cfg["ollama_url"], "where": core.ai_where(cfg), "here": core.ai_where(cfg) == "this Mac",
+                       "models": len(names), "error": err})
         elif path == "/api/claude/status":
             self.json(APP.claude.key_status(force=q.get("force") == "1"))
         elif path == "/api/claude/sent":
@@ -3289,7 +3338,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                            "size": core.human_size(m.get("size") or 0)} for m in tags]
                 err = None
             except (OSError, ValueError, ToolError) as e:
-                models, err = [], "Couldn't ask Ollama for its models (%s). Is the Ollama app running?" % e
+                models, err = [], "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
             if cfg["ollama_model"] not in [m["name"] for m in models] and cfg["ollama_model"] != model_labels.AUTO:
                 models.insert(0, {"name": cfg["ollama_model"], "size": ""})
             model_labels.label_all(models)
@@ -3302,7 +3351,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                     " When both are stuck: %s." % lab.get(sec) if sec else "")
                 models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],
                                   "why": why})
-            self.json({"current": cfg["ollama_model"], "models": models, "error": err})
+            self.json({"current": cfg["ollama_model"], "models": models, "error": err, "where": core.ai_where(cfg)})
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()
             f = APP.registry.portrait_file(cfg)
@@ -3647,6 +3696,45 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except OSError as e:
                 raise ToolError(str(e))
             self.json(mac_app.status())
+        elif path == "/api/laptop":
+            if not self.from_this_mac():
+                raise ToolError("Laptop access can only be changed on the Mac itself.")
+            on = bool(data.get("on"))
+            pw = data.get("password") or ""
+            if on and pw:
+                if len(pw) < 8:
+                    raise ToolError("Use at least 8 characters for the laptop password.")
+                APP.access.set_password(pw)
+            if on and not APP.access.has_password():
+                raise ToolError("Choose a laptop password first.")
+            cfg = APP.home.cfg()
+            main = str(APP.registry.main)
+            old = json.loads(Path(main).read_text()).get("lan_access")
+            if bool(old) != on:
+                devices.apply_changes(cfg, [(main, "lan_access", old, on)])
+            restart = on != APP.lan
+            if restart:
+                if not on:
+                    sys.argv[:] = [a for a in sys.argv if a != "--lan"]   # started with --lan: drop it for the restart
+                updater.restart_soon(1.0)
+            self.json({"restarting": restart, "on": on})
+        elif path == "/api/ai-computer":
+            url = (data.get("url") or "").strip() or "http://localhost:11434"
+            if re.match(r"^(https?://)?[^/:]+$", url):
+                url = url.rstrip("/") + ":11434"      # just a name or IP: Ollama's usual port
+            names, err = ai_computer_test(url)
+            if err and core.ai_where({"ollama_url": url}) != "this Mac":   # going back to this Mac is always allowed
+                raise ToolError(err)
+            url = core.check_ai_url(url)
+            cfg = APP.home.cfg()
+            main = str(APP.registry.main)
+            old = json.loads(Path(main).read_text()).get("ollama_url")
+            if old != url:
+                devices.apply_changes(cfg, [(main, "ollama_url", old, url)])
+            APP.registry.status.clear()
+            cfg = APP.home.cfg()
+            self.json({"url": url, "where": core.ai_where(cfg), "here": core.ai_where(cfg) == "this Mac",
+                       "models": len(names), "error": err})
         elif path == "/api/claude/settings":
             try:
                 self.json(APP.claude.save_settings({k: v for k, v in data.items() if k in claude.DEFAULTS}))
@@ -4144,6 +4232,36 @@ class DualStackServer(ThreadingHTTPServer):
         super().server_bind()
 
 
+def already_running(lan, port, no_browser):
+    """Another PatchBay already answers on this port (e.g. the Dock app): say so and open it. True if it did."""
+    url = "http://127.0.0.1:%d" % port
+    try:
+        with urllib.request.urlopen(url + "/", timeout=3) as r:
+            mine = b"patchbay" in r.read(20000).lower()
+    except OSError:
+        mine = False
+    if mine and lan:
+        try:
+            with urllib.request.urlopen(url + "/api/devices", timeout=5) as r:
+                running_lan = json.loads(r.read()).get("lan")
+        except (OSError, ValueError):
+            running_lan = None
+        if running_lan is False:
+            print("PatchBay is already running (probably from the Dock app), but without laptop access, so "
+                  "this didn't start a second copy.")
+            print("Either turn it on in PatchBay: 🩺 Setup → Laptop access (it shows the address for your laptop),")
+            print("or quit the PatchBay app and run this again.")
+            return True
+        for a in lan_addresses():
+            print("PatchBay is already running with laptop access. On your laptop open: http://%s:%d" % (a, port))
+    if mine:
+        print("PatchBay is already running. Opening it: %s" % url)
+        if not no_browser:
+            webbrowser.open(url)
+        return True
+    return False
+
+
 def make_server(lan, port):
     if not lan:
         ThreadingHTTPServer.daemon_threads = True
@@ -4184,6 +4302,7 @@ def main():
     lan = args.lan or bool(main_cfg.get("lan_access"))
     port = args.port or int(main_cfg.get("port") or 8765)
     APP = App(args.config, lan)
+    APP.port = port
     if args.set_password:
         APP.access.ask_for_new_password()
         if not args.lan:
@@ -4191,8 +4310,10 @@ def main():
             return
     try:
         ollama_url(main_cfg)
-    except ToolError as e:
-        sys.exit(str(e))
+    except ToolError as e:      # the AI's computer may be off right now: still start, Setup says what's wrong
+        print("The AI isn't reachable yet: %s" % e)
+    if not os.environ.get("PATCHBAY_RESTARTED") and already_running(lan, port, args.no_browser):
+        return
     if lan and not APP.access.has_password():
         if not sys.stdin.isatty():
             sys.exit("Opening the app to your network needs a password. Run: python3 patchbay.py --set-password")
@@ -4213,16 +4334,7 @@ def main():
     try:
         server = make_server(lan, port)
     except OSError:
-        url = "http://127.0.0.1:%d" % port
-        try:
-            with urllib.request.urlopen(url + "/", timeout=3) as r:
-                mine = b"patchbay" in r.read(20000).lower()
-        except OSError:
-            mine = False
-        if mine:
-            print("PatchBay is already running. Opening it: %s" % url)
-            if not args.no_browser:
-                webbrowser.open(url)
+        if already_running(lan, port, args.no_browser):
             return
         sys.exit("Port %d is already in use by another program. Try: python3 patchbay.py --port %d" % (port, port + 1))
     threading.Thread(target=mac_app.refresh_app, daemon=True).start()   # building the app can take a minute

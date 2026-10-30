@@ -281,6 +281,8 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
+.ai-where{font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;background:rgba(10,132,255,.16);color:var(--accent,var(--ink))}
+.ai-where.down{background:rgba(255,59,48,.16);color:var(--bad)}
 .cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected,.cl-dot.none{background:rgba(255,59,48,.16);color:var(--bad)}.cl-dot.unknown,.cl-dot.checking{background:rgba(232,163,61,.18);color:var(--warn)}
 #claude-btn.st-connected{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
 #claude-btn.st-rejected,#claude-btn.st-none{border-color:var(--bad);box-shadow:inset 0 0 0 1px var(--bad)}
@@ -326,7 +328,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
 <main class="view" id="chat" style="position:relative">
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
-    <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select> <span id="model-why" style="font-size:12px"></span></label>
+    <label style="font-size:13px;color:var(--mute)">AI model <span id="ai-where" class="ai-where" hidden></span> <select id="model" title="Which AI model answers"></select> <span id="model-why" style="font-size:12px"></span></label>
     <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent"><span id="cl-label">☁ Claude</span> <span id="cl-dot" class="cl-dot checking">checking</span></button></div>
   <div id="chatlist"></div>
   <div id="log"></div>
@@ -993,6 +995,8 @@ async function openSetup(msg){
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start PatchBay by itself when I log in to the Mac</label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
+    '<h3 style="margin-top:14px">Laptop access</h3><div id="sc-lap" style="font-size:13.5px">Checking…</div>'+
+    '<h3 style="margin-top:14px">Where the AI runs</h3><div id="sc-ai" style="font-size:13.5px">Checking…</div>'+
     '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
     '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
     '<h3 style="margin-top:14px">Start over</h3><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
@@ -1009,7 +1013,7 @@ async function openSetup(msg){
   const tl=$('sc-tools');if(tl)tl.onclick=async()=>{tl.disabled=true;try{await postJSON('/api/macapp',{action:'install_tools'});say('Apple\'s installer should be open now (it may be behind this window). Click Install, wait for it to finish, then press Rebuild the app.')}catch(e){tl.disabled=false;say(esc(e.message))}};
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
-  drawLook();
+  drawLook();drawAiComputer();drawLaptop();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -1017,6 +1021,53 @@ async function openSetup(msg){
     if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
 }
 $('setup-btn').onclick=()=>openSetup();
+
+// ---- Laptop access: open PatchBay from another computer at home
+async function drawLaptop(note){const box=$('sc-lap');if(!box)return;let j;
+  try{j=await getJSON('/api/laptop')}catch(e){box.textContent=e.message;return}
+  let h=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'');
+  if(j.on){h+='<div style="color:var(--ok)">✅ On. On your laptop (same Wi-Fi), open one of these and sign in with your laptop password:</div>'+
+    (j.addresses.length?j.addresses.map(a=>'<div style="display:flex;gap:6px;align-items:center;margin-top:4px"><code style="font-size:14px;user-select:all">'+esc(a)+'</code><button class="lap-copy" data-a="'+esc(a)+'">Copy</button></div>').join('')
+      :'<div>Couldn\'t work out this Mac\'s address. Find it in System Settings → Wi-Fi → Details → IP address, and add :'+j.port+'.</div>')+
+    '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">If the Mac asked whether Python may accept incoming connections, it needs <b>Allow</b>. Keep the Mac awake while you use it.</div>'+
+    (j.here?'<div style="margin-top:6px"><button id="lap-off">Turn off</button></div>':'');}
+  else if(!j.here){h+='<div>Only the Mac can change this.</div>'}
+  else{h+='<div>Off. Turn it on to open PatchBay from your laptop\'s web browser. The Mac does all the work; the laptop needs nothing installed.</div>'+
+    (j.has_password?'':'<label>Laptop password (at least 8 characters)<input id="lap-pw" type="password" autocomplete="new-password"></label><label>Type it again<input id="lap-pw2" type="password" autocomplete="new-password"></label>')+
+    '<div style="margin-top:6px"><button id="lap-on" class="primary">Turn on (PatchBay restarts)</button></div>'}
+  box.innerHTML=h+'<div id="lap-msg" style="font-size:13px;margin-top:4px"></div>';
+  const m=t=>$('lap-msg').innerHTML=t;
+  box.querySelectorAll('.lap-copy').forEach(b=>b.onclick=async()=>{b.textContent=(await copyText(b.dataset.a))?'Copied':'Select it and copy'});
+  const go=async(on)=>{const body={on};if(on&&!j.has_password){const a=$('lap-pw').value,b=$('lap-pw2').value;
+      if(a.length<8)return m('<span style="color:var(--bad)">Use at least 8 characters.</span>');if(a!==b)return m('<span style="color:var(--bad)">The two passwords don\'t match.</span>');body.password=a}
+    m('Restarting PatchBay…');
+    try{const r=await postJSON('/api/laptop',body);if(!r.restarting)return drawLaptop();
+      await new Promise(ok=>setTimeout(ok,2500));
+      for(let i=0;i<40;i++){try{await getJSON('/api/laptop');return drawLaptop(on?'Laptop access is on.':'Laptop access is off.')}catch(e){await new Promise(ok=>setTimeout(ok,1000))}}
+      m('PatchBay didn\'t come back by itself. Start it again from the Dock.')}catch(e){m('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  const on=$('lap-on');if(on)on.onclick=()=>go(true);const off=$('lap-off');if(off)off.onclick=()=>go(false);}
+
+// ---- Where the AI runs: this Mac, or another computer at home (e.g. a desktop with more power)
+async function drawAiComputer(note){const box=$('sc-ai');if(!box)return;let j;
+  try{j=await getJSON('/api/ai-computer')}catch(e){box.textContent=e.message;return}
+  box.innerHTML=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'')+
+    '<div>'+(j.here?'The AI runs on <b>this computer</b>.':'The AI runs on <b>'+esc(j.where)+'</b> ('+esc(j.url)+').')+' '+
+    (j.error?'<span style="color:var(--bad)">'+esc(j.error)+'</span>':'<span style="color:var(--ok)">Answering, '+j.models+' model'+(j.models===1?'':'s')+'.</span>')+'</div>'+
+    '<div style="color:var(--mute);font-size:12.5px;margin-top:4px">To use a more powerful computer at home for the AI (for example your desktop while you work on a laptop), type its address. It must be on your home network; internet addresses are refused.</div>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input id="ai-url" style="flex:1;min-width:200px" placeholder="e.g. 192.168.50.10 or Desktop.local" value="'+(j.here?'':esc(j.url))+'">'+
+    '<button id="ai-use" class="primary">Test and use</button>'+(j.here?'':'<button id="ai-local">Use this computer</button>')+'</div>'+
+    '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">How to share the desktop\'s AI</summary><ol style="font-size:13px;margin:6px 0 0 18px;padding:0">'+
+    '<li>On the desktop, open Ollama\'s Settings and turn on <b>Expose Ollama to the network</b>. Quit Ollama and open it again.</li>'+
+    '<li>If the desktop asks whether Ollama may accept incoming connections, click <b>Allow</b>.</li>'+
+    '<li>Find the desktop\'s address in System Settings → Wi-Fi (or Network) → Details → IP address, and type it above.</li>'+
+    '<li>Keep the desktop awake (System Settings → Energy → Prevent automatic sleeping).</li></ol>'+
+    '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">Ollama has no password, so anyone on your Wi-Fi could use it. That\'s fine at home; never forward port 11434 on your router.</div></details>'+
+    '<div id="ai-msg" style="font-size:13px;margin-top:4px"></div>';
+  const go=async url=>{const m=$('ai-msg');m.textContent='Testing…';
+    try{const r=await postJSON('/api/ai-computer',{url});loadModels();drawAiComputer(r.here?'Using this computer for the AI.'+(r.error?' (Ollama isn\'t open here yet.)':''):'Using '+r.where+' for the AI ('+r.models+' models).')}
+    catch(e){m.innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span> Nothing was changed.'}};
+  $('ai-use').onclick=()=>go($('ai-url').value.trim());
+  const l=$('ai-local');if(l)l.onclick=()=>go('');}
 
 // ---- Apps: the homebrew library with update checks
 let apTimer=null;
@@ -1161,7 +1212,10 @@ function modelLabel(name){const m=MODELS.find(x=>x.name===name);return m?m.label
 function modelWhy(){const m=MODELS.find(x=>x.name===$('model').value);$('model-why').textContent=m&&m.why?m.why:''}
 async function loadModels(){try{const j=await getJSON('/api/models');const s=$('model');MODELS=j.models;
   s.innerHTML=j.models.map(m=>`<option value="${esc(m.name)}" title="${esc(m.why||'')}"${m.name===j.current?' selected':''}>${esc(m.label||m.name)}</option>`).join('');
-  s.title=j.error||'Which AI model answers.';modelWhy()}catch(e){}}
+  s.title=j.error||'Which AI model answers.';modelWhy();
+  const w=$('ai-where');if(w){const away=j.where&&j.where!=='this Mac';w.hidden=!away&&!j.error;
+    w.className='ai-where'+(j.error?' down':'');w.textContent=(away?'on '+j.where.replace(/^the computer at /,''):'this Mac')+(j.error?' · not answering':'');
+    w.title=j.error||('The AI runs on '+j.where+'. Change it in 🩺 Setup → Where the AI runs.')}}catch(e){}}
 $('model').onchange=async()=>{modelWhy();try{await postJSON('/api/model',{model:$('model').value});info.model=$('model').value;if(cur!==HOMECHAT)loadInfo();
   add('msg ai','From now on the "'+esc(modelLabel($('model').value))+'" model answers (for every device).')}catch(e){alert(e.message);loadModels()}};
 

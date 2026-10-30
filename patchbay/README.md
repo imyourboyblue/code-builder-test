@@ -282,15 +282,32 @@ type "Clear everything".
 
 ## Using it from your laptop
 
-Your Mac does all the work. The laptop only shows the page and needs nothing installed.
+There are two ways. Pick the one that fits.
 
-1. On the Mac, once: choose a laptop password with `python3 patchbay.py --set-password`. Turn on **System Settings >
-   Energy > Prevent automatic sleeping when the display is off**.
-2. On the Mac, start PatchBay with `python3 patchbay.py --lan` (or add `"lan_access": true` to `config.json`). It
-   prints an address like `http://Your-Mac.local:8765`. Click **Allow** if the Mac asks.
+**A. The laptop opens PatchBay on your Mac (nothing to install on the laptop).** The Mac does all the work.
+
+1. On the Mac, open **🩺 Setup → Laptop access**, choose a laptop password and press **Turn on**. PatchBay
+   restarts and shows the address for your laptop, with a Copy button. (From Terminal instead:
+   `python3 patchbay.py --set-password`, then `python3 patchbay.py --lan`. If the Dock app is already running, use
+   Setup instead, because only one copy runs at a time.)
+2. If the Mac asks whether Python may accept incoming connections, click **Allow**. Keep the Mac awake
+   (System Settings > Energy > Prevent automatic sleeping when the display is off).
 3. On the laptop, on the same network, open that address and sign in. You stay signed in for 30 days.
 
-Only use this on your home network. After 5 wrong passwords, that computer has to wait before trying again.
+After 5 wrong passwords, that computer has to wait before trying again. Only use this on your home network.
+
+**B. PatchBay runs on the laptop, and the AI runs on your desktop.** The laptop keeps its own devices, files and
+builds; only the AI questions go to the desktop.
+
+1. Install PatchBay on the laptop like on the Mac (see Setting up). The laptop doesn't need Ollama or any models.
+2. On the desktop, open Ollama's Settings and turn on **Expose Ollama to the network**, then quit and reopen
+   Ollama. Click **Allow** if it asks about incoming connections. Keep the desktop awake.
+3. On the laptop, open **🩺 Setup → Where the AI runs**, type the desktop's address (like `192.168.50.10` or
+   `Mac-Studio.local`) and press **Test and use**. The model list then shows the desktop's models, and a small
+   label next to **AI model** says where the AI is running. **Use this computer** switches back.
+
+Ollama has no password, so anyone on your Wi-Fi could use it. That's fine at home, but never forward port 11434 on
+your router. PatchBay refuses internet addresses for the AI, so your files never leave your home network.
 
 ## Safety
 

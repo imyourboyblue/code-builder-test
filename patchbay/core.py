@@ -998,11 +998,58 @@ def latest_report(cfg):
     return json.loads(reports[-1].read_text())
 
 
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+_PRIVATE_OK = {}
+
+
+def ai_host(url):
+    return re.sub(r"^https?://", "", url.strip()).split("/")[0].rsplit(":", 1)[0].strip("[]").lower()
+
+
+def check_ai_url(url):
+    """The AI (Ollama) may run on this Mac, or on another computer at home (like a desktop with more power).
+    Never on the internet: the address has to be this Mac or a private home-network address.
+    Returns the cleaned address, or raises ValueError saying why not."""
+    url = (url or "").strip().rstrip("/")
+    if not re.match(r"^https?://", url):
+        url = "http://" + url
+    host = ai_host(url)
+    if not host:
+        raise ValueError("That isn't an address. Use something like http://192.168.50.10:11434")
+    if host in LOCAL_HOSTS:
+        return url
+    import ipaddress
+    import socket
+    ok = _PRIVATE_OK.get(host)
+    if ok is None or time.time() - ok[1] > 300:
+        try:
+            ips = {a[4][0] for a in socket.getaddrinfo(host, None)}
+            good = bool(ips) and all((ipaddress.ip_address(i.split("%")[0]).is_private or
+                                      ipaddress.ip_address(i.split("%")[0]).is_loopback) for i in ips)
+            ok = ("yes" if good else "public", time.time())
+        except (OSError, ValueError):
+            ok = ("unknown", time.time())
+        if ok[0] != "unknown":
+            _PRIVATE_OK[host] = ok
+    if ok[0] == "public":
+        raise ValueError("%s is on the internet, not your home network. The AI may only run on this Mac or "
+                         "another computer at home, so your files never leave your network." % host)
+    if ok[0] == "unknown":
+        raise ValueError("Can't find the computer %s on your network. Is it on and connected?" % host)
+    return url
+
+
+def ai_where(cfg):
+    """Plain words for where the AI runs."""
+    host = ai_host(cfg.get("ollama_url") or "")
+    return "this Mac" if host in LOCAL_HOSTS or not host else "the computer at %s" % host
+
+
 def cmd_explain(cfg, args):
-    url = cfg["ollama_url"].rstrip("/")
-    host = re.sub(r"^https?://", "", url).split(":")[0].split("/")[0]
-    if host not in ("localhost", "127.0.0.1", "::1"):
-        sys.exit("ollama_url must point at this Mac (localhost) so your files never leave it.")
+    try:
+        url = check_ai_url(cfg["ollama_url"])
+    except ValueError as e:
+        sys.exit(str(e))
     report = latest_report(cfg)
     bad = [f for f in report["files"] if any(p["level"] in ("error", "warning") for p in f["problems"])]
     if not bad:
@@ -1033,7 +1080,7 @@ def cmd_explain(cfg, args):
     body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "user", "content": prompt}],
                        "options": {"num_ctx": 32768}}).encode()
-    say("Asking %s on this Mac (this can take a minute)..." % model)
+    say("Asking %s on %s (this can take a minute)..." % (model, ai_where(cfg)))
     req = urllib.request.Request(url + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as r:
