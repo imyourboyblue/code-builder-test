@@ -111,6 +111,16 @@ def check(registry, deep=False):
                                  "Full disks are a common cause of half-written, damaged files. Ask its chat what "
                                  "takes the most space.", {"go": "chat", "ask": "My disk %s is %d%% full. What takes "
                                                            "the most space, and what can I safely remove?" % (d[1], d[0])}))
+    try:
+        import selfedit
+        rec = selfedit.last_recovery()
+    except Exception:
+        rec = None
+    if rec:
+        out.append(alert("warn", "Patchbay", "Patchbay put back an earlier version of itself",
+                         rec + " You can ask the home chat to try that change again in a different way.",
+                         {"go": "chat", "ask": "Patchbay couldn't start after a change to itself and put the old "
+                                               "version back. What went wrong, and can you redo it safely?"}))
     order = {"bad": 0, "warn": 1, "info": 2}
     out.sort(key=lambda a: order[a["level"]])
     return out

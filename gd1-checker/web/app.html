@@ -395,6 +395,7 @@ async function loadHealth(deep){const box=$('health');
     main.map(row).join('')+
     (info.length?'<details class="hl-notes"><summary>'+info.length+' note'+(info.length>1?'s':'')+'</summary>'+info.map(row).join('')+'</details>':'')+'</div>';
   box.querySelectorAll('.hl-go').forEach(b=>b.onclick=()=>{const a=j.alerts[+b.dataset.i],act=a.action;
+    if(a.device==='Patchbay'){if(!busy){t.value=act.ask;send.click()}return}   // the home chat, right here
     if(act.go==='backups'){location.hash='#/d/'+enc(a.device)+'/backups';return}
     if(act.go==='security'){openSecurity({ip:act.ip,name:a.device,kind:''});return}
     location.hash='#/d/'+enc(a.device)+'/chat';setTimeout(()=>{if(busy)return;t.value=act.ask;send.click()},900)});
@@ -609,6 +610,9 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='error'){const d=add('msg err',esc(ev.text)+' <button class="rep" style="margin-left:6px;font-size:12px">Copy error report</button>',ev.text);
     d.querySelector('.rep').onclick=async e=>{try{const r=await getJSON('/api/report');e.target.textContent=(await copyText(r.text))?'Copied — paste it to me':'Open 🩺 Setup to copy it'}catch(x){e.target.textContent='Open 🩺 Setup'}}}
   else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
+  else if(ev.type==='restart'){waitForRestart()}
+  else if(ev.type==='reload_hint'){const c=add('card','<div>The change to Patchbay\'s page is saved. Reload to see it (if the page looks broken afterwards, open <a href="/fix">Patchbay repair</a> to undo it).</div><div class="row"><button class="primary">Reload the page</button></div>');
+    c.querySelector('button').onclick=()=>location.reload();keep()}
   else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
   else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
   else if(ev.type==='new_chat'){log.innerHTML='';add('msg me',esc(ev.text),ev.text);if(ctx)log.appendChild(ctx.status);loadChatBar()}
@@ -625,16 +629,17 @@ async function chatStream(url,body,since){
   const on=ev=>{if(ev.type==='ping')return;if(ev.type==='done'){finished=true;return}n++;
     if(cur===dev&&(view==='chat'||dev===HOMECHAT))show(ev,ctx)};
   try{await stream(url,Object.assign({device:dev},body),on)}catch(e){}
-  while(!finished&&tries<200){tries++;
+  while(!finished&&!restarting&&tries<200){tries++;
     ctx.status.textContent='The connection to '+(info.computer||'the Mac')+' dropped. Reconnecting… (the work carries on there)';
     await new Promise(r=>setTimeout(r,Math.min(10000,1500*tries)));
     try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
-  if(!finished)add('msg err','Can\'t reach Patchbay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
+  if(!finished&&!restarting)add('msg err','Can\'t reach Patchbay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
   ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
   if(dev===cur)loadChatBar()}
 function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
 function card(ev,closed){
+  if(ev.self)return selfCard(ev,closed);
   if(ev.on_mac)return macCard(ev,closed);
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
     '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
@@ -668,6 +673,27 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
     const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
+function selfCard(ev,closed){ // a change to Patchbay's own code, or restarting Patchbay
+  const rs=ev.kind==='self_restart';
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    (rs?'<div>Patchbay stops and starts again so its new code is used. Chats in progress stop. The page reconnects by itself, and if Patchbay can\'t start, it puts the last change back by itself.</div>':
+      '<div>This changes <b>Patchbay itself</b> ('+esc(ev.remote)+' on '+esc(ev.computer)+'). None of your devices are touched. It was checked for mistakes, the old version is backed up first, and <b>Undo</b> is in 🕘 Activity.</div>'+
+      '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">'+esc(ev.stats||'')+(ev.page_only?' · takes effect when you reload the page':' · takes effect after a restart')+'</div>'+
+      (ev.word?'<div style="margin-top:6px;padding:8px 10px;border-radius:8px;border:1px solid var(--bad);color:var(--bad)"><b>⚠ This touches one of Patchbay\'s safety rules</b> ('+esc((ev.safety||[]).join(', '))+'). Only confirm if you asked for exactly this.</div>':''))+
+    '<details'+(rs||(ev.diff||'').split('\n').length<80?' open':'')+'><summary>'+(rs?'Changes it will use':'Exact change')+'</summary><pre>'+(rs?esc(ev.diff||''):diffHtml(ev.diff||''))+'</pre></details>'+
+    '<div class="row">'+(ev.word?'Type <b>'+esc(ev.word)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+(rs?'Restart Patchbay':'Save the change')+'</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim().toLowerCase()!==ev.word.toLowerCase()){inp.focus();inp.style.borderColor='var(--bad)';return}
+    const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
+let restarting=false;
+async function waitForRestart(){if(restarting)return;restarting=true;
+  const note=add('live','Restarting Patchbay…');await new Promise(r=>setTimeout(r,2500));
+  for(let i=0;i<60;i++){try{const r=await fetch('/api/devices',{cache:'no-store'});if(r.ok){location.reload();return}}catch(e){}
+    await new Promise(r=>setTimeout(r,1000))}
+  note.innerHTML='Patchbay hasn\'t come back yet. Start it again from the Dock, or open <a href="/fix">Patchbay repair</a>.'}
 function planCard(ev,closed){
   const c=add('card','<h3>'+esc(ev.title)+'</h3><div>Approve this once and Patchbay does every step without stopping to ask. '+
     'Changes on '+esc(ev.computer)+' happen by themselves'+(ev.typing?'; the changes to '+esc(ev.device)+' listed below go through too, each backed up first':

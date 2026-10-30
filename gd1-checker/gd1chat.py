@@ -40,6 +40,7 @@ import traceback
 import urllib.error
 import urllib.request
 import uuid
+import hashlib
 import webbrowser
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -59,6 +60,7 @@ import health
 import library
 import updater
 import selfcheck
+import selfedit
 import devices
 import firmware
 import nro
@@ -1637,6 +1639,114 @@ def h_test(st, emit, a):
     return HANDLERS["test_connection"](for_device(st, a), emit, {})
 
 
+# ---- Patchbay changing its own code (only from the home chat; every change needs the user's Confirm)
+
+STARTED_AT = time.time()
+
+
+def se(fn, *args):
+    try:
+        return fn(*args)
+    except selfedit.SelfEditError as e:
+        raise ToolError(str(e))
+
+
+@home_tool("patchbay_files", "List Patchbay's OWN program files (its Python code, its web page web/app.html, the Mac "
+           "app source). Use this when the user wants Patchbay itself changed: a new button, a fix, a new feature.")
+def h_self_files(st, emit, a):
+    return selfedit.files()
+
+
+@home_tool("patchbay_read", "Read one of Patchbay's own files with line numbers (read-only). Read before you change.",
+           {"path": dict(S, description="e.g. gd1chat.py or web/app.html"), "start_line": I, "max_lines": I}, ["path"])
+def h_self_read(st, emit, a):
+    return se(selfedit.read, a.get("path"), a.get("start_line") or 1, a.get("max_lines") or 300)
+
+
+@home_tool("patchbay_search", "Search all of Patchbay's own files for a word or phrase (read-only). Good for finding "
+           "where a button, message or function is.", {"text": S}, ["text"])
+def h_self_search(st, emit, a):
+    return se(selfedit.search, a.get("text"))
+
+
+@home_tool("propose_patchbay_change",
+           "Suggest a change to one of Patchbay's OWN files. Does NOT write: shows the exact difference on a card the "
+           "user confirms. The new file is checked first (Python must compile, the page's scripts must parse) and the "
+           "old one is backed up, with Undo in the Activity log. Give find + replace (find must appear exactly once; "
+           "keep it small) or new_content for a new file. Always patchbay_read the place first. One file per card; for "
+           "a change across files, suggest each one.",
+           {"path": S, "find": S, "replace": S, "new_content": dict(S, description="Whole file, only for a new file"),
+            "reason": dict(S, description="One short plain sentence on what this does for the user")},
+           ["path", "reason"])
+def h_self_change(st, emit, a):
+    pl = se(selfedit.plan, a.get("path"), a.get("find"), a.get("replace"), a.get("new_content"))
+    pid = uuid.uuid4().hex[:8]
+    staged = selfedit.BACKUPS / "staged"
+    staged.mkdir(parents=True, exist_ok=True)
+    (staged / (pid + ".txt")).write_text(pl["new"], "utf-8")
+    cur = selfedit.HERE / pl["path"]
+    old_sha = hashlib.sha1(cur.read_bytes()).hexdigest() if cur.exists() else None
+    word = selfedit.CONFIRM_WORD if pl["safety"] else ""
+    st.pending[pid] = {"kind": "self_edit", "remote": pl["path"], "source": str(staged / (pid + ".txt")),
+                       "note": a.get("reason") or "", "old_sha": old_sha, "word": word}
+    page_only = pl["path"].startswith("web/")
+    emit({"type": "confirm", "id": pid, "kind": "self_edit", "on_mac": True, "self": True, "remote": pl["path"],
+          "title": "Change Patchbay itself: %s" % (a.get("reason") or pl["path"]),
+          "diff": clip(pl["diff"], 60000), "safety": pl["safety"], "word": word, "page_only": page_only,
+          "stats": "%s: %d line%s added, %d removed" % (pl["path"], pl["added"], "" if pl["added"] == 1 else "s",
+                                                         pl["removed"]),
+          "computer": APP.computer if APP else "the Mac", "device": "Patchbay", "writes_on": True})
+    return ("A card showing the exact change is on the page. Nothing has been changed yet; the user must press "
+            "Confirm%s. Tell them in one or two plain sentences what it does.%s" % (
+                " and type Patchbay (it touches a safety rule: %s; explain that plainly)" % ", ".join(pl["safety"])
+                if word else "",
+                " After it's saved they only need to reload the page." if page_only else
+                " After it's saved, Patchbay needs a restart (propose_patchbay_restart) for it to take effect."))
+
+
+@home_tool("propose_patchbay_restart", "Suggest restarting Patchbay so changes to its own Python code take effect. "
+           "Shows a card; the page reconnects by itself. Not needed for changes to web/app.html (a reload is enough).")
+def h_self_restart(st, emit, a):
+    pid = uuid.uuid4().hex[:8]
+    st.pending[pid] = {"kind": "self_restart", "remote": "Patchbay", "source": "", "note": ""}
+    changed = selfedit.pending_restart(STARTED_AT)
+    emit({"type": "confirm", "id": pid, "kind": "self_restart", "on_mac": True, "self": True, "remote": "Patchbay",
+          "title": "Restart Patchbay to use the changes",
+          "diff": "\n".join("#%s %s: %s" % (h["id"], ", ".join(f["path"] for f in h["files"]), h["note"])
+                            for h in changed) or "(no saved changes since it started)",
+          "computer": APP.computer if APP else "the Mac", "device": "Patchbay", "writes_on": True})
+    return "A restart card is showing. Nothing has happened yet; the user presses Restart on it."
+
+
+def confirm_self(st, p, emit):
+    if p["kind"] == "self_restart":
+        emit({"type": "answer", "text": "Restarting Patchbay now. The page reconnects by itself in a few seconds. If "
+                                        "it doesn't come back, Patchbay puts the last change back by itself."})
+        emit({"type": "restart"})
+        updater.restart_soon(1.5)
+        return
+    path = selfedit.HERE / p["remote"]
+    now_sha = hashlib.sha1(path.read_bytes()).hexdigest() if path.exists() else None
+    if now_sha != p.get("old_sha"):
+        msg = "%s changed since this card was made, so I didn't save it. Ask again and I'll redo the change." % p["remote"]
+        emit({"type": "answer", "text": msg})
+        st.messages.append({"role": "user", "content": "[The change wasn't saved: %s]" % msg})
+        return
+    try:
+        entry = selfedit.apply([(p["remote"], Path(p["source"]).read_text("utf-8"))], p.get("note") or "")
+    except (selfedit.SelfEditError, OSError) as e:
+        emit({"type": "answer", "text": "I couldn't save that change: %s" % e})
+        st.messages.append({"role": "user", "content": "[Saving the Patchbay change failed: %s]" % e})
+        return
+    page = p["remote"].startswith("web/")
+    msg = "Saved change #%s to %s (the old version is backed up; Undo is in 🕘 Activity). %s" % (
+        entry["id"], p["remote"], "Reload the page to see it." if page else "Restart Patchbay to use it.")
+    emit({"type": "answer", "text": msg})
+    if page:
+        emit({"type": "reload_hint"})
+    st.messages.append({"role": "user", "content": "[I confirmed the Patchbay change. %s]" % msg})
+
+
 for _n in ("check_build_tools", "latest_release", "web_search", "read_web_page"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
@@ -1669,7 +1779,13 @@ propose_settings for its host/ports, then test_connection.
 - Settings: show_settings, then propose_settings. That only shows a card; never say it's changed until you're told.
 - Work on one device (checking, files, scans, backups, fixing, updating homebrew): open_device, and tell the user \
 they can carry on in that device's chat.
-- identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.""" % (
+- identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.
+- Changing PATCHBAY ITSELF (a new button, a fix to Patchbay, "make Patchbay do X"): find the place with \
+patchbay_search, read it with patchbay_read, then propose_patchbay_change with a small find/replace that matches the \
+existing style. web/app.html is the page (HTML, CSS and JavaScript); gd1chat.py is the server and the chat tools. \
+Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
+to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
+changes, offer propose_patchbay_restart; page changes only need a page reload.""" % (
         APP.computer if APP else "the Mac")
 
 
@@ -2169,6 +2285,9 @@ STEP_WORDS = {
     "propose_nro_icon": "Preparing a new icon", "set_project": "Saving project {name}", "list_projects": "Listing projects",
     "project_files": "Listing the files of {project}", "project_read": "Reading {path} in {project}",
     "project_search": "Searching {project} for {text}", "propose_project_edit": "Changing {path} in {project}",
+    "patchbay_files": "Listing Patchbay's own files", "patchbay_read": "Reading Patchbay's {path}",
+    "patchbay_search": "Searching Patchbay for {text}", "propose_patchbay_change": "Preparing a change to Patchbay's {path}",
+    "propose_patchbay_restart": "Preparing a restart",
     "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
     "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
@@ -2222,6 +2341,11 @@ def do_confirm(st, pid, typed, emit, enable_writes=False):
     p = st.pending.get(pid)
     if not p:
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
+    if p["kind"] in ("self_edit", "self_restart"):
+        if p.get("word") and typed.strip().lower() != p["word"].lower():
+            raise ToolError("This change touches one of Patchbay's safety rules, so type %s to confirm it." % p["word"])
+        del st.pending[pid]
+        return confirm_self(st, p, emit)
     if getattr(st, "home", False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
     if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages",
@@ -2630,6 +2754,32 @@ class Handler(BaseHTTPRequestHandler):
     def json(self, obj, code=200, extra=()):
         self.send_body(json.dumps(obj).encode(), "application/json", code, extra)
 
+    def fix_page(self, msg):
+        """A plain page with no scripts, for when a change to Patchbay broke its own page."""
+        import html as _h
+        rows = []
+        for h in reversed(selfedit.history()[-40:]):
+            what = ", ".join(f["path"] for f in h["files"])
+            state = ("undone by #%s" % h["undone_by"]) if h.get("undone_by") else (
+                "undo of #%s" % h["undo_of"] if h.get("undo_of") else "")
+            btn = "" if h.get("undone_by") else ('<form method="post" action="/fix" style="margin:0"><input type="hidden" '
+                                                  'name="undo" value="%s"><button>Undo</button></form>' % h["id"])
+            rows.append("<tr><td>#%s</td><td>%s</td><td><b>%s</b><br><small>%s</small></td><td>%s</td><td>%s</td></tr>"
+                        % (h["id"], _h.escape(h["time"].replace("_", " ")), _h.escape(what), _h.escape(h["note"]),
+                           _h.escape(state), btn))
+        body = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Patchbay repair</title><style>body{font:15px -apple-system,system-ui,sans-serif;max-width:900px;margin:30px auto;
+padding:0 16px;background:#141413;color:#ecece8}td{padding:8px;border-bottom:1px solid #33332f;vertical-align:top}
+button{font:inherit;padding:4px 12px;border-radius:8px}a{color:#7c9cf0}.m{background:#26324f;padding:10px;
+border-radius:8px}</style><h1>Patchbay repair</h1>
+<p>Changes Patchbay made to its own code, newest first. Undo one to put the version from before it back, then
+restart Patchbay. <a href="/">Back to Patchbay</a></p>%s
+<table>%s</table><form method="post" action="/fix" style="margin-top:16px"><input type="hidden" name="restart"
+value="1"><button>Restart Patchbay</button></form>""" % (
+            ('<p class="m">%s</p>' % _h.escape(msg)) if msg else "",
+            "".join(rows) or "<tr><td>Patchbay hasn't changed its own code yet.</td></tr>")
+        self.send_body(body.encode(), "text/html; charset=utf-8")
+
     def page(self, name):
         self.send_body((WEB / name).read_bytes(), "text/html; charset=utf-8")
 
@@ -2661,6 +2811,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.signed_in():
             self.json({"error": "Sign in first."}, 401)
+            return
+        if url.path == "/fix":
+            self.fix_page(q.get("msg") or "")
             return
         try:
             self.get_api(url.path, q)
@@ -2832,6 +2985,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(save_attachment(APP.device(q.get("device")), q.get("name"), self.rfile, n))
             except (ToolError, OSError) as e:
                 self.json({"error": str(e)}, 400)
+            return
+        if url.path == "/fix":
+            if not self.signed_in():
+                self.send_error(401)
+                return
+            form = {k: v[0] for k, v in parse_qs(self.rfile.read(min(n, 10000)).decode("utf-8", "replace")).items()}
+            try:
+                if form.get("restart"):
+                    msg = "Restarting Patchbay. Wait a few seconds, then open the page again."
+                    updater.restart_soon(1.0)
+                else:
+                    msg = selfedit.undo(form.get("undo"))
+            except selfedit.SelfEditError as e:
+                msg = str(e)
+            self.send_response(303)
+            self.send_header("Location", "/fix?msg=" + quote(msg))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         if n > 8 * 1024 * 1024:
             self.send_error(413)

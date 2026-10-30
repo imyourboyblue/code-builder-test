@@ -116,6 +116,16 @@ def collect(registry, limit=400):
                               "where": "mac", "undo": None, "undone": False})
         except Exception:
             pass
+    try:
+        import selfedit
+        for h in selfedit.history():
+            items.append({"id": "Patchbay|self|%s" % h["id"], "device": "Patchbay", "when": _when(h.get("time")),
+                          "what": "Changed Patchbay itself: %s" % ", ".join(f["path"] for f in h["files"]),
+                          "detail": h.get("note") or "", "where": "mac",
+                          "undo": None if h.get("undone_by") else "Put back the version from before",
+                          "undone": bool(h.get("undone_by"))})
+    except Exception:
+        pass
     for x in items:   # same second: the later entry (higher number) first
         tail = x["id"].rsplit("|", 1)[-1]
         x["_n"] = int(tail) if tail.isdigit() else 0
@@ -129,6 +139,12 @@ def undo(registry, item_id, emit=lambda ev: None):
         name, kind, ref = item_id.split("|", 2)
     except ValueError:
         raise UndoError("That isn't a change Patchbay knows.")
+    if kind == "self":
+        import selfedit
+        try:
+            return selfedit.undo(ref)
+        except selfedit.SelfEditError as e:
+            raise UndoError(str(e))
     try:
         cfg = core.load_config(registry.path_for(name))
     except Exception:

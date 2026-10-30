@@ -51,7 +51,8 @@ def status(fetch=True):
         out["ahead"], out["behind"] = ahead, behind
         if behind:
             out["changes"] = _git("log", "HEAD..@{u}", "--format=%s", "-n", "30")[1].splitlines()
-        out["edited"] = [line[3:] for line in _git("status", "--porcelain", "--untracked-files=no")[1].splitlines()]
+        out["edited"] = [line.strip().split(None, 1)[-1] for line in
+                         _git("status", "--porcelain", "--untracked-files=no")[1].splitlines() if line.strip()]
     except RuntimeError as e:
         out["error"] = str(e)
     return out
@@ -64,13 +65,46 @@ def update():
         raise RuntimeError(st["error"])
     if not st["behind"]:
         return "Patchbay is already up to date."
-    if st["edited"]:
+    mine = _own_changes(st["edited"])
+    if st["edited"] and not mine:
         raise RuntimeError("These Patchbay files were changed on this Mac, so updating could overwrite your "
                            "changes: %s. Send me the list and I'll help." % ", ".join(st["edited"][:8]))
+    if mine:
+        # Changes Patchbay made to itself (each one is also saved in data-cache/self-backups): set them aside,
+        # update, then put them back on top.
+        code, out, err = _git("stash", "push", "--quiet", "-m", "Patchbay's own changes before an update")
+        if code:
+            raise RuntimeError("Couldn't set Patchbay's own changes aside for the update: " + (err or out))
     code, out, err = _git("pull", "--ff-only", "--quiet", timeout=120)
     if code:
+        if mine:
+            _git("stash", "pop", "--quiet")
         raise RuntimeError("The update didn't work: " + ((err or out).splitlines() or ["unknown error"])[-1])
-    return "Updated (%d change%s)." % (st["behind"], "" if st["behind"] == 1 else "s")
+    done = "Updated (%d change%s)." % (st["behind"], "" if st["behind"] == 1 else "s")
+    if mine:
+        code, out, err = _git("stash", "pop", "--quiet")
+        if code:
+            # They clash with the update: keep the updated files, and keep the changes saved in git's stash.
+            _git("reset", "--hard", "--quiet", "HEAD")
+            return (done + " The changes Patchbay made to itself in %s clashed with the update, so the updated "
+                    "version is used. They're saved (in git's stash and in data-cache/self-backups); ask the home "
+                    "chat to make them again if you still want them." % ", ".join(mine))
+        done += " Patchbay's own changes (%s) were kept." % ", ".join(mine)
+    return done
+
+
+def _own_changes(edited):
+    """The edited files, if every one of them was changed by Patchbay itself (selfedit); else []."""
+    try:
+        import selfedit
+        own = selfedit.edited_files()
+    except Exception:
+        return []
+    top = _git("rev-parse", "--show-prefix")[1]   # e.g. "gd1-checker/"
+    names = [e.strip().strip('"') for e in edited]
+    names = [n.split(" -> ")[-1] for n in names]
+    rel = [n[len(top):] if top and n.startswith(top) else n for n in names]
+    return rel if rel and all(r in own for r in rel) else []
 
 
 def restart_soon(delay=1.0):
