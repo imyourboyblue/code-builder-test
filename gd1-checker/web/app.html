@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device agent</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#e2e2dd;--me:#2f5bd3;--meink:#fff;
+--ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecece8;--mute:#9a9a93;--line:#33332f;
+--me:#4a74e8;--code:#2a2a27;--ok:#5cc184;--warn:#e0a24a;--bad:#ff7b72;--sel:#26324f;--drop:#7c9cf0}}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+display:flex;flex-direction:column}
+header{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0}header a{color:inherit;text-decoration:none}
+#info{color:var(--mute);font-size:13px;flex:1;min-width:0}
+.tabs{display:flex;gap:4px}.tabs a{padding:4px 12px;border-radius:8px;border:1px solid var(--line);color:var(--ink);text-decoration:none}
+.tabs a.on{background:var(--me);color:var(--meink);border-color:var(--me)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;
+padding:5px 11px;cursor:pointer}button.primary{background:var(--me);color:var(--meink);border-color:var(--me)}
+button:disabled{opacity:.5;cursor:default}
+.view{flex:1;min-height:0;display:none}.view.on{display:flex}
+.av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex:none;display:grid;place-items:center;
+font-weight:600;color:#fff;font-size:12px}
+
+/* home */
+#home{flex-direction:column;overflow-y:auto;padding:20px 16px}
+#home .wrap{max-width:1000px;width:100%;margin:0 auto}
+#home h2{font-size:15px;color:var(--mute);font-weight:500;margin:18px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
+.tile{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 12px 14px;
+text-align:center;color:inherit;text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:6px}
+a.tile:hover{border-color:var(--me);box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.tile .pic{width:96px;height:96px;border-radius:50%;object-fit:cover;display:grid;place-items:center;font-size:32px;
+font-weight:700;color:#fff;position:relative}
+.tile .dot{position:absolute;right:4px;bottom:4px;width:18px;height:18px;border-radius:50%;border:3px solid var(--card)}
+.tile .name{font-weight:600}.tile .sub{font-size:12.5px;color:var(--mute)}
+.tile.off{opacity:.55}.tile .picbtn{position:absolute;top:8px;right:8px;font-size:12px;padding:2px 8px;opacity:0}
+.tile:hover .picbtn{opacity:1}@media (hover:none){.tile .picbtn{opacity:1}}
+.tile.add{border-style:dashed;cursor:pointer;justify-content:center;color:var(--mute);min-height:180px}
+.tile.add .pic{background:none;color:var(--mute);border:2px dashed var(--line)}
+.empty{color:var(--mute);font-size:14px}
+
+/* chat */
+#chat{flex-direction:column}
+#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;max-width:900px;width:100%;margin:0 auto}
+.msg{padding:10px 14px;border-radius:12px;max-width:85%;white-space:pre-wrap;word-wrap:break-word}
+.me{align-self:flex-end;background:var(--me);color:var(--meink)}
+.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.err{align-self:flex-start;color:var(--bad);border:1px solid var(--bad);background:var(--card)}
+.step{align-self:flex-start;color:var(--mute);font-size:13px;max-width:100%}
+.step summary{cursor:pointer}.step pre{max-height:300px}
+pre{background:var(--code);padding:8px 10px;border-radius:8px;overflow:auto;font:12.5px/1.45 ui-monospace,Menlo,monospace;
+white-space:pre;margin:6px 0}
+code{background:var(--code);padding:1px 4px;border-radius:4px;font:13px ui-monospace,Menlo,monospace}
+.card{align-self:stretch;border:2px solid var(--warn);border-radius:12px;padding:12px 14px;background:var(--card)}
+.card h3{margin:0 0 6px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+input[type=text],input[type=password],input:not([type]){font:inherit;padding:6px 10px;border-radius:8px;
+border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.card input,.modal .confirm input{width:140px}
+.add{color:var(--ok)}.del{color:var(--bad)}
+.live{color:var(--mute);font-size:13px;align-self:flex-start;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap}
+#f{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);max-width:900px;width:100%;margin:0 auto}
+textarea{flex:1;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);
+color:var(--ink);resize:none;min-height:46px;max-height:200px}
+
+/* files */
+#files{flex-direction:column;padding:10px 16px 0;gap:10px}
+.panes{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:760px){.panes{grid-template-columns:1fr;grid-auto-rows:minmax(300px,1fr);overflow-y:auto}}
+.pane{display:flex;flex-direction:column;min-height:0;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pane.dropping{outline:3px dashed var(--drop);outline-offset:-3px}
+.pane .top{padding:8px 10px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.pane .title{display:flex;align-items:center;gap:8px;font-weight:600}
+.pane .title small{font-weight:400;color:var(--mute)}
+.pane .path{display:flex;gap:6px}.pane .path input{flex:1;min-width:0;font:13px ui-monospace,Menlo,monospace}
+.pane .tools{display:flex;gap:6px;flex-wrap:wrap}.pane .tools button{font-size:13px;padding:3px 9px}
+.list{flex:1;overflow:auto;user-select:none}
+.list table{width:100%;border-collapse:collapse;font-size:13.5px}
+.list td{padding:4px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.list td.n{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
+.list td.s,.list td.m{color:var(--mute);font-size:12.5px;text-align:right}
+.list tr{cursor:default}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
+.list .hint{padding:16px;color:var(--mute);font-size:13px}
+#activity{font:12.5px/1.45 ui-monospace,Menlo,monospace;color:var(--mute);max-height:110px;overflow-y:auto;
+padding:6px 2px 10px;white-space:pre-wrap}
+#activity .bad{color:var(--bad)}#activity .good{color:var(--ok)}
+
+/* backups */
+#backups{flex-direction:column;overflow-y:auto;padding:20px 16px}
+#backups .wrap{max-width:860px;width:100%;margin:0 auto}
+#backups h2{font-size:16px;margin:0 0 8px}#backups h3{font-size:15px;color:var(--mute);font-weight:500;margin:22px 0 8px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.panel code{word-break:break-all}
+.bar{height:10px;border-radius:5px;background:var(--code);overflow:hidden;margin:12px 0 6px}
+.bar div{height:100%;width:0;background:var(--me);transition:width .4s}
+#bk-cur{font:12.5px ui-monospace,Menlo,monospace;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+background:var(--card);margin-bottom:8px;font-size:14px}
+.bk .when{font-weight:600;min-width:150px}.bk .meta{color:var(--mute);flex:1;min-width:200px}
+.badge{font-size:12px;padding:1px 8px;border-radius:10px;border:1px solid currentColor}
+.badge.ok{color:var(--ok)}.badge.part{color:var(--warn)}
+.note{color:var(--mute);font-size:13.5px}
+.picker{border:1px solid var(--line);border-radius:8px;max-height:300px;overflow:auto;margin:8px 0}
+.picker div{padding:5px 10px;cursor:pointer;border-bottom:1px solid var(--line);font-size:14px}
+.picker div:hover{background:var(--sel)}
+
+/* dialogs */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;place-items:center;padding:16px;z-index:10}
+.modal.on{display:grid}
+.modal .box{background:var(--card);border-radius:14px;padding:18px;max-width:560px;width:100%;max-height:90vh;overflow:auto;
+border:2px solid var(--line)}
+.modal .box.danger{border-color:var(--warn)}
+.modal h3{margin:0 0 8px;font-size:16px}
+.modal ul{margin:6px 0;padding-left:20px;font-size:13.5px;max-height:260px;overflow:auto}
+.modal label{display:block;font-size:13px;color:var(--mute);margin-top:8px}
+.modal label input{width:100%;margin-top:2px}
+.modal .msgline{font-size:13.5px;margin-top:8px}
+.modal .bad{color:var(--bad)}
+</style></head><body>
+<header>
+  <a href="#/"><h1>Devices</h1></a>
+  <span id="crumb"></span>
+  <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a></nav>
+  <span id="info"></span>
+  <button id="reset" type="button" hidden>New chat</button>
+  <button id="logout" type="button" hidden>Sign out</button>
+</header>
+
+<main class="view" id="home"><div class="wrap">
+  <div class="row" style="margin:0"><span id="homeinfo" class="empty" style="flex:1"></span>
+    <button id="recheck">Check again</button></div>
+  <h2>On the network now</h2><div class="grid" id="online"></div>
+  <h2 id="offh">Not found on the network right now</h2><div class="grid" id="offline"></div>
+</div></main>
+
+<main class="view" id="chat">
+  <div id="log"></div>
+  <form id="f"><textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
+  <button class="primary" id="send">Send</button></form>
+</main>
+
+<main class="view" id="files">
+  <div class="panes">
+    <section class="pane" id="pane-mac"></section>
+    <section class="pane" id="pane-dev"></section>
+  </div>
+  <div id="activity"></div>
+</main>
+
+<main class="view" id="backups"><div class="wrap">
+  <section class="panel">
+    <h2 id="bk-title">Back up everything</h2>
+    <div class="note">Copies every file on the device to a folder you choose. This only reads the device.</div>
+    <div class="row">Saved to: <code id="bk-folder">…</code><button id="bk-change">Change…</button></div>
+    <div class="row"><button class="primary" id="bk-start">Back up now</button><button id="bk-stop" hidden>Stop</button></div>
+    <div id="bk-progress" hidden><div class="bar"><div id="bk-bar"></div></div><div id="bk-line"></div><div id="bk-cur"></div></div>
+    <div id="bk-msg" class="msgline" style="margin-top:8px"></div>
+  </section>
+  <h3>Past backups</h3><div id="bk-list"></div>
+  <p class="note">Files that didn't change since the last backup aren't copied again, so each new backup only takes
+  the space of what changed, yet every backup folder still holds a full copy. To put files back on the device, click
+  <b>Show in Files</b> and drag them from the left side to the right. To free space, delete old backup folders in Finder;
+  the other backups stay complete.</p>
+</div></main>
+
+<div class="modal" id="modal"><div class="box" id="box"></div></div>
+<input type="file" id="picfile" accept="image/*" hidden>
+<input type="file" id="upfile" multiple hidden>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const enc=encodeURIComponent;
+let cur=null, view='home', busy=false, homeTimer=null, bkTimer=null, info={};
+
+function hue(s){let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h}
+function initials(n){n=n.trim();if(n.length<=4)return n.toUpperCase();const p=n.split(/[\s_-]+/);
+  return (p.length>1?p[0][0]+p[1][0]:n.slice(0,2)).toUpperCase()}
+function ago(t){if(!t)return 'never seen yet';const s=Date.now()/1000-t;
+  if(s<90)return 'seen just now';if(s<3600)return 'seen '+Math.round(s/60)+' min ago';
+  if(s<172800)return 'seen '+Math.round(s/3600)+' h ago';return 'seen '+Math.round(s/86400)+' days ago'}
+function size(n){if(n==null)return '';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}
+  return (i?n.toFixed(1):n)+' '+u[i]}
+async function getJSON(url){const r=await fetch(url);if(r.status===401){location.reload();throw new Error('signed out')}
+  const j=await r.json();if(!r.ok)throw new Error(j.error||('Error '+r.status));return j}
+async function postJSON(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){location.reload();throw new Error('signed out')}const j=await r.json();
+  if(!r.ok){const e=new Error(j.error||('Error '+r.status));e.data=j;throw e}return j}
+async function stream(url,body,on){ // reads the server's live, line-by-line replies
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){location.reload();return}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);if(line)on(JSON.parse(line))}}}
+
+/* ---------- routing: #/  #/d/NAME/chat  #/d/NAME/files */
+function route(){
+  const m=location.hash.match(/^#\/d\/([^/]+)\/(chat|files|backups)/);
+  clearInterval(bkTimer);
+  clearInterval(homeTimer);
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  if(!m){view='home';cur=null;$('home').classList.add('on');$('tabs').hidden=true;$('reset').hidden=true;
+    $('crumb').innerHTML='';$('info').textContent='';loadHome(false);homeTimer=setInterval(()=>loadHome(false),15000);return}
+  const name=decodeURIComponent(m[1]),changed=name!==cur;cur=name;view=m[2];
+  $(view).classList.add('on');$('tabs').hidden=false;$('reset').hidden=view!=='chat';
+  for(const v of ['chat','files','backups']){$('tab-'+v).href='#/d/'+enc(name)+'/'+v;$('tab-'+v).classList.toggle('on',view===v)}
+  if(changed){loadInfo();loadChat()}
+  if(view==='files')openFiles(changed);
+  else if(view==='backups'){loadBackups();bkTimer=setInterval(loadBackups,1500)}
+  else $('t').focus();
+}
+window.addEventListener('hashchange',route);
+
+/* ---------- home: device portraits */
+let homeData=null;
+async function loadHome(force){
+  try{homeData=await getJSON('/api/devices'+(force?'?force=1':''))}catch(e){$('homeinfo').textContent=e.message;return}
+  const d=homeData;$('logout').hidden=!d.remote;
+  $('homeinfo').textContent='Everything runs on '+d.computer+'.'+(d.remote?' You\'re using it from another computer.':'')+
+    (d.lan?'':' Only '+d.computer+' can open this page.');
+  const on=d.devices.filter(x=>x.online),off=d.devices.filter(x=>!x.online);
+  $('online').innerHTML=on.map(x=>tile(x,true)).join('')+
+    `<div class="tile add" id="addtile"><div class="pic">+</div><div class="name">Add a device</div><div class="sub">by its IP address</div></div>`;
+  if(!on.length)$('online').insertAdjacentHTML('afterbegin','<div class="empty" style="grid-column:1/-1">None of your devices answered just now. Check they\'re switched on, then press Check again.</div>');
+  $('offline').innerHTML=off.map(x=>tile(x,false)).join('');$('offh').hidden=!off.length;
+  $('addtile').onclick=addDevice;
+  document.querySelectorAll('.picbtn').forEach(b=>b.onclick=e=>{e.preventDefault();e.stopPropagation();pickPicture(b.dataset.name)});
+}
+function tile(d,online){
+  const inner=`<button class="picbtn" data-name="${esc(d.name)}" title="Change picture">Picture</button>
+    <div class="pic" style="${d.has_portrait?'':'background:hsl('+hue(d.name)+' 45% 45%)'}">${d.has_portrait?
+     `<img class="pic" src="/api/portrait?device=${enc(d.name)}&v=${d.portrait_version}" alt="">`:esc(initials(d.name))}
+     <span class="dot" style="background:${online?'var(--ok)':'var(--mute)'}"></span></div>
+    <div class="name">${esc(d.name)}</div><div class="sub">${esc(d.host)}</div>
+    <div class="sub">${online?'On the network'+(d.writes_on?' · writing ON':''):esc(ago(d.last_seen))}</div>`;
+  return online?`<a class="tile" href="#/d/${enc(d.name)}/chat">${inner}</a>`:`<div class="tile off">${inner}</div>`}
+$('recheck').onclick=()=>loadHome(true);
+
+let picFor=null;
+function pickPicture(name){picFor=name;$('picfile').value='';$('picfile').click()}
+$('picfile').onchange=async()=>{const f=$('picfile').files[0];if(!f)return;
+  try{const img=await createImageBitmap(f);const s=256,c=document.createElement('canvas');c.width=c.height=s;
+    const k=Math.max(s/img.width,s/img.height),w=img.width*k,h=img.height*k;
+    c.getContext('2d').drawImage(img,(s-w)/2,(s-h)/2,w,h);
+    await postJSON('/api/portrait',{device:picFor,data:c.toDataURL('image/jpeg',0.88)});loadHome(false)}
+  catch(e){alert('Couldn\'t use that picture: '+e.message)}};
+
+function addDevice(){
+  modal(`<h3>Add a device</h3>
+   <div class="msgline">The Mac Studio will try to log in to its FTP server, then remember it.</div>
+   <label>Name (short, like GD2)<input id="a-name" autocomplete="off"></label>
+   <label>IP address<input id="a-host" placeholder="192.168.1.60" autocomplete="off"></label>
+   <label>FTP ports to try, in order<input id="a-ports" value="21, 5000"></label>
+   <label>FTP username (leave empty if it doesn't need one)<input id="a-user" autocomplete="off"></label>
+   <label>FTP password (leave empty if it doesn't need one)<input id="a-pass" type="password" autocomplete="new-password"></label>
+   <div class="msgline" id="a-msg"></div>
+   <div class="row"><button class="primary" id="a-go">Connect and save</button><button id="a-any" hidden>Save it anyway</button>
+   <button id="a-no">Cancel</button></div>`);
+  $('a-name').focus();$('a-no').onclick=closeModal;
+  const go=async anyway=>{const msg=$('a-msg');msg.className='msgline';msg.textContent=anyway?'Saving...':'Connecting... (this can take up to a minute if it doesn\'t answer)';
+    $('a-go').disabled=true;
+    try{await postJSON('/api/devices/add',{name:$('a-name').value,host:$('a-host').value,ports:$('a-ports').value,
+      username:$('a-user').value,password:$('a-pass').value,save_anyway:anyway});closeModal();loadHome(true)}
+    catch(e){msg.className='msgline bad';msg.textContent=e.message;$('a-any').hidden=!(e.data&&e.data.can_save_anyway)}
+    $('a-go').disabled=false};
+  $('a-go').onclick=()=>go(false);$('a-any').onclick=()=>go(true);
+}
+
+/* ---------- dialogs */
+function modal(html,danger){$('box').className='box'+(danger?' danger':'');$('box').innerHTML=html;$('modal').classList.add('on')}
+function closeModal(){$('modal').classList.remove('on')}
+$('modal').onclick=e=>{if(e.target===$('modal'))closeModal()};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST'});location.reload()};
+
+/* ---------- chat */
+const log=$('log'),t=$('t'),send=$('send');
+function md(s){return esc(s).replace(/```[\w-]*\n?([\s\S]*?)```/g,(m,c)=>'<pre>'+c+'</pre>')
+  .replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')}
+function add(cls,html){const d=document.createElement('div');d.className=cls;d.innerHTML=html;log.appendChild(d);
+  log.scrollTop=log.scrollHeight;return d}
+function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
+  if(l.startsWith('+')&&!l.startsWith('+++'))return '<span class="add">'+e+'</span>';
+  if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
+async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
+  $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
+  $('info').textContent=`${info.host} · AI: ${info.model} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
+  catch(e){$('info').textContent=e.message}}
+async function loadChat(){log.innerHTML='';
+  try{const h=await getJSON('/api/history?device='+enc(cur));
+    if(!h.events.length)add('msg ai','Hi! I can check '+esc(cur)+' for crash damage, look through its folders, read and explain files, and suggest fixes. '+
+      'I never change anything on it unless you confirm on a card here. Try: <b>Check '+esc(cur)+' for crash damage</b>.');
+    for(const ev of h.events)show(ev,null,h.pending)}catch(e){add('msg err',esc(e.message))}}
+function show(ev,ctx,pending){ // draws one event; ctx is the live status line while a request runs
+  const keep=()=>{if(ctx)log.appendChild(ctx.status)};
+  if(ev.type==='user')add('msg me',esc(ev.text));
+  else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
+  else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
+  else if(ev.type==='tool'){if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
+    const a=Object.entries(ev.args||{}).filter(([k])=>!['new_content','find','replace'].includes(k))
+      .map(([k,v])=>k+': '+String(v).slice(0,80)).join(', ');ctx.status.textContent='Using '+ev.name+(a?' ('+a+')':'')+'...'}}
+  else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
+    add('step','<details><summary>✓ '+esc(ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+  else if(ev.type==='note'){add('msg ai',md(ev.text));keep()}
+  else if(ev.type==='answer')add('msg ai',md(ev.text||'(no answer)'));
+  else if(ev.type==='error')add('msg err',esc(ev.text));
+  else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
+}
+async function chatStream(url,body){
+  const dev=cur;busy=true;send.disabled=true;const ctx={status:add('live','Working...'),live:null};
+  try{await stream(url,Object.assign({device:dev},body),ev=>{if(cur===dev&&view==='chat')show(ev,ctx)})}
+  catch(e){add('msg err','Lost contact with '+(info.computer||'the Mac')+'. Is the app still running there?')}
+  ctx.status.remove();if(ctx.live)ctx.live.remove();busy=false;send.disabled=false;t.focus()}
+function card(ev,closed){
+  if(ev.on_mac)return macCard(ev,closed);
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
+    (ev.writes_on?'':'<div style="color:var(--bad)">Writing is turned off for '+esc(ev.device)+', so this will be refused until you set "allow_writes": true in its settings file.</div>')+
+    (ev.diff?'<details open><summary>Exact change</summary><pre>'+diffHtml(ev.diff)+'</pre></details>':'')+
+    '<div class="row">Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off"><button class="primary">Confirm</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [inp,ok,no]=[c.querySelector('input'),...row.querySelectorAll('button')];
+  ok.onclick=async()=>{if(busy)return;if(inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+    close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
+}
+function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
+  const build=ev.title.startsWith('Build');
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+    '<div>'+(build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
+      'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
+    (ev.diff?'<details open><summary>'+(build?'Command':'Exact change')+'</summary><pre>'+(build?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    '<div class="row"><button class="primary">'+(build?'Run the build':'Save the change')+'</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button');
+  ok.onclick=async()=>{if(busy)return;close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:''})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
+}
+$('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if(!s||busy)return;
+  t.value='';add('msg me',esc(s));await chatStream('/api/chat',{text:s})};
+t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('f').requestSubmit()}});
+$('reset').onclick=async()=>{if(busy)return;await postJSON('/api/reset',{device:cur});log.innerHTML='';
+  add('msg ai','New chat started. What would you like to do?')};
+
+/* ---------- files: the Mac Studio on the left, the device on the right */
+const panes={mac:{side:'mac',path:null,entries:[],sel:new Set(),last:null},dev:{side:'dev',path:'/',entries:[],sel:new Set(),last:null}};
+let filesFor=null;
+function act(text,cls){const a=$('activity');const d=document.createElement('div');if(cls)d.className=cls;d.textContent=text;
+  a.appendChild(d);while(a.children.length>200)a.firstChild.remove();a.scrollTop=a.scrollHeight}
+function paneShell(p){
+  const el=$('pane-'+p.side),isDev=p.side==='dev';
+  el.innerHTML=`<div class="top">
+    <div class="title">${isDev?'':'🖥️ '}${esc(isDev?cur:info.computer||'Mac')} <small>${isDev?'the device':'this computer runs the agent'}</small></div>
+    <div class="path"><button data-a="up" title="Up one folder">↑</button><input data-a="path" spellcheck="false"><button data-a="refresh" title="Refresh">⟳</button></div>
+    <div class="tools">${isDev?`
+      <button data-a="tomac" title="Copy the selected items to the folder open on the left">← Copy to ${esc(info.computer||'Mac')}</button>
+      <button data-a="upload">Upload from this computer…</button><button data-a="download">Download</button>
+      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>`:`
+      <button data-a="home">Home</button><button data-a="todev" title="Copy the selected items to the folder open on the right">Copy to ${esc(cur)} →</button>
+      <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label>`}</div></div>
+    <div class="list"></div>`;
+  el.querySelectorAll('[data-a]').forEach(b=>{const a=b.dataset.a;
+    if(a==='path')b.onkeydown=e=>{if(e.key==='Enter')load(p,b.value)};
+    else if(a==='hidden')b.onchange=()=>{p.hidden=b.checked;load(p,p.path)};
+    else b.onclick=()=>tool(p,a)});
+  dropZone(el,()=>p.path,p);
+}
+async function openFiles(changed){
+  if(filesFor!==cur||changed){filesFor=cur;$('activity').innerHTML='';panes.dev.path='/';
+    if(!info.computer)await loadInfo();paneShell(panes.mac);paneShell(panes.dev);
+    act('Drag files between the two sides, or drop files from Finder onto '+cur+'. Double-click a folder to open it.');
+    load(panes.mac,panes.mac.path||'~');load(panes.dev,'/')}
+}
+async function load(p,path){
+  const list=$('pane-'+p.side).querySelector('.list');list.innerHTML='<div class="hint">Loading…</div>';
+  try{const j=await getJSON('/api/files/list?side='+p.side+'&device='+enc(cur)+'&path='+enc(path)+(p.hidden?'&hidden=1':''));
+    p.path=j.path;p.parent=j.parent;p.entries=j.entries;p.sel.clear();p.last=null;render(p)}
+  catch(e){list.innerHTML='<div class="hint" style="color:var(--bad)">'+esc(e.message)+'</div>'}
+  $('pane-'+p.side).querySelector('[data-a=path]').value=p.path||path}
+function full(p,name){return p.side==='mac'?(p.path.replace(/\/$/,'')+'/'+name):((p.path==='/'?'':p.path)+'/'+name)}
+function parentOf(p){if(p.side==='mac')return p.parent||p.path;const s=p.path.replace(/\/[^/]*$/,'');return s||'/'}
+function render(p){
+  const list=$('pane-'+p.side).querySelector('.list');
+  if(!p.entries.length){list.innerHTML='<div class="hint">This folder is empty.'+(p.side==='dev'?' Drop files here to upload them.':'')+'</div>';return}
+  list.innerHTML='<table>'+p.entries.map((e,i)=>`<tr data-i="${i}" draggable="true" class="${p.sel.has(i)?'sel':''}">
+    <td>${e.kind==='dir'?'📁':e.kind==='link'?'🔗':'📄'}</td><td class="n" title="${esc(e.name)}">${esc(e.name)}</td>
+    <td class="s">${e.kind==='file'?size(e.size):''}</td><td class="m">${esc(e.modified||'')}</td></tr>`).join('')+'</table>';
+  list.querySelectorAll('tr').forEach(tr=>{const i=+tr.dataset.i,e=p.entries[i];
+    tr.onclick=ev=>{if(ev.shiftKey&&p.last!=null){const [a,b]=[Math.min(p.last,i),Math.max(p.last,i)];for(let k=a;k<=b;k++)p.sel.add(k)}
+      else if(ev.metaKey||ev.ctrlKey){p.sel.has(i)?p.sel.delete(i):p.sel.add(i);p.last=i}
+      else{p.sel.clear();p.sel.add(i);p.last=i}paint(p)};
+    tr.ondblclick=()=>{if(e.kind==='dir')load(p,full(p,e.name));else if(p.side==='dev'&&e.kind==='file')download(full(p,e.name))};
+    tr.ondragstart=ev=>{if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)} // never rebuild the list mid-drag
+      ev.dataTransfer.setData('application/x-devagent',JSON.stringify({side:p.side,items:picked(p)}));ev.dataTransfer.effectAllowed='copyMove'};
+    if(e.kind==='dir')dropZone(tr,()=>full(p,e.name),p,true)});
+}
+function paint(p){$('pane-'+p.side).querySelectorAll('.list tr').forEach(tr=>tr.classList.toggle('sel',p.sel.has(+tr.dataset.i)))}
+function picked(p){return [...p.sel].map(i=>p.entries[i]).filter(e=>e.kind!=='link').map(e=>({path:full(p,e.name),kind:e.kind,name:e.name}))}
+function dropZone(el,where,p,row){
+  const ok=ev=>[...ev.dataTransfer.types].some(x=>x==='application/x-devagent'||x==='Files');
+  el.addEventListener('dragover',ev=>{if(!ok(ev))return;ev.preventDefault();if(row)ev.stopPropagation();
+    el.classList.add(row?'target':'dropping')});
+  el.addEventListener('dragleave',ev=>{if(!el.contains(ev.relatedTarget))el.classList.remove('target','dropping')});
+  el.addEventListener('drop',ev=>{if(!ok(ev))return;ev.preventDefault();ev.stopPropagation();
+    el.classList.remove('target','dropping');document.querySelectorAll('.dropping').forEach(x=>x.classList.remove('dropping'));
+    dropped(ev.dataTransfer,p.side,where())});
+}
+async function dropped(dt,side,target){
+  const raw=dt.getData('application/x-devagent');
+  if(raw){const d=JSON.parse(raw);if(!d.items.length)return;
+    if(d.side==='dev'&&side==='mac')return copyToMac(d.items,target);
+    if(d.side==='mac'&&side==='dev')return plan({op:'upload',target,items:d.items.map(x=>({from:'mac',path:x.path}))});
+    if(d.side==='dev'&&side==='dev'){const items=d.items.filter(x=>x.path!==target&&parentPath(x.path)!==target);
+      if(items.length)return plan({op:'move',target,paths:items.map(x=>x.path)});return}
+    return act('Both of those are on '+info.computer+'. Use Finder to move files around on it.','bad')}
+  const files=[...dt.files];if(!files.length)return;
+  if(side!=='dev')return act('To upload files, drop them on the '+cur+' side (right).','bad');
+  uploadFiles(files,target)}
+function parentPath(x){const s=x.replace(/\/[^/]*$/,'');return s||'/'}
+async function uploadFiles(files,target){
+  const refs=[];
+  for(const f of files){
+    if(!f.size&&!f.type&&f.name.indexOf('.')<0){act('Skipped '+f.name+': folders can\'t be dropped from Finder. Open the folder on the left and drag it from there.','bad');continue}
+    act('Sending '+f.name+' ('+size(f.size)+') to '+info.computer+'…');
+    try{const r=await fetch('/api/files/stage?device='+enc(cur)+'&name='+enc(f.name),{method:'POST',body:f});
+      const j=await r.json();if(!r.ok)throw new Error(j.error);refs.push({from:'staged',ref:j.ref})}
+    catch(e){act('Couldn\'t send '+f.name+': '+e.message,'bad')}}
+  if(refs.length)plan({op:'upload',target,items:refs})}
+async function copyToMac(items,folder){
+  act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'…');
+  await stream('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder},fileEvent);load(panes.mac,panes.mac.path)}
+function fileEvent(ev){if(ev.type==='progress')act(ev.text);else if(ev.type==='answer')act(ev.text,'good');else if(ev.type==='error')act(ev.text,'bad')}
+function download(path){const a=document.createElement('a');a.href='/api/files/download?device='+enc(cur)+'&path='+enc(path);
+  a.download='';document.body.appendChild(a);a.click();a.remove();act('Downloading '+path+' to this computer\'s Downloads folder.')}
+async function plan(req){
+  act('Working out what this would change…');
+  let j;try{j=await postJSON('/api/files/plan',Object.assign({device:cur},req))}catch(e){return act(e.message,'bad')}
+  modal(`<h3>${esc(j.title)}</h3>
+    <div class="msgline">Nothing has been written yet. Every file that gets replaced or deleted is backed up to ${esc(info.computer)} first, and you can undo it.</div>
+    <ul>${j.lines.map(l=>'<li>'+esc(l)+'</li>').join('')}${j.more?'<li>…and '+j.more+' more</li>':''}</ul>
+    ${j.writes_on?'':'<div class="msgline bad">Writing is turned off for '+esc(j.device)+', so this will be refused. To allow it, set "allow_writes": true in its settings file ('+esc(info.settings_file||'')+').</div>'}
+    <div class="row confirm">Type <b>${esc(j.device)}</b> to confirm: <input id="c-typed" autocomplete="off"><button class="primary" id="c-ok">Confirm</button><button id="c-no">Cancel</button></div>`,true);
+  $('c-typed').focus();$('c-no').onclick=()=>{closeModal();act('Cancelled. Nothing was written.')};
+  const go=async()=>{if($('c-typed').value.trim()!==j.device){$('c-typed').style.borderColor='var(--bad)';$('c-typed').focus();return}
+    closeModal();await stream('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value},fileEvent);load(panes.dev,panes.dev.path)};
+  $('c-ok').onclick=go;$('c-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
+function tool(p,a){
+  if(a==='up')return load(p,parentOf(p));if(a==='refresh')return load(p,p.path);if(a==='home')return load(p,'~');
+  const items=picked(p);
+  if(a==='todev'){if(!items.length)return act('Select something on the left first.','bad');
+    return plan({op:'upload',target:panes.dev.path,items:items.map(x=>({from:'mac',path:x.path}))})}
+  if(a==='tomac'){if(!items.length)return act('Select something on the right first.','bad');return copyToMac(items,panes.mac.path)}
+  if(a==='upload'){$('upfile').value='';$('upfile').onchange=()=>uploadFiles([...$('upfile').files],p.path);return $('upfile').click()}
+  if(a==='download'){const fs=items.filter(x=>x.kind==='file');if(!fs.length)return act('Select a file first. (To copy a folder, drag it to the left side.)','bad');
+    return fs.forEach((x,k)=>setTimeout(()=>download(x.path),k*400))}
+  if(a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)plan({op:'mkdir',target:p.path,name:n});return}
+  if(a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
+    const n=prompt('New name for '+items[0].name+':',items[0].name);if(n&&n!==items[0].name)plan({op:'rename',path:items[0].path,new_name:n});return}
+  if(a==='delete'){if(!items.length)return act('Select what to delete first.','bad');return plan({op:'delete',paths:items.map(x=>x.path)})}
+}
+/* ---------- backups */
+let bkLast=null,bkRate=0;
+async function loadBackups(){
+  const dev=cur;let j;try{j=await getJSON('/api/backup/status?device='+enc(dev))}catch(e){$('bk-msg').textContent=e.message;return}
+  if(dev!==cur)return;
+  $('bk-title').textContent='Back up everything on '+dev;
+  $('bk-folder').textContent=j.device_folder;
+  const job=j.job,running=job&&job.running;
+  $('bk-start').hidden=running;$('bk-stop').hidden=!running;$('bk-change').disabled=running;
+  $('bk-start').textContent=j.unfinished?'Resume the unfinished backup':'Back up now';
+  $('bk-progress').hidden=!running;
+  if(running){
+    if(job.phase==='listing'){$('bk-bar').style.width='2%';$('bk-line').textContent='Listing every folder… '+job.files_total+' files found so far';bkLast=null}
+    else{const pct=job.bytes_total?100*job.bytes_done/job.bytes_total:(job.files_total?100*job.files_done/job.files_total:0);
+      $('bk-bar').style.width=Math.max(2,pct).toFixed(1)+'%';
+      const now=Date.now()/1000;if(bkLast&&now>bkLast.t){const r=(job.bytes_done-bkLast.b)/(now-bkLast.t);bkRate=bkRate?bkRate*.8+r*.2:r}
+      bkLast={t:now,b:job.bytes_done};
+      const left=bkRate>0?(job.bytes_total-job.bytes_done)/bkRate:0;
+      $('bk-line').textContent=`${job.files_done} of ${job.files_total} files · ${size(job.bytes_done)} of ${size(job.bytes_total)}`+
+        (bkRate>0?` · ${size(bkRate)}/s · about ${dur(left)} left`:'')+(job.linked?` · ${job.linked} unchanged`:'')+(job.failed?` · ${job.failed} couldn't be read`:'')}
+    $('bk-cur').textContent=job.current||'';$('bk-msg').textContent=job.resumed?'Carrying on the backup that stopped earlier.':''}
+  else if(job&&job.message){$('bk-msg').className='msgline'+(job.phase==='failed'?' bad':'');$('bk-msg').textContent=job.message}
+  $('bk-list').innerHTML=j.backups.length?j.backups.map(b=>`<div class="bk"><span class="when">${esc(b.name.replace('_',' ').replace(/-(\d\d)-(\d\d)$/,':$1:$2'))}</span>
+    <span class="badge ${b.complete?'ok':'part'}">${b.complete?'complete':'unfinished'}</span>
+    <span class="meta">${b.files} files · ${size(b.bytes)}${b.linked?' · '+b.linked+' unchanged (no extra space)':''}${b.failed?' · '+b.failed+' couldn\'t be read':''}</span>
+    <button data-path="${esc(b.path)}">Show in Files</button></div>`).join(''):'<div class="note">No backups yet.</div>';
+  $('bk-list').querySelectorAll('button').forEach(x=>x.onclick=()=>showInFiles(x.dataset.path));
+}
+function dur(s){if(s<90)return Math.round(s)+' s';if(s<5400)return Math.round(s/60)+' min';return (s/3600).toFixed(1)+' h'}
+function showInFiles(path){panes.mac.path=path;if(filesFor===cur)load(panes.mac,path);location.hash='#/d/'+enc(cur)+'/files'}
+$('bk-start').onclick=async()=>{$('bk-msg').className='msgline';$('bk-msg').textContent='Starting…';bkLast=null;bkRate=0;
+  try{await postJSON('/api/backup/start',{device:cur});loadBackups()}catch(e){$('bk-msg').className='msgline bad';$('bk-msg').textContent=e.message}};
+$('bk-stop').onclick=async()=>{await postJSON('/api/backup/stop',{device:cur});$('bk-msg').textContent='Stopping…'};
+$('bk-change').onclick=()=>chooseFolder($('bk-folder').textContent.replace(/\/[^/]*$/,''));
+async function chooseFolder(start){
+  modal(`<h3>Where should backups of ${esc(cur)} go?</h3>
+    <div class="note">Pick a folder on ${esc(info.computer||'the Mac')}. An external drive or network share shows up under Drives.
+    Each device gets its own folder inside, named after it.</div>
+    <div class="row"><button id="p-up">↑ Up</button><button id="p-home">Home</button><button id="p-vol">Drives</button></div>
+    <div class="row"><code id="p-path"></code></div><div class="picker" id="p-list"></div>
+    <div class="msgline" id="p-msg"></div>
+    <div class="row"><button class="primary" id="p-ok">Use this folder</button><button id="p-no">Cancel</button></div>`);
+  let here=null,parent=null;
+  const go=async path=>{try{const j=await getJSON('/api/files/list?side=mac&path='+enc(path));here=j.path;parent=j.parent;
+      $('p-path').textContent=here;const dirs=j.entries.filter(e=>e.kind==='dir');
+      $('p-list').innerHTML=dirs.length?dirs.map(e=>`<div data-n="${esc(e.name)}">📁 ${esc(e.name)}</div>`).join(''):'<div class="note">No folders inside. You can still use this one.</div>';
+      $('p-list').querySelectorAll('[data-n]').forEach(d=>d.onclick=()=>go(here.replace(/\/$/,'')+'/'+d.dataset.n))}
+    catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
+  $('p-up').onclick=()=>parent&&go(parent);$('p-home').onclick=()=>go('~');$('p-vol').onclick=()=>go('/Volumes');$('p-no').onclick=closeModal;
+  $('p-ok').onclick=async()=>{try{await postJSON('/api/backup/folder',{device:cur,folder:here});closeModal();loadBackups()}
+    catch(e){$('p-msg').className='msgline bad';$('p-msg').textContent=e.message}};
+  go(start||'~');
+}
+
+// Dropping a file outside the drop areas shouldn't open it in the browser.
+window.addEventListener('dragover',e=>e.preventDefault());window.addEventListener('drop',e=>e.preventDefault());
+route();
+</script></body></html>

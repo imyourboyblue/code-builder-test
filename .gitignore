@@ -1,0 +1,8 @@
+# Your own settings, passwords and data stay on your Mac
+gd1-checker/config.json
+gd1-checker/devices/
+gd1-checker/access.json
+gd1-checker/*.tmp
+__pycache__/
+*.pyc
+.DS_Store
