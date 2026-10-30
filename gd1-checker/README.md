@@ -39,7 +39,7 @@ There is nothing else to install. The script only uses parts of Python that come
 
 The first time, start Patchbay from Terminal (above). After that you have two shortcuts:
 
-- **A Patchbay app you can double-click.** In Terminal run `python3 patchbay.py --install-app` once, or click **🩺 Setup** at the top of the page and press **Make the Patchbay app**. It appears in your Applications folder; drag it onto the Dock. Double-clicking it opens Patchbay (and just opens the page if it's already running).
+- **A Patchbay app you can double-click.** In Terminal run `python3 patchbay.py --install-app` once, or click **🩺 Setup** at the top of the page and press **Make the Patchbay app**. It appears in your Applications folder; drag it onto the Dock. Double-clicking it opens Patchbay (and just opens the page if it's already running). It's a real Mac app: Patchbay opens in its own window (with its own icon, menus, copy/paste and downloads), and quitting the app stops Patchbay if the app started it. Building it takes about a minute and needs Apple's free command line tools; without them you get a simpler app that opens Patchbay in your browser. After an update, the app rebuilds itself the next time Patchbay starts. The icon's source is `macapp/icon.svg.html`, the window code is `macapp/main.swift`.
 - **Start on its own when the Mac turns on.** The same **🩺 Setup** panel has a tick-box for this (`--install-app` turns it on too). It runs Patchbay quietly in the background; open the page whenever you want it.
 
 ### Is everything working? (🩺 Setup)

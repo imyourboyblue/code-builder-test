@@ -1,0 +1,58 @@
+<!doctype html><html><body style="margin:0;background:transparent">
+<svg id="i" width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1b1f4b"/><stop offset="0.55" stop-color="#151735"/><stop offset="1" stop-color="#0b0c1e"/>
+  </linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+    <stop offset="0" stop-color="#5b5cff" stop-opacity="0.35"/><stop offset="1" stop-color="#5b5cff" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#3a3f63"/><stop offset="1" stop-color="#22263f"/>
+  </linearGradient>
+  <linearGradient id="cA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4fd8"/><stop offset="1" stop-color="#ff8a3d"/></linearGradient>
+  <linearGradient id="cB" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22e3ff"/><stop offset="1" stop-color="#5b7bff"/></linearGradient>
+  <linearGradient id="cC" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7dff8a"/><stop offset="1" stop-color="#16c6a0"/></linearGradient>
+  <radialGradient id="jack" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#e9ecf5"/><stop offset="0.6" stop-color="#9aa1b8"/><stop offset="1" stop-color="#5a6078"/></radialGradient>
+  <filter id="neon" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="14" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.55"/></filter>
+  <clipPath id="sq"><rect x="80" y="80" width="864" height="864" rx="196"/></clipPath>
+</defs>
+<g filter="url(#shadow)"><rect x="80" y="80" width="864" height="864" rx="196" fill="url(#bg)"/></g>
+<g clip-path="url(#sq)">
+  <rect x="80" y="80" width="864" height="864" fill="url(#glow)"/>
+  <!-- faint circuit grid -->
+  <g stroke="#ffffff" stroke-opacity="0.05" stroke-width="3">
+    <path d="M80 300H944M80 512H944M80 724H944M300 80V944M512 80V944M724 80V944"/>
+  </g>
+  <!-- the patch panel -->
+  <rect x="176" y="250" width="672" height="150" rx="40" fill="url(#panel)" stroke="#4b5280" stroke-width="4"/>
+  <rect x="176" y="624" width="672" height="150" rx="40" fill="url(#panel)" stroke="#4b5280" stroke-width="4"/>
+  <g id="jacks">
+    <g transform="translate(288,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+    <g transform="translate(512,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+    <g transform="translate(736,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+    <g transform="translate(288,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+    <g transform="translate(512,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+    <g transform="translate(736,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
+  </g>
+  <!-- glowing cables -->
+  <g fill="none" stroke-linecap="round" stroke-width="30" filter="url(#neon)">
+    <path d="M288 325 C 288 520, 736 500, 736 699" stroke="url(#cA)"/>
+    <path d="M736 325 C 736 540, 288 480, 288 699" stroke="url(#cB)"/>
+    <path d="M512 325 C 430 470, 600 560, 512 699" stroke="url(#cC)"/>
+  </g>
+  <!-- plugs on the jacks -->
+  <g>
+    <circle cx="288" cy="325" r="26" fill="#ff4fd8"/><circle cx="736" cy="699" r="26" fill="#ff8a3d"/>
+    <circle cx="736" cy="325" r="26" fill="#22e3ff"/><circle cx="288" cy="699" r="26" fill="#5b7bff"/>
+    <circle cx="512" cy="325" r="26" fill="#7dff8a"/><circle cx="512" cy="699" r="26" fill="#16c6a0"/>
+  </g>
+  <!-- status LEDs -->
+  <g><circle cx="220" cy="285" r="9" fill="#7dff8a" filter="url(#neon)"/><circle cx="804" cy="285" r="9" fill="#ff4fd8" filter="url(#neon)"/>
+     <circle cx="220" cy="659" r="9" fill="#22e3ff" filter="url(#neon)"/><circle cx="804" cy="659" r="9" fill="#ff8a3d" filter="url(#neon)"/></g>
+  <!-- glass highlight -->
+  <path d="M80 80H944V380C700 300 330 300 80 420Z" fill="#ffffff" fill-opacity="0.05"/>
+</g>
+<rect x="81.5" y="81.5" width="861" height="861" rx="195" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
+</svg></body></html>

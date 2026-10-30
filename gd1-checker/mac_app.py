@@ -87,17 +87,77 @@ def _q(p):
     return "'" + str(p).replace("'", "'\\''") + "'"
 
 
-def make_app():
-    """Create (or refresh) ~/Applications/Patchbay.app. Returns its path."""
+SWIFT_SRC = HERE / "macapp" / "main.swift"
+BUILD_DIR = HERE / "data-cache" / "macapp-build"
+LAST = {"native": None, "note": ""}
+
+
+def _stamp():
+    """What the app was made for; if any of it changes, the app is made again."""
+    import hashlib
+    src = SWIFT_SRC.read_bytes() if SWIFT_SRC.exists() else b""
+    return {"python": python_exe(), "folder": str(HERE), "port": _port(), "launcher": hashlib.sha1(
+        _launcher_script().encode()).hexdigest()[:12], "swift": hashlib.sha1(src).hexdigest()[:12],
+        "icon": ICON_VERSION}
+
+
+def _swift_string(v):
+    return str(v).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_native(target):
+    """Compile the small native window app (needs Apple's command line tools). Returns (ok, note)."""
+    if not SWIFT_SRC.exists():
+        return False, "The app's source file is missing."
+    try:
+        found = subprocess.run(["/usr/bin/xcrun", "--find", "swiftc"], capture_output=True, text=True, timeout=60,
+                               stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False, "Apple's command line tools aren't installed."
+    if found.returncode:
+        return False, "Apple's command line tools (swiftc) aren't installed."
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    src = SWIFT_SRC.read_text()
+    src = src.replace("__PYTHON__", _swift_string(python_exe())).replace("__FOLDER__", _swift_string(HERE)) \
+             .replace("__PORT__", str(_port()))
+    (BUILD_DIR / "main.swift").write_text(src)
+    out = BUILD_DIR / "Patchbay"
+    try:
+        r = subprocess.run(["/usr/bin/xcrun", "swiftc", "-O", "-o", str(out), str(BUILD_DIR / "main.swift"),
+                            "-framework", "Cocoa", "-framework", "WebKit"], capture_output=True, text=True,
+                           timeout=600, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "Building the app failed: %s" % e
+    if r.returncode or not out.exists():
+        (BUILD_DIR / "build-error.txt").write_text((r.stderr or "") + (r.stdout or ""))
+        return False, "Building the app failed (details in data-cache/macapp-build/build-error.txt)."
+    tmp = target.with_name("Patchbay.tmp")
+    import shutil
+    shutil.copy2(str(out), str(tmp))
+    tmp.chmod(0o755)
+    tmp.replace(target)
+    return True, "Built the Patchbay app with its own window."
+
+
+def make_app(native=True):
+    """Create (or refresh) ~/Applications/Patchbay.app. Returns its path.
+    It's a real Mac app with its own window when Apple's command line tools are there (they come with git and
+    devkitPro setups); otherwise a small launcher that opens Patchbay in the browser."""
     if not is_mac():
         raise OSError("The Patchbay app is for macOS. On this computer, start it with: python3 patchbay.py")
     macos = APP_DIR / "Contents" / "MacOS"
+    res = APP_DIR / "Contents" / "Resources"
     macos.mkdir(parents=True, exist_ok=True)
+    res.mkdir(parents=True, exist_ok=True)
     runner = macos / "Patchbay"
-    tmp = macos / "Patchbay.tmp"   # write a new file then swap, so a launcher that is running right now isn't cut off
-    tmp.write_text(_launcher_script())
-    tmp.chmod(0o755)
-    tmp.replace(runner)
+    ok, note = _build_native(runner) if native else (False, "")
+    if not ok:
+        tmp = macos / "Patchbay.tmp"   # write a new file then swap, so a launcher that is running right now isn't cut off
+        tmp.write_text(_launcher_script())
+        tmp.chmod(0o755)
+        tmp.replace(runner)
+        note = (note + " " if note else "") + "Using the simple launcher (opens Patchbay in your browser)."
+    icon = make_icon(res)
     info = {
         "CFBundleName": "Patchbay",
         "CFBundleDisplayName": "Patchbay",
@@ -107,29 +167,79 @@ def make_app():
         "CFBundleShortVersionString": "1.0",
         "CFBundleInfoDictionaryVersion": "6.0",
         "LSMinimumSystemVersion": "11.0",
+        "NSHighResolutionCapable": True,
+        "NSPrincipalClass": "NSApplication",
+        "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
+        "NSLocalNetworkUsageDescription": "Patchbay finds and talks to the devices on your home network.",
     }
+    if icon:
+        info["CFBundleIconFile"] = "Patchbay"
     with open(APP_DIR / "Contents" / "Info.plist", "wb") as f:
         plistlib.dump(info, f)
-    # Nudge Finder/Launch Services to notice the new app.
-    try:
-        subprocess.run(["/usr/bin/touch", str(APP_DIR)], timeout=10, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    (res / "patchbay-build.json").write_text(__import__("json").dumps(dict(_stamp(), native=ok)))
+    for cmd in (["/usr/bin/codesign", "--force", "--deep", "-s", "-", str(APP_DIR)], ["/usr/bin/touch", str(APP_DIR)]):
+        try:   # an ad-hoc signature so Apple silicon Macs run it; touch so Finder notices the change
+            subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    LAST.update(native=ok, note=note)
     return APP_DIR
 
 
 def refresh_app():
-    """Keep an existing Patchbay app up to date with this folder, Python and port (called at every start)."""
+    """Keep an existing Patchbay app up to date with this folder, Python, port and app code (called at every start)."""
     if not is_mac() or not APP_DIR.exists():
         return False
-    runner = APP_DIR / "Contents" / "MacOS" / "Patchbay"
+    import json
     try:
-        if runner.exists() and runner.read_text() == _launcher_script() and os.access(str(runner), os.X_OK):
-            return False
-        make_app()
+        built = json.loads((APP_DIR / "Contents" / "Resources" / "patchbay-build.json").read_text())
+    except (OSError, ValueError):
+        built = {}
+    want = _stamp()
+    if all(built.get(k) == v for k, v in want.items()):
+        return False
+    try:
+        # Rebuild in the background-friendly way: same kind as before (native if it was, or if it never was tried).
+        make_app(native=built.get("native", True) is not False or not built)
         return True
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------- the app icon
+
+ICON_VERSION = 2
+ICON_PNG = HERE / "macapp" / "icon.png"   # 1024x1024; drawn in macapp/icon.svg.html
+
+
+def make_icon(res_dir):
+    """Write Patchbay.icns into the app's Resources (using the Mac's own sips and iconutil). True if it worked."""
+    import shutil
+    target = res_dir / "Patchbay.icns"
+    cache = HERE / "data-cache" / ("Patchbay-icon-%d.icns" % ICON_VERSION)
+    if cache.exists():
+        shutil.copy2(str(cache), str(target))
+        return True
+    work = BUILD_DIR / "Patchbay.iconset"
+    try:
+        work.mkdir(parents=True, exist_ok=True)
+        if not ICON_PNG.exists():
+            return False
+        big = ICON_PNG
+        for px in (16, 32, 64, 128, 256, 512, 1024):
+            for scale, name in ((1, "icon_%dx%d.png" % (px, px)), (2, "icon_%dx%d@2x.png" % (px // 2, px // 2))):
+                if (scale == 2 and px < 32) or (scale == 1 and px > 512):
+                    continue
+                subprocess.run(["/usr/bin/sips", "-z", str(px), str(px), str(big), "--out", str(work / name)],
+                               capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+        r = subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(work), "-o", str(cache)], capture_output=True,
+                           timeout=60, stdin=subprocess.DEVNULL)
+        if r.returncode == 0 and cache.exists():
+            shutil.copy2(str(cache), str(target))
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False
 
 
 def remove_app():
@@ -177,5 +287,12 @@ def _launchctl(action, plist):
 
 
 def status():
-    return {"mac": is_mac(), "app": APP_DIR.exists(), "app_path": str(APP_DIR),
+    native = None
+    try:
+        import json
+        native = json.loads((APP_DIR / "Contents" / "Resources" / "patchbay-build.json").read_text()).get("native")
+    except (OSError, ValueError):
+        pass
+    return {"mac": is_mac(), "app": APP_DIR.exists(), "app_path": str(APP_DIR), "native": native,
+            "note": LAST.get("note") or "",
             "login": AGENT.exists(), "script": str(SCRIPT)}

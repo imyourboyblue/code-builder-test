@@ -686,7 +686,7 @@ async function openSetup(msg){
       (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
       (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>').join('')+
     (a.mac?'<h3 style="margin-top:14px">Starting Patchbay</h3>'+
-      '<div style="font-size:13.5px">'+(a.app?'✅ The Patchbay app is in your Applications folder. Drag it onto the Dock to start Patchbay with one click.':'Make a Patchbay app you can double-click or keep in the Dock, so you don\'t need Terminal.')+'</div>'+
+      '<div style="font-size:13.5px">'+(a.app?(a.native?'✅ The Patchbay app (with its own window) is in your Applications folder. Drag it onto the Dock to start Patchbay with one click.':'✅ The Patchbay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a Patchbay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the Patchbay app')+'</button>'+
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>':'')+
     '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
@@ -695,7 +695,9 @@ async function openSetup(msg){
   const say=t=>$('sc-msg').innerHTML=t;
   document.querySelectorAll('.sc-fix').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='Working…';
     try{const r=await postJSON('/api/selfcheck/fix',{id:b.dataset.id});openSetup(r.message)}catch(e){b.disabled=false;b.textContent='Try again';say('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}});
-  const ap=$('sc-app');if(ap)ap.onclick=async()=>{try{await postJSON('/api/macapp',{action:'make_app'});openSetup('Made the Patchbay app. Open Applications in Finder and drag Patchbay onto the Dock.')}catch(e){say(esc(e.message))}};
+  const ap=$('sc-app');if(ap)ap.onclick=async()=>{ap.disabled=true;ap.textContent='Building the app… (about a minute)';
+    try{const r=await postJSON('/api/macapp',{action:'make_app'});openSetup(r.native?'Made the Patchbay app with its own window. Open Applications in Finder and drag Patchbay onto the Dock (if an older Patchbay icon is there, remove it first).':'Made the Patchbay app as a simple launcher. '+(r.note||''))}
+    catch(e){ap.disabled=false;ap.textContent='Try again';say(esc(e.message))}};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'Patchbay will now start by itself when you log in.':'Patchbay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
