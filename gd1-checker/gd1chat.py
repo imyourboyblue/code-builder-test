@@ -1565,6 +1565,25 @@ class Handler(BaseHTTPRequestHandler):
             folder = backup.check_folder(data.get("folder"))
             backup.save_folder_setting(st.config_path, folder)
             self.json({"ok": True, "folder": str(folder)})
+        elif path == "/api/files/mac_rename":
+            self.json({"ok": True, "path": fm.mac_rename(data.get("path"), data.get("new_name"))})
+        elif path == "/api/files/mac_mkdir":
+            self.json({"ok": True, "path": fm.mac_mkdir(data.get("folder"), data.get("name"))})
+        elif path == "/api/devices/rename":
+            st = APP.device(data.get("device"))
+            cfg = st.cfg()
+            job = APP.backups.get(cfg["device_name"])
+            if job and job.status()["running"]:
+                raise ToolError("A backup of %s is running. Rename it after the backup finishes." % cfg["device_name"])
+            if BUSY.locked() and BUSY_WITH[0] == cfg["device_name"]:
+                raise ToolError("The chat is still working on %s. Rename it when it's done." % cfg["device_name"])
+            new = (data.get("new_name") or "").strip()
+            extra = []
+            if devices.NAME_OK.match(new) and backup.backup_root(cfg).exists():
+                extra.append((backup.backup_root(cfg), backup.backup_root(dict(cfg, device_name=new))))
+            name = devices.rename_device(APP.registry, st.config_path, new, extra)
+            APP.backups.pop(cfg["device_name"], None)
+            self.json({"ok": True, "name": name})
         elif path == "/api/files/apply":
             self.files_apply(data)
         elif path == "/api/files/copy_to_mac":

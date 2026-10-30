@@ -315,3 +315,35 @@ def probe(host, port):
     kind = "an FTP server" if greet.startswith("220") else "an SSH server" if greet.startswith("SSH-") else \
         "something (no greeting; maybe a web page)" if not greet else "something"
     return "%s port %s is open and looks like %s. Greeting: %s" % (host, port, kind, greet[:200] or "(none)")
+
+
+def rename_device(registry, config_path, new_name, extra_folders=()):
+    """Give a device a new name. Its data folder (scans, history, picture) moves with it, and so do any
+    extra folders named after it (like its backups). Returns the new name."""
+    new_name = (new_name or "").strip()
+    if not NAME_OK.match(new_name):
+        raise DeviceError("Use a short name with letters, numbers, spaces, - or _ (like GD2).")
+    cfg = core.load_config(config_path)
+    old = cfg["device_name"]
+    if new_name == old:
+        raise DeviceError("That's already its name.")
+    if any(c["device_name"].lower() == new_name.lower() and str(p) != str(config_path) for p, c in registry.all()):
+        raise DeviceError("Another device is already called %s." % new_name)
+    moves = [(core.data_dir(cfg), core.data_dir(dict(cfg, device_name=new_name)))]
+    moves += [(Path(a), Path(b)) for a, b in extra_folders]
+    for a, b in moves:
+        if a.exists() and b.exists() and any(b.iterdir()):
+            raise DeviceError("There's already a folder %s, so I can't move %s there." % (b, a))
+    for a, b in moves:
+        if a.exists():
+            if b.exists():
+                b.rmdir()
+            b.parent.mkdir(parents=True, exist_ok=True)
+            a.rename(b)
+    raw = json.loads(Path(config_path).read_text())
+    raw["device_name"] = new_name
+    tmp = Path(str(config_path) + ".tmp")
+    tmp.write_text(json.dumps(raw, indent=2) + "\n")
+    tmp.replace(config_path)
+    registry.status.pop(old, None)
+    return new_name

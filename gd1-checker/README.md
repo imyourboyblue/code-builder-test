@@ -122,6 +122,8 @@ Each device has a **Files** tab. The left side is the Mac Studio's folders, the 
 - **Move on the device:** drag a file onto a folder on the right side.
 - **Download** saves a device file to the Downloads folder of the computer you're using (handy on the laptop).
 - **New folder**, **Rename** and **Delete** work on the selected items on the device.
+- **Rename** anything: click the ✎ pencil at the end of a row, or right-click a file or folder for a menu (Open, Rename, Download, Copy, Delete, New folder). This works on both sides. On the Mac side it happens straight away. On the device side you type the device's name to confirm, as with every device change.
+- **Rename the device:** click **✎ Rename device** next to its name on the right side. Its scans, history, picture and backups move to the new name, and from then on you type the new name to confirm changes.
 
 Anything that changes the device (upload, move, rename, new folder, delete) first shows you a list of exactly what will happen, and only goes ahead after you type the device's name. Every file that gets replaced or deleted is backed up to the Mac Studio first, and every change is in the device's history, so the AI (or `python3 gd1check.py undo <number>`) can put it back.
 

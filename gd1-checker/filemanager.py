@@ -401,3 +401,26 @@ def apply(cfg, steps, note, emit):
     finally:
         dev.close()
     return done
+
+
+# ----------------------------------------------------------------- on the Mac side (no device is touched)
+
+def mac_rename(path, new_name):
+    p = Path(os.path.expanduser(path or "")).resolve()
+    if not p.exists():
+        raise FileError("%s isn't on the Mac any more." % p)
+    if p == Path.home() or p.parent == p:
+        raise FileError("I won't rename that folder.")
+    dest = p.with_name(safe_name(new_name))
+    if dest.exists():
+        raise FileError("%s already has something called %s." % (p.parent, dest.name))
+    p.rename(dest)
+    return str(dest)
+
+
+def mac_mkdir(folder, name):
+    d = Path(os.path.expanduser(folder or "")).resolve() / safe_name(name)
+    if d.exists():
+        raise FileError("%s already exists." % d)
+    d.mkdir()
+    return str(d)

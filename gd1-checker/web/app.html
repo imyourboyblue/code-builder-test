@@ -87,7 +87,14 @@ color:var(--ink);resize:none;min-height:46px;max-height:200px}
 .list td{padding:4px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 .list td.n{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .list td.s,.list td.m{color:var(--mute);font-size:12.5px;text-align:right}
-.list tr{cursor:default}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
+.list tr{cursor:default}.list td.r{width:1%;padding:0 6px}
+.pen{font-size:12px;padding:1px 7px;border-color:transparent;background:none;color:var(--mute)}
+.list tr .pen{opacity:0}.list tr:hover .pen,.list tr.sel .pen{opacity:1}@media (hover:none){.list tr .pen{opacity:1}}
+.pen:hover{border-color:var(--line);color:var(--ink)}
+#ctx{position:fixed;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;
+box-shadow:0 6px 24px rgba(0,0,0,.18);display:none;min-width:170px}
+#ctx button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 10px;border-radius:6px;font-size:14px}
+#ctx button:hover{background:var(--sel)}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
 .list .hint{padding:16px;color:var(--mute);font-size:13px}
 #activity{font:12.5px/1.45 ui-monospace,Menlo,monospace;color:var(--mute);max-height:110px;overflow-y:auto;
 padding:6px 2px 10px;white-space:pre-wrap}
@@ -174,6 +181,7 @@ border:2px solid var(--line)}
 </div></main>
 
 <div class="modal" id="modal"><div class="box" id="box"></div></div>
+<div id="ctx"></div>
 <input type="file" id="picfile" accept="image/*" hidden>
 <input type="file" id="upfile" multiple hidden>
 
@@ -399,13 +407,15 @@ function act(text,cls){const a=$('activity');const d=document.createElement('div
 function paneShell(p){
   const el=$('pane-'+p.side),isDev=p.side==='dev';
   el.innerHTML=`<div class="top">
-    <div class="title">${isDev?'':'🖥️ '}${esc(isDev?cur:info.computer||'Mac')} <small>${isDev?'the device':'this computer runs the agent'}</small></div>
+    <div class="title">${isDev?'':'🖥️ '}${esc(isDev?cur:info.computer||'Mac')} <small>${isDev?'the device':'this computer runs the agent'}</small>
+      ${isDev?'<button data-a="renamedev" class="pen" title="Give this device a new name in Patchbay">✎ Rename device</button>':''}</div>
     <div class="path"><button data-a="up" title="Up one folder">↑</button><input data-a="path" spellcheck="false"><button data-a="refresh" title="Refresh">⟳</button></div>
     <div class="tools">${isDev?`
       <button data-a="tomac" title="Copy the selected items to the folder open on the left">← Copy to ${esc(info.computer||'Mac')}</button>
       <button data-a="upload">Upload from this computer…</button><button data-a="download">Download</button>
       <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>`:`
       <button data-a="home">Home</button><button data-a="todev" title="Copy the selected items to the folder open on the right">Copy to ${esc(cur)} →</button>
+      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button>
       <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label>`}</div></div>
     <div class="list"></div>`;
   el.querySelectorAll('[data-a]').forEach(b=>{const a=b.dataset.a;
@@ -433,11 +443,14 @@ function render(p){
   if(!p.entries.length){list.innerHTML='<div class="hint">This folder is empty.'+(p.side==='dev'?' Drop files here to upload them.':'')+'</div>';return}
   list.innerHTML='<table>'+p.entries.map((e,i)=>`<tr data-i="${i}" draggable="true" class="${p.sel.has(i)?'sel':''}">
     <td>${e.kind==='dir'?'📁':e.kind==='link'?'🔗':'📄'}</td><td class="n" title="${esc(e.name)}">${esc(e.name)}</td>
-    <td class="s">${e.kind==='file'?size(e.size):''}</td><td class="m">${esc(e.modified||'')}</td></tr>`).join('')+'</table>';
+    <td class="s">${e.kind==='file'?size(e.size):''}</td><td class="m">${esc(e.modified||'')}</td>
+    <td class="r">${e.kind!=='link'?'<button class="pen" title="Rename">✎</button>':''}</td></tr>`).join('')+'</table>';
   list.querySelectorAll('tr').forEach(tr=>{const i=+tr.dataset.i,e=p.entries[i];
     tr.onclick=ev=>{if(ev.shiftKey&&p.last!=null){const [a,b]=[Math.min(p.last,i),Math.max(p.last,i)];for(let k=a;k<=b;k++)p.sel.add(k)}
       else if(ev.metaKey||ev.ctrlKey){p.sel.has(i)?p.sel.delete(i):p.sel.add(i);p.last=i}
       else{p.sel.clear();p.sel.add(i);p.last=i}paint(p)};
+    const pen=tr.querySelector('.pen');if(pen)pen.onclick=ev=>{ev.stopPropagation();p.sel.clear();p.sel.add(i);paint(p);tool(p,'rename')};
+    tr.oncontextmenu=ev=>{ev.preventDefault();if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)}menu(ev,p,e)};
     tr.ondblclick=()=>{if(e.kind==='dir')load(p,full(p,e.name));else if(p.side==='dev'&&e.kind==='file')download(full(p,e.name))};
     tr.ondragstart=ev=>{if(!p.sel.has(i)){p.sel.clear();p.sel.add(i);p.last=i;paint(p)} // never rebuild the list mid-drag
       ev.dataTransfer.setData('application/x-devagent',JSON.stringify({side:p.side,items:picked(p)}));ev.dataTransfer.effectAllowed='copyMove'};
@@ -493,9 +506,32 @@ async function plan(req){
   const go=async()=>{if($('c-typed').value.trim()!==j.device){$('c-typed').style.borderColor='var(--bad)';$('c-typed').focus();return}
     closeModal();await stream('/api/files/apply',{device:cur,id:j.id,typed:$('c-typed').value},fileEvent);load(panes.dev,panes.dev.path)};
   $('c-ok').onclick=go;$('c-typed').onkeydown=e=>{if(e.key==='Enter')go()}}
+function menu(ev,p,e){ // right-click menu on a file or folder
+  const c=$('ctx'),dev=p.side==='dev',acts=[];
+  if(e.kind==='dir')acts.push(['Open',()=>load(p,full(p,e.name))]);
+  acts.push(['Rename…',()=>tool(p,'rename')]);
+  if(dev){if(e.kind==='file')acts.push(['Download to this computer',()=>tool(p,'download')]);
+    acts.push(['Copy to '+(info.computer||'the Mac'),()=>tool(p,'tomac')],['Delete…',()=>tool(p,'delete')])}
+  else acts.push(['Copy to '+cur,()=>tool(p,'todev')]);
+  acts.push(['New folder here…',()=>tool(p,'mkdir')]);
+  c.innerHTML='';acts.forEach(([l,f])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>{c.style.display='none';f()};c.appendChild(b)});
+  c.style.display='block';c.style.left=Math.min(ev.clientX,innerWidth-190)+'px';c.style.top=Math.min(ev.clientY,innerHeight-c.offsetHeight-8)+'px'}
+document.addEventListener('click',()=>{$('ctx').style.display='none'});
+document.addEventListener('scroll',()=>{$('ctx').style.display='none'},true);
+async function macDo(url,body,okMsg){try{await postJSON(url,body);act(okMsg,'good');load(panes.mac,panes.mac.path)}catch(e){act(e.message,'bad')}}
+async function renameDevice(){
+  const n=prompt('New name for '+cur+' in Patchbay (letters, numbers, spaces, - or _). This changes the name you type to confirm changes, too:',cur);
+  if(!n||n.trim()===cur)return;
+  try{const j=await postJSON('/api/devices/rename',{device:cur,new_name:n.trim()});act('Renamed '+cur+' to '+j.name+'.','good');
+    filesFor=null;location.hash='#/d/'+enc(j.name)+'/'+view}catch(e){act(e.message,'bad');alert(e.message)}}
 function tool(p,a){
   if(a==='up')return load(p,parentOf(p));if(a==='refresh')return load(p,p.path);if(a==='home')return load(p,'~');
+  if(a==='renamedev')return renameDevice();
   const items=picked(p);
+  if(p.side==='mac'&&a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)macDo('/api/files/mac_mkdir',{folder:p.path,name:n},'Made the folder '+n+'.');return}
+  if(p.side==='mac'&&a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
+    const n=prompt('New name for '+items[0].name+':',items[0].name);
+    if(n&&n!==items[0].name)macDo('/api/files/mac_rename',{path:items[0].path,new_name:n},'Renamed '+items[0].name+' to '+n+'.');return}
   if(a==='todev'){if(!items.length)return act('Select something on the left first.','bad');
     return plan({op:'upload',target:panes.dev.path,items:items.map(x=>({from:'mac',path:x.path}))})}
   if(a==='tomac'){if(!items.length)return act('Select something on the right first.','bad');return copyToMac(items,panes.mac.path)}
