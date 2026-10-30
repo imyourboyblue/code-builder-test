@@ -335,6 +335,14 @@ def apply_changes(cfg, planned):
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(json.dumps(raw, indent=2) + "\n")
         tmp.replace(p)
+    log = core.data_dir(cfg) / "settings-history.json"   # for the activity log's Undo
+    try:
+        hist = json.loads(log.read_text()) if log.exists() else []
+        hist.append({"id": len(hist) + 1, "time": folder.name, "changes": [k for f, k, o, n in planned],
+                     "files": sorted(str(f) for f in by_file), "backup": str(folder), "note": ""})
+        log.write_text(json.dumps(hist, indent=2))
+    except (OSError, ValueError):
+        pass
     return folder
 
 

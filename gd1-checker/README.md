@@ -101,6 +101,15 @@ Besides FTP, **Add a device** can reach a device's files with:
 Files, scans, backups, edits with undo and the rest work the same whichever way a device is reached. In "Found on
 your network", **Add as a device** picks the right way for you.
 
+
+### Activity log with Undo
+
+Click **🕘 Activity** at the top. It lists everything Patchbay did, newest first, for all devices or one: files
+changed, put back, renamed or deleted on a device, source code edits, settings changes, commands run on SSH devices,
+and backups. Changes that can be undone have an **Undo** button. The current version is backed up first and the
+undo is written down too, so you can undo an undo. Undoing a change on a device needs you to type its name.
+Commands run on a device can't be undone by Patchbay.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.

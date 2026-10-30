@@ -187,6 +187,7 @@ border:2px solid var(--line)}
   <span id="crumb"></span>
   <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a></nav>
   <span id="info"></span>
+  <button id="activity-btn" type="button" title="Everything Patchbay did, with Undo">🕘 Activity</button>
   <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
   <button id="reset" type="button" hidden>New chat</button>
   <button id="logout" type="button" hidden>Sign out</button>
@@ -673,6 +674,37 @@ async function openSetup(msg){
     if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
 }
 $('setup-btn').onclick=()=>openSetup();
+
+// ---- activity log with undo
+async function openActivity(msg,dev){
+  modal('<h3>🕘 Activity</h3><div id="act-body">Loading…</div>');$('box').classList.add('wide');
+  let j;try{j=await getJSON('/api/activity')}catch(e){$('act-body').textContent=e.message;return}
+  const devs=[...new Set(j.items.map(x=>x.device))].sort();
+  const draw=()=>{const f=$('act-dev')?$('act-dev').value:(dev||'');const items=j.items.filter(x=>!f||x.device===f);
+    $('act-list').innerHTML=items.length?items.map((x,i)=>'<div style="border-bottom:1px solid var(--line,#ddd);padding:7px 0">'+
+      '<div style="font-size:12.5px;color:var(--mute)">'+(x.when?new Date(x.when*1000).toLocaleString():'')+' · '+esc(x.device)+' · '+(x.where==='device'?'on the device':'on this Mac')+'</div>'+
+      '<div><b>'+esc(x.what)+'</b>'+(x.undone?' <span style="font-size:12px">↩ undone</span>':'')+'</div>'+
+      (x.detail?'<div style="font-size:13px">'+esc(x.detail)+'</div>':'')+
+      (x.undo?'<button class="act-undo" data-id="'+esc(x.id)+'" style="margin-top:4px">Undo</button><div class="act-c"></div>':'')+'</div>').join(''):
+      '<div class="empty">Nothing yet.</div>';
+    document.querySelectorAll('.act-undo').forEach(b=>b.onclick=()=>{const x=j.items.find(y=>y.id===b.dataset.id),box=b.nextElementSibling,dv=x.where==='device';
+      const wOff=dv&&!j.writes_on[x.device];
+      box.innerHTML='<div style="font-size:13.5px;margin-top:4px">'+esc(x.undo)+'. The current version is backed up first.</div>'+
+        (wOff?'<label style="display:flex;gap:6px;align-items:center;margin:4px 0;color:inherit"><input type="checkbox" class="act-w" checked style="width:auto"> Also turn on writing to '+esc(x.device)+' (it\'s off)</label>':'')+
+        '<div class="row" style="margin-top:4px">'+(dv?'Type <b>'+esc(x.device)+'</b> to confirm: <input class="act-t" autocomplete="off" style="width:120px">':'')+
+        '<button class="primary act-go">Undo it</button><button class="act-no">Cancel</button></div><div class="act-m" style="font-size:13px"></div>';
+      box.querySelector('.act-no').onclick=()=>box.innerHTML='';
+      box.querySelector('.act-go').onclick=async ev=>{ev.target.disabled=true;
+        try{const r=await postJSON('/api/activity/undo',{id:x.id,typed:dv?box.querySelector('.act-t').value:'',enable_writes:wOff&&box.querySelector('.act-w').checked});
+          openActivity(r.message,$('act-dev')?$('act-dev').value:'')}
+        catch(e){ev.target.disabled=false;box.querySelector('.act-m').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}}})};
+  $('act-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    '<div class="row" style="margin:0 0 6px"><label style="margin:0;display:flex;gap:6px;align-items:center;color:inherit">Device <select id="act-dev"><option value="">All devices</option>'+
+    devs.map(d=>'<option'+(d===dev?' selected':'')+'>'+esc(d)+'</option>').join('')+'</select></label></div>'+
+    '<div id="act-list" style="max-height:60vh;overflow:auto"></div><div class="row" style="margin-top:8px"><button onclick="closeModal()">Close</button></div>';
+  $('act-dev').onchange=draw;draw();
+}
+$('activity-btn').onclick=()=>openActivity('',(location.hash.match(/^#\/d\/([^/]+)/)||[])[1]?decodeURIComponent(location.hash.match(/^#\/d\/([^/]+)/)[1]):'');
 
 // ---- one-button update (git pull + restart)
 async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;

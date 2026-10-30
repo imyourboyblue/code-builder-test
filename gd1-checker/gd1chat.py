@@ -54,6 +54,7 @@ import collections
 import mac_app
 import netscan
 import securitycheck
+import activity
 import updater
 import selfcheck
 import devices
@@ -2707,6 +2708,10 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
             self.json(last_scan())
+        elif path == "/api/activity":
+            items = activity.collect(APP.registry)
+            writes = {cfg["device_name"]: bool(cfg.get("allow_writes")) for _, cfg in APP.registry.all()}
+            self.json({"items": items, "writes_on": writes})
         elif path == "/api/update":
             self.json(updater.status(fetch=q.get("fetch") != "0"))
         elif path == "/api/security":
@@ -2885,6 +2890,26 @@ class Handler(BaseHTTPRequestHandler):
             if job and not job.done:
                 STOP.set()
             self.json({"ok": True})
+        elif path == "/api/activity/undo":
+            item = str(data.get("id") or "")
+            name, kind = (item.split("|") + ["", ""])[:2]
+            job = APP.chat_job
+            if job and not job.done:
+                raise ToolError("Wait for the chat to finish (or press Stop) first.")
+            if kind == "device":
+                if (data.get("typed") or "").strip() != name:
+                    raise ToolError("Type %s exactly to undo a change on the device." % name)
+                cfg = APP.device(name).cfg()
+                if data.get("enable_writes") and not cfg.get("allow_writes"):
+                    planned = devices.plan_changes(APP.registry, APP.registry.path_for(name), {"allow_writes": True})
+                    devices.apply_changes(cfg, planned)
+                    APP.registry.status.clear()
+            try:
+                with WRITES:
+                    msg = activity.undo(APP.registry, item)
+            except activity.UndoError as e:
+                raise ToolError(str(e))
+            self.json({"message": msg})
         elif path == "/api/update/apply":
             job = APP.chat_job
             if job and not job.done:
