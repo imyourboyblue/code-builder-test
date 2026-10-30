@@ -38,6 +38,7 @@ import threading
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import hashlib
@@ -1444,7 +1445,36 @@ def t_latest(st, emit, a):
     try:
         return clip(firmware.latest_release(a.get("repo")))
     except (OSError, ValueError) as e:
-        raise ToolError("Couldn't get the releases: %s" % e)
+        hint = (" That repository name is probably wrong. Don't guess another one: use find_github_repo with the "
+                "program's name, or ask the user for the link." if "404" in str(e) else "")
+        raise ToolError("Couldn't get the releases: %s.%s" % (e, hint))
+
+
+@tool("find_github_repo",
+      "Find a homebrew program's GitHub repository by its name (searches Patchbay's list of well-known homebrew, "
+      "then GitHub). Use it instead of guessing owner/name. Send only the program's name, nothing personal.",
+      {"name": dict(S, description="The program's name, e.g. hb app store")}, ["name"])
+def t_find_repo(st, emit, a):
+    name = re.sub(r"[^\w .+-]", " ", (a.get("name") or "")).strip()[:60]
+    if not name:
+        raise ToolError("Give the program's name.")
+    known = library.guess_repo(name)
+    if known:
+        return "Well-known repository for %s: https://github.com/%s (check it with latest_release %s)" % (
+            name, known, known)
+    url = "https://api.github.com/search/repositories?per_page=5&q=" + urllib.parse.quote(name + " switch")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "patchbay/1.0",
+                                                   "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            items = json.loads(r.read()).get("items") or []
+    except (OSError, ValueError) as e:
+        raise ToolError("GitHub search didn't work (%s). Ask the user for the program's GitHub link." % e)
+    if not items:
+        return "GitHub has no match for %r. Ask the user for the program's GitHub link." % name
+    return "GitHub matches (most stars first; pick the one that fits, then latest_release):\n" + "\n".join(
+        "- %s (%s stars): %s" % (i.get("full_name"), i.get("stargazers_count"), (i.get("description") or "")[:100])
+        for i in sorted(items, key=lambda i: -(i.get("stargazers_count") or 0)))
 
 
 @tool("project_packages",
@@ -1886,7 +1916,7 @@ def confirm_self(st, p, emit):
     st.messages.append({"role": "user", "content": "[I confirmed the Patchbay change. %s]" % msg})
 
 
-for _n in ("check_build_tools", "latest_release", "web_search", "read_web_page"):
+for _n in ("check_build_tools", "latest_release", "find_github_repo", "web_search", "read_web_page"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
     HOME_HANDLERS[_n] = HANDLERS[_n]
@@ -2006,6 +2036,7 @@ are the usual cause on Switch; look up the library's changelog); build again unt
 the console for a background program).
   Downloading, project edits, builds and simple setup commands on the Mac may run by themselves (the tool result \
 says "Done automatically"); then just keep going. Writing to the device always needs the user's card.
+- Never guess a GitHub owner/name. Use the "Known source" line from prepare_homebrew_update, or find_github_repo.
 - One plan, one button: for any job that changes or runs something (installs, downloads, builds, copying to the \
 device, commands), first work everything out with read-only tools (prepare_homebrew_update, check_build_tools, \
 project_packages, project_read, latest_release...). Then call propose_plan ONCE with every step in order, the device \
@@ -2180,6 +2211,7 @@ def claude_system(system):
 
 
 # Steps that move a job forward (as opposed to only reading).
+LOOKUP_TOOLS = {"latest_release", "find_github_repo", "web_search", "read_web_page"}
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
@@ -2418,7 +2450,13 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 key = name + ":" + str(args.get("project") or args.get("path") or args.get("manager") or "")
                 fails[key] = fails.get(key, 0) + 1
                 st.last_stuck = (name, args, result)
-                if fails[key] == 2 and claude_ready():
+                if name in LOOKUP_TOOLS:
+                    # A failed lookup isn't worth a paid Claude question: look it up another way, or ask the user.
+                    lookups = sum(v for k, v in fails.items() if k.split(":")[0] in LOOKUP_TOOLS)
+                    if lookups >= 4:
+                        return ask_user(st, emit, "I couldn't find where that program's source code lives. If you "
+                                                  "know its GitHub link, paste it here.", tried)
+                elif fails[key] == 2 and claude_ready():
                     if stuck_help(st, emit, cfg, name, args, result):
                         return          # a card is waiting for the user
                 elif fails[key] >= 2:
@@ -2454,7 +2492,7 @@ STEP_WORDS = {
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
     "identify_firmware": "Working out the firmware", "save_firmware_name": "Saving the firmware name",
     "web_search": "Searching the web for {query}", "device_firmware": "Reading the firmware versions",
-    "latest_release": "Checking the newest release of {repo}", "check_build_tools": "Checking the build tools",
+    "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "check_build_tools": "Checking the build tools",
     "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
     "read_web_page": "Reading {url}", "setup_firmware_helper": "Preparing the helper app",
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",

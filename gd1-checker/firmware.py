@@ -230,6 +230,22 @@ KNOWN_HOMEBREW = {
     "nxdumptool": ("DarkMatterCore/nxdumptool", "nxdumptool"),
     "sys-patch": ("impeeza/sys-patch", "sys-patch"),
     "chiaki": ("streetpea/chiaki-ng", "Chiaki (PlayStation Remote Play); check which fork the user had"),
+    "hb-appstore": ("fortheusers/hb-appstore", "Homebrew App Store (appstore.nro)"),
+    "appstore": ("fortheusers/hb-appstore", "Homebrew App Store (appstore.nro)"),
+    "homebrew app store": ("fortheusers/hb-appstore", "Homebrew App Store (appstore.nro)"),
+    "atmosphere": ("Atmosphere-NX/Atmosphere", "Atmosphere (custom firmware)"),
+    "hekate": ("CTCaer/hekate", "hekate (bootloader)"),
+    "sphaira": ("ITotalJustice/sphaira", "sphaira (homebrew menu)"),
+    "edizon": ("WerWolv/EdiZon", "EdiZon (save editor / cheats)"),
+    "fizeau": ("averne/Fizeau", "Fizeau (screen colours)"),
+    "nxthemesinstaller": ("exelix11/SwitchThemeInjector", "NXThemes Installer (themes)"),
+    "linkalho": ("rdmrocha/linkalho", "linkalho (link accounts offline)"),
+    "retroarch": ("libretro/RetroArch", "RetroArch (emulators)"),
+    "ovl-sysmodules": ("WerWolv/ovl-sysmodules", "ovl-sysmodules (Tesla overlay)"),
+    "nx-activity-log": ("tallbl0nde/NX-Activity-Log", "NX Activity Log"),
+    "awoo-installer": ("Huntereb/Awoo-Installer", "Awoo Installer"),
+    "daybreak": ("Atmosphere-NX/Atmosphere", "Daybreak (system updater, part of Atmosphere)"),
+    "sigpatches": ("impeeza/sys-patch", "sigpatches: use sys-patch instead"),
 }
 
 
