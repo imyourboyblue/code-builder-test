@@ -109,6 +109,31 @@ class Claude:
         tmp.replace(self.file)
         return self.public()
 
+    def key_status(self, force=False):
+        """Whether the saved key works: "connected", "rejected", "none" or "unknown" (can't reach Anthropic).
+        Checked with Anthropic's free model list (costs nothing), at most every 10 minutes unless forced."""
+        key = self.settings().get("key") or ""
+        if not key:
+            return {"state": "none", "text": "Not connected: add your API key"}
+        cache = getattr(self, "_key_check", None)
+        if cache and not force and cache["end"] == key[-6:] and time.time() - cache["at"] < 600:
+            return cache["result"]
+        url = API_URL.rsplit("/messages", 1)[0] + "/models?limit=1"
+        req = urllib.request.Request(url, headers={"x-api-key": key, "anthropic-version": API_VERSION})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                r.read(2000)
+            result = {"state": "connected", "text": "Claude connected"}
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                result = {"state": "rejected", "text": "Key rejected: check it or make a new one"}
+            else:
+                result = {"state": "unknown", "text": "Couldn't check the key (Anthropic answered %s)" % e.code}
+        except OSError:
+            result = {"state": "unknown", "text": "Couldn't check the key (no internet?)"}
+        self._key_check = {"at": time.time(), "end": key[-6:], "result": result}
+        return result
+
     def has_key(self):
         return bool(self.settings().get("key"))
 

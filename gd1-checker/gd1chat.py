@@ -2403,6 +2403,12 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                                               % (str(e).rstrip(".") + ".", APP.computer)})
     messages = [{k: v for k, v in m.items() if k != "claude"} if "claude" in m else m for m in messages]
     model = model or cfg["ollama_model"]
+    if model == model_labels.AUTO:
+        model, why = model_labels.choose(ollama_url(cfg), messages)
+        if not model:
+            raise ToolError("Ollama has no models downloaded yet, so Automatic has nothing to pick from.")
+        if emit:
+            emit({"type": "status", "text": "Thinking... (%s)" % why})
     body = json.dumps({"model": model, "stream": True, "messages": messages, "tools": tools or TOOLS,
                        "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
@@ -3211,6 +3217,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
             self.json(APP.claude.public())
+        elif path == "/api/claude/status":
+            self.json(APP.claude.key_status(force=q.get("force") == "1"))
         elif path == "/api/claude/sent":
             self.json({"items": APP.claude.sent_list()})
         elif path == "/api/models":
@@ -3224,9 +3232,16 @@ value="1"><button>Restart Patchbay</button></form>""" % (
                 err = None
             except (OSError, ValueError, ToolError) as e:
                 models, err = [], "Couldn't ask Ollama for its models (%s). Is the Ollama app running?" % e
-            if cfg["ollama_model"] not in [m["name"] for m in models]:
+            if cfg["ollama_model"] not in [m["name"] for m in models] and cfg["ollama_model"] != model_labels.AUTO:
                 models.insert(0, {"name": cfg["ollama_model"], "size": ""})
             model_labels.label_all(models)
+            fast, strong = model_labels.picks([m["name"] for m in models])
+            if fast:
+                lab = dict((m["name"], m["label"]) for m in models)
+                why = model_labels.AUTO_LABEL[1] + (" Fast: %s. Stronger: %s." % (lab.get(fast), lab.get(strong))
+                                                     if strong != fast else "")
+                models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],
+                                  "why": why})
             self.json({"current": cfg["ollama_model"], "models": models, "error": err})
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()

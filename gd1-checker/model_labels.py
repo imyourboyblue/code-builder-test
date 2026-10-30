@@ -6,6 +6,11 @@ anywhere in the model's name (for example "27b" matches "qwen3.8:27b"). Models n
 from their size.
 """
 
+import json
+import re
+import time
+import urllib.request
+
 # Models on your Mac (Ollama). (text in the model name, menu label, one-line description)
 LOCAL = [
     ("35b-a3b", "Everyday help", "Fast and smart. Good for most questions, checks and fixes."),
@@ -58,3 +63,76 @@ def label_all(models):
 
 def cloud(model_id, fallback=""):
     return CLOUD.get(model_id, (fallback or model_id, ""))
+
+
+# ---------------------------------------------------------------- Automatic: pick the model for the job
+
+AUTO = "auto"
+AUTO_LABEL = ("Automatic", "Uses the fast model for questions and lookups, and the stronger one for builds, fixes "
+                           "and plans.")
+# Which local model does which job, by text in its name (first one installed wins). Edit to change the picks.
+FAST = ["35b-a3b", "30b-a3b", "a3b", "14b", "12b", "8b", "7b"]
+STRONG = ["27b", "32b", "70b", "35b", "30b", "coder"]
+HARD_WORDS = re.compile(r"(?i)\b(build|compile|rebuild|crash|debug|fix|repair|broken|error|fail|plan|update|"
+                        r"upgrade|install|source|code|makefile|cmake|patch)\w*")
+
+_TAGS = {"at": 0, "names": [], "url": None}
+
+
+def installed(ollama_url):
+    """Names of the models Ollama has (asked at most once a minute)."""
+    if _TAGS["url"] == ollama_url and time.time() - _TAGS["at"] < 60:
+        return _TAGS["names"]
+    try:
+        with urllib.request.urlopen(ollama_url + "/api/tags", timeout=8) as r:
+            names = [m.get("name") for m in json.loads(r.read()).get("models", []) if m.get("name")]
+    except (OSError, ValueError):
+        names = _TAGS["names"] if _TAGS["url"] == ollama_url else []
+    _TAGS.update(at=time.time(), names=names, url=ollama_url)
+    return names
+
+
+def _first(names, wants, avoid=()):
+    for w in wants:
+        for n in names:
+            low = n.lower()
+            if w in low and n not in avoid and not any(x in low for x in ("embed", "vl", "vision")):
+                return n
+    return None
+
+
+def picks(names):
+    """(fast model, strong model) from what's installed."""
+    chat = [n for n in names if not any(x in n.lower() for x in ("embed",))]
+    fast = _first(chat, FAST) or (chat[0] if chat else None)
+    strong = _first(chat, STRONG, avoid=(fast,)) or fast
+    return fast, strong
+
+
+def needs_strong(messages):
+    """(True/False, plain reason) for the next answer, from the chat so far."""
+    last_user, tools = "", []
+    for m in reversed(messages):
+        if m.get("role") == "tool":
+            tools.append(str(m.get("content") or ""))
+        if m.get("role") == "user" and not str(m.get("content") or "").startswith("["):
+            last_user = str(m.get("content") or "")
+            break
+        if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
+            return True, "carrying out a plan"
+    if any(re.search(r"(?i)\b(failed|error)\b", t[:400]) for t in tools[:4]):
+        return True, "a step failed"
+    m = HARD_WORDS.search(last_user)
+    if m:
+        return True, "%s job" % m.group(1).lower()
+    return False, "a quick question"
+
+
+def choose(ollama_url, messages):
+    """The model to use with Automatic on, and a short label like "Everyday help: a quick question"."""
+    fast, strong = picks(installed(ollama_url))
+    hard, why = needs_strong(messages)
+    model = strong if hard else fast
+    if not model:
+        return None, ""
+    return model, "%s model (%s)" % (local(model)[0], why)

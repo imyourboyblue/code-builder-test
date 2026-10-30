@@ -429,3 +429,22 @@ progress. Stop works any time. The rules that still apply:
 - A plan with risky commands (like `rm -rf`) needs the red "I understand" tick. A risky command that wasn't in the
   plan still gets its own card.
 - If a step fails and can't be fixed, the AI stops and says what went wrong.
+
+## Automatic model choice
+
+Pick **Automatic** in the AI model menu (it's the default for new setups). Patchbay uses the fast model for
+questions and lookups, and switches to the stronger model for builds, fixes, updates, plans, or after a step fails.
+The thinking bar shows which one it picked and why. Choose a model by hand in the same menu to turn this off. Which
+models count as fast or strong is set in `model_labels.py` (FAST and STRONG).
+
+## Claude connection badge
+
+The ☁ Claude button shows a small badge: green "connected", red "key rejected", or grey "not connected". The key is
+checked with Anthropic's free model list, so the check costs nothing. 🩺 Setup shows the same thing.
+
+## No guessing
+
+The chat AI looks things up instead of guessing. It checks the program's GitHub repository, README, build files and
+releases, and it double-checks a repository and devkitPro package names before it offers to download or install
+them. It only asks Claude (which costs money) after at least 3 of its own lookups haven't answered the question, and
+it sends a list of what it already tried.

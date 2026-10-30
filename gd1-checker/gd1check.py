@@ -123,7 +123,7 @@ def load_config(path):
     cfg.setdefault("max_files", 5000)
     cfg.setdefault("data_folder", str(HERE / "gd1-data"))
     cfg.setdefault("ollama_url", "http://localhost:11434")
-    cfg.setdefault("ollama_model", "qwen3.6:35b-a3b")
+    cfg.setdefault("ollama_model", "auto")     # Automatic: picks the model for each job
     cfg.setdefault("allow_writes", False)
     if cfg["protocol"] == "folder":
         cfg.setdefault("host", "this Mac")
@@ -728,10 +728,14 @@ def cmd_explain(cfg, args):
         "4) suggest what the program should change so a freeze can't damage files again (for example writing to "
         "a temporary file and renaming it, or using a database journal). Don't invent facts you can't see."
         % (report["device"], "\n\n".join(parts)))
-    body = json.dumps({"model": cfg["ollama_model"], "stream": False,
+    model = cfg["ollama_model"]
+    if model == "auto":
+        import model_labels
+        model = model_labels.picks(model_labels.installed(url))[1] or model
+    body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "user", "content": prompt}],
                        "options": {"num_ctx": 32768}}).encode()
-    say("Asking %s on this Mac (this can take a minute)..." % cfg["ollama_model"])
+    say("Asking %s on this Mac (this can take a minute)..." % model)
     req = urllib.request.Request(url + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=600) as r:

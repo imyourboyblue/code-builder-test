@@ -26,6 +26,14 @@ def _ollama(app):
         return bad("ollama", "Ollama (the AI)", "Can't reach Ollama: %s" % tlsfix.explain(e),
                    "The AI runs in the Ollama app. Make sure it's installed (ollama.com) and open.", fix="Start Ollama")
     want = cfg.get("ollama_model")
+    if want == "auto":
+        import model_labels
+        fast, strong = model_labels.picks(models)
+        if not fast:
+            return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
+                        "In Terminal run: ollama pull qwen3.6:35b-a3b")
+        return ok("ollama", "Ollama (the AI)", "Running. Automatic uses %s for quick things and %s for hard jobs."
+                  % (model_labels.local(fast)[0], model_labels.local(strong)[0]))
     if models and want and want not in models:
         return warn("ollama", "Ollama (the AI)", "Running, but the chosen model %s isn't downloaded. You have: %s"
                     % (want, ", ".join(models[:6]) or "none"),
@@ -117,7 +125,19 @@ def _secrets(app):
               % k["in_keychain"])
 
 
-CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _secrets]
+def _claude(app):
+    st = app.claude.key_status()
+    if st["state"] == "connected":
+        return ok("claude", "Claude (cloud AI)", "Connected. Your API key works (checked for free).")
+    if st["state"] == "none":
+        return ok("claude", "Claude (cloud AI)", "Not connected (optional). Add an API key with the ☁ Claude button.")
+    if st["state"] == "rejected":
+        return bad("claude", "Claude (cloud AI)", "Anthropic rejected the saved API key.",
+                   "Make a new key on platform.claude.com and paste it with the ☁ Claude button.")
+    return warn("claude", "Claude (cloud AI)", st["text"], "Check the internet connection, then look again.")
+
+
+CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _secrets, _claude]
 
 
 def migrate_secrets(app):
