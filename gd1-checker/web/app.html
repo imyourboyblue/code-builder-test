@@ -25,12 +25,16 @@ font-weight:600;color:#fff;font-size:12px}
 #home{flex-direction:column;overflow:hidden}
 .homecols{display:flex;flex:1;min-height:0;width:100%}
 .devs{flex:1;overflow-y:auto;padding:20px 16px;min-width:0}
-#homechat{width:440px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+#homechat{width:440px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;position:relative}
+#hc-grip{position:absolute;left:-5px;top:0;bottom:0;width:10px;cursor:col-resize;z-index:5}
+#hc-grip::after{content:"";position:absolute;left:4px;top:50%;width:2px;height:44px;margin-top:-22px;border-radius:2px;background:var(--line);transition:background .15s}
+#hc-grip:hover::after,#hc-grip.on::after{background:var(--me);height:100%;top:0;margin-top:0}
+body.hc-drag{cursor:col-resize;user-select:none}body.hc-drag iframe{pointer-events:none}
 #homechat .hc-head{padding:10px 16px;border-bottom:1px solid var(--line);font-weight:600}
 #homechat .hc-head small{display:block;font-weight:400;color:var(--mute);font-size:12.5px}
 #homechat #chat{flex:1;min-height:0}
 @media (max-width:900px){.homecols{flex-direction:column;overflow-y:auto}.devs{overflow:visible;flex:none}
-  #homechat{width:auto;border-left:0;border-top:1px solid var(--line);min-height:560px}}
+  #homechat{width:auto;border-left:0;border-top:1px solid var(--line);min-height:560px}#hc-grip{display:none}}
 .tile .go{font-size:12.5px;color:var(--me);font-weight:600}
 #home .wrap{max-width:1000px;width:100%;margin:0 auto}
 #home h2{font-size:15px;color:var(--mute);font-weight:500;margin:18px 0 10px}
@@ -48,6 +52,21 @@ font-weight:700;color:#fff;position:relative}
 .tile.add{border-style:dashed;cursor:pointer;justify-content:center;color:var(--mute);min-height:180px}
 .tile.add .pic{background:none;color:var(--mute);border:2px dashed var(--line)}
 .empty{color:var(--mute);font-size:14px}
+.hl-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px 6px;margin:14px 0 4px}
+.hl-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}.hl-h{font-weight:600;font-size:15px}
+.hl-pill{font-size:12.5px;padding:2px 10px;border-radius:999px;background:var(--code);color:var(--mute)}
+.hl-p-warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.hl-p-bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.hl-p-ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.hl-when{font-size:12px;color:var(--mute);margin-left:auto}
+.hl-row{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.hl-ic{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;background:var(--mute)}
+.hl-warn .hl-ic{background:var(--warn)}.hl-bad .hl-ic{background:var(--bad)}.hl-info .hl-ic{background:var(--me);font-style:italic;font-family:Georgia,serif}
+.hl-txt{flex:1;min-width:0}.hl-t{font-weight:600;font-size:14px}.hl-a{font-size:13px;color:var(--mute);margin-top:2px}
+.hl-btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.hl-btns button{white-space:nowrap}
+.hl-notes{border-top:1px solid var(--line);padding:6px 0}.hl-notes summary{cursor:pointer;font-size:13px;color:var(--mute);padding:2px 0}
+.hl-notes .hl-row:first-of-type{border-top:0}
+@media (max-width:600px){.hl-row{flex-wrap:wrap}.hl-btns{width:100%;justify-content:flex-start;padding-left:38px}}
 
 /* chat */
 #chat{flex-direction:column}
@@ -207,7 +226,7 @@ border:2px solid var(--line)}
   <h2 id="foundh" hidden>Found on your network <small id="foundwhen" style="font-weight:400;color:var(--mute);font-size:13px"></small>
     <button id="ns-again" style="font-size:13px;margin-left:8px">Look again</button></h2><div id="found"></div>
 </div></div>
-<aside id="homechat"><div class="hc-head">Ask Patchbay<small>About all your devices. Click a picture to chat about one device.</small></div></aside>
+<aside id="homechat"><div id="hc-grip" title="Drag to make the chat wider or narrower (double-click to reset)"></div><div class="hc-head">Ask Patchbay<small>About all your devices. Click a picture to chat about one device.</small></div></aside>
 </div></main>
 
 <main class="view" id="chat" style="position:relative">
@@ -322,8 +341,7 @@ let homeData=null;
 async function loadHome(force){
   try{homeData=await getJSON('/api/devices'+(force?'?force=1':''))}catch(e){$('homeinfo').innerHTML='<span style="color:var(--bad)">'+reachMsg(e)+'</span>';return}
   const d=homeData;$('logout').hidden=!d.remote;
-  $('homeinfo').textContent='Everything runs on '+d.computer+'.'+(d.remote?' You\'re using it from another computer.':'')+
-    (d.lan?'':' Only '+d.computer+' can open this page.');
+  $('homeinfo').textContent=d.remote?'You\'re using Patchbay on '+d.computer+' from another computer.':'';
   const on=d.devices.filter(x=>x.online),off=d.devices.filter(x=>!x.online);
   $('online').innerHTML=on.map(x=>tile(x,true)).join('')+
     `<div class="tile add" id="addtile"><div class="pic">+</div><div class="name">Add a device</div><div class="sub">by its IP address</div></div>`;
@@ -352,20 +370,51 @@ $('recheck').onclick=()=>loadHome(true);
 
 // ---- health checks (when the home screen opens, and when you press Check health; never on a timer)
 let healthLoaded=false;
-async function loadHealth(deep){const box=$('health');if(deep)box.innerHTML='<div class="empty">Checking every device…</div>';
+async function loadHealth(deep){const box=$('health');
+  if(deep)box.innerHTML='<div class="hl-card"><div class="hl-head"><span class="hl-h">Health</span><span class="hl-pill">Checking every device…</span></div></div>';
   let j;try{j=await getJSON('/api/health'+(deep?'?deep=1':''))}catch(e){box.textContent=e.message;return}
-  const IC={bad:'🔴',warn:'🟠',info:'ℹ️'},main=j.alerts.filter(a=>a.level!=='info'),info=j.alerts.filter(a=>a.level==='info');
-  const row=(a,i)=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line,#ddd)"><span>'+IC[a.level]+'</span><div style="flex:1"><b>'+esc(a.title)+'</b><div style="font-size:13px">'+esc(a.advice)+'</div></div>'+
-    (a.action?'<button class="hl-go" data-i="'+i+'">'+(a.action.go==='backups'?'Open Backups':a.action.go==='security'?'Open the report':'Ask the chat')+'</button>':'')+'</div>';
-  box.innerHTML='<h2 style="margin-top:6px">Health <small style="font-weight:400;color:var(--mute);font-size:13px">'+(main.length?main.length+' thing'+(main.length>1?'s':'')+' to look at':'all good')+(deep?' · checked just now':'')+'</small></h2>'+
-    j.alerts.map((a,i)=>a.level==='info'?'':row(a,i)).join('')+
-    (info.length?'<details style="margin-top:4px"><summary style="cursor:pointer;font-size:13px;color:var(--mute)">'+info.length+' note'+(info.length>1?'s':'')+'</summary>'+j.alerts.map((a,i)=>a.level==='info'?row(a,i):'').join('')+'</details>':'');
+  // the same problem on several devices becomes one row ("Switch and Ps5 have never had a full backup")
+  const groups=[];
+  j.alerts.forEach(a=>{const key=a.level+'|'+a.title.split(a.device).join('{}')+'|'+a.advice.split(a.device).join('{}')+'|'+(a.action?a.action.go:'');
+    const g=groups.find(x=>x.key===key);if(g)g.items.push(a);else groups.push({key,level:a.level,items:[a]})});
+  const names=l=>l.length<2?l[0]:l.slice(0,-1).join(', ')+' and '+l[l.length-1];
+  const gtitle=g=>{const a=g.items[0];if(g.items.length<2)return a.title;
+    return a.title.split(a.device).join(names(g.items.map(x=>x.device))).replace(/ has /,' have ').replace(/'s /,'\u2019s ').replace(/ isn't /,' aren\'t ').replace(/ is /,' are ')};
+  const label=(act,dev,many)=>{const w=act.go==='backups'?'Back up':act.go==='security'?'See report for':'Ask about';
+    return many?w+' '+esc(dev):(act.go==='backups'?'Open Backups':act.go==='security'?'Open the report':'Ask the chat')};
+  const ICON={bad:'!',warn:'!',info:'i'};
+  const row=g=>{const a=g.items[0],many=g.items.length>1;
+    return '<div class="hl-row hl-'+g.level+'"><span class="hl-ic">'+ICON[g.level]+'</span><div class="hl-txt"><div class="hl-t">'+esc(gtitle(g))+'</div>'+
+      '<div class="hl-a">'+esc(many?a.advice.split(a.device).join('the device'):a.advice)+'</div></div>'+
+      (a.action?'<div class="hl-btns">'+g.items.map(x=>'<button class="hl-go" data-i="'+j.alerts.indexOf(x)+'">'+label(x.action,x.device,many)+'</button>').join('')+'</div>':'')+'</div>'};
+  const main=groups.filter(g=>g.level!=='info'),info=groups.filter(g=>g.level==='info');
+  const n=main.reduce((s,g)=>s+1,0);
+  box.innerHTML='<div class="hl-card"><div class="hl-head"><span class="hl-h">Health</span>'+
+    (n?'<span class="hl-pill hl-p-'+(main.some(g=>g.level==='bad')?'bad':'warn')+'">'+n+' thing'+(n>1?'s':'')+' to look at</span>':'<span class="hl-pill hl-p-ok">\u2713 All good</span>')+
+    (deep?'<span class="hl-when">checked just now</span>':'')+'</div>'+
+    main.map(row).join('')+
+    (info.length?'<details class="hl-notes"><summary>'+info.length+' note'+(info.length>1?'s':'')+'</summary>'+info.map(row).join('')+'</details>':'')+'</div>';
   box.querySelectorAll('.hl-go').forEach(b=>b.onclick=()=>{const a=j.alerts[+b.dataset.i],act=a.action;
     if(act.go==='backups'){location.hash='#/d/'+enc(a.device)+'/backups';return}
     if(act.go==='security'){openSecurity({ip:act.ip,name:a.device,kind:''});return}
     location.hash='#/d/'+enc(a.device)+'/chat';setTimeout(()=>{if(busy)return;t.value=act.ask;send.click()},900)});
   healthLoaded=true}
 $('health-btn').onclick=()=>loadHealth(true);
+
+// ---- the home chat's width: drag its left edge (remembered on this computer)
+(function(){const pane=$('homechat'),grip=$('hc-grip');if(!grip)return;
+  const clamp=w=>Math.round(Math.max(320,Math.min(w,window.innerWidth*0.75)));
+  const setW=w=>{pane.style.width=clamp(w)+'px'};
+  try{const w=+localStorage.getItem('pb-homechat-w');if(w)setW(w)}catch(e){}
+  grip.addEventListener('pointerdown',e=>{e.preventDefault();grip.setPointerCapture(e.pointerId);grip.classList.add('on');document.body.classList.add('hc-drag');
+    const x0=e.clientX,w0=pane.getBoundingClientRect().width;
+    const move=ev=>setW(w0+(x0-ev.clientX));
+    const up=()=>{grip.removeEventListener('pointermove',move);grip.classList.remove('on');document.body.classList.remove('hc-drag');
+      try{localStorage.setItem('pb-homechat-w',parseInt(pane.style.width))}catch(e){}};
+    grip.addEventListener('pointermove',move);grip.addEventListener('pointerup',up,{once:true});grip.addEventListener('pointercancel',up,{once:true})});
+  grip.ondblclick=()=>{pane.style.width='';try{localStorage.removeItem('pb-homechat-w')}catch(e){}};
+  window.addEventListener('resize',()=>{if(pane.style.width)setW(parseInt(pane.style.width))});
+})();
 
 // ---- find devices on the network (the list stays on the home page until you look again)
 let scanTimer=null,scanData=null;
