@@ -17,4 +17,5 @@ your firmware, and looks after your devices with backups, health checks, securit
 It only uses Python's built-in parts, so there's nothing to install besides Python and Ollama. Your settings,
 passwords, backups and data are never committed (see `.gitignore`).
 
-The `gd1-checker` folder is left over from the old name. It only forwards old shortcuts to `patchbay/`.
+If you used PatchBay before it was renamed, start it once from Terminal with `cd patchbay && python3 patchbay.py`.
+That moves your old settings and data over and points the Dock app at the new folder.

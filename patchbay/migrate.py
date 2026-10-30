@@ -50,10 +50,34 @@ def _old_folder():
     return moved
 
 
+# Big folders full of device files: nothing in them saves a path to the data folder, so they are skipped
+# (reading them all made the first start take minutes).
+SKIP_DIRS = {"snapshots", "checking", "needs-attention", "library", "edits", "uploads", "backups",
+             "restore-unpacked", "chat-files", "staged", "project-backups"}
+PENDING = HERE / "data-cache" / "rename-pending.json"
+
+
+def _small_json(folder, depth=3):
+    """The JSON files PatchBay itself writes (history, Undo backups list, chats), not copies from devices."""
+    folder = Path(folder)
+    if depth < 0 or not folder.is_dir():
+        return
+    try:
+        items = list(folder.iterdir())
+    except OSError:
+        return
+    for p in items:
+        if p.is_dir():
+            if p.name not in SKIP_DIRS and not p.is_symlink():
+                yield from _small_json(p, depth - 1)
+        elif p.suffix == ".json" and p.stat().st_size < 20_000_000:
+            yield p
+
+
 def _rewrite_paths(folder, old, new):
     """Paths saved inside JSON files (history, backups for Undo, chats) point at the new folder."""
     old_s, new_s = json.dumps(old)[1:-1], json.dumps(new)[1:-1]
-    for p in Path(folder).rglob("*.json"):
+    for p in _small_json(folder):
         try:
             text = p.read_text()
         except (OSError, UnicodeDecodeError):
@@ -84,16 +108,29 @@ def _data_folder(notes):
     if os.path.expanduser(cur) in old_paths:
         old, new = Path(os.path.expanduser(cur)), Path(os.path.expanduser(NEW_DATA))
         if old.is_dir() and not new.exists():
-            shutil.move(str(old), str(new))
-            _rewrite_paths(new, str(old), str(new))
+            PENDING.parent.mkdir(parents=True, exist_ok=True)
+            PENDING.write_text(json.dumps({"old": str(old), "new": str(new)}))
+            shutil.move(str(old), str(new))      # same disk: a quick rename, nothing is copied
             notes.append("Moved your saved data from %s to %s." % (cur, NEW_DATA))
         if new.exists() or not old.is_dir():
             raw["data_folder"] = NEW_DATA
             changed = True
-    if changed:
+    if changed:     # saved before the slower step below, so a quit halfway can't lose track of the data
         tmp = cfg_path.with_name("config.json.tmp")
         tmp.write_text(json.dumps(raw, indent=2) + "\n")
         tmp.replace(cfg_path)
+    _finish_rewrite()
+
+
+def _finish_rewrite():
+    """Update the saved paths (resumes at the next start if PatchBay was closed halfway)."""
+    try:
+        job = json.loads(PENDING.read_text())
+    except (OSError, ValueError):
+        return
+    if Path(job["new"]).is_dir():
+        _rewrite_paths(job["new"], job["old"], job["new"])
+    PENDING.unlink()
 
 
 def run():

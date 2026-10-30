@@ -12,6 +12,15 @@ let FOLDER = "__FOLDER__"
 let PORT = "__PORT__"
 let HOME_URL = URL(string: "http://127.0.0.1:\(PORT)/")!
 
+// The folder PatchBay is in. If it moved next door (the old "gd1-checker" folder became "patchbay"), use that.
+let RUN_FOLDER: String = {
+    let fm = FileManager.default
+    if fm.fileExists(atPath: FOLDER + "/patchbay.py") { return FOLDER }
+    let sibling = (FOLDER as NSString).deletingLastPathComponent + "/patchbay"
+    if fm.fileExists(atPath: sibling + "/patchbay.py") { return sibling }
+    return FOLDER
+}()
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
     var window: NSWindow!
     var web: WKWebView!
@@ -53,11 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         DispatchQueue.global().async {
             if !self.isUp() { self.startServer() }
             var tries = 0
-            while !self.isUp() && tries < 120 { Thread.sleep(forTimeInterval: 0.5); tries += 1 }
-            let failed = tries >= 120
+            while !self.isUp() && tries < 360 {     // up to 3 minutes (the first start after an update can be slow)
+                if let p = self.server, !p.isRunning { tries = 360; break }   // it stopped: no point waiting
+                Thread.sleep(forTimeInterval: 0.5); tries += 1
+            }
+            let failed = tries >= 360
             DispatchQueue.main.async {
                 if failed {
-                    self.status.stringValue = "PatchBay didn't start. See data-cache/patchbay.log in \(FOLDER)."
+                    self.status.stringValue = "PatchBay didn't start. See data-cache/patchbay.log in \(RUN_FOLDER)."
                     return
                 }
                 self.status.isHidden = true
@@ -86,8 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         let p = Process()
         p.executableURL = URL(fileURLWithPath: PYTHON)
         p.arguments = ["patchbay.py", "--no-browser"]
-        p.currentDirectoryURL = URL(fileURLWithPath: FOLDER)
-        let logs = URL(fileURLWithPath: FOLDER).appendingPathComponent("data-cache")
+        p.currentDirectoryURL = URL(fileURLWithPath: RUN_FOLDER)
+        let logs = URL(fileURLWithPath: RUN_FOLDER).appendingPathComponent("data-cache")
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
         let logFile = logs.appendingPathComponent("patchbay.log")
         if !FileManager.default.fileExists(atPath: logFile.path) {
