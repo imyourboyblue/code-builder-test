@@ -593,8 +593,8 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         emit({"type": "note", "text": result})
         return "Done without a card (approved in the plan). " + result
     if not cfg.get("allow_writes"):
-        extra = (" Writing is turned off right now, so even after you confirm it will be refused until "
-                 "\"allow_writes\" is true in config.json.")
+        extra = (" Writing is off for this device right now. The card has a box (ticked) that turns it on when "
+                 "the user confirms, so they don't need to change any settings. Don't send them to config.json.")
     else:
         extra = ""
     pid = uuid.uuid4().hex[:8]
@@ -2054,7 +2054,7 @@ PAST = {"check": "Checked", "look": "Looked", "read": "Read", "scann": "Scanned"
         "open": "Opened", "us": "Used"}
 
 
-def do_confirm(st, pid, typed, emit):
+def do_confirm(st, pid, typed, emit, enable_writes=False):
     cfg = st.cfg()
     p = st.pending.get(pid)
     if not p:
@@ -2069,6 +2069,14 @@ def do_confirm(st, pid, typed, emit):
         return confirm_on_mac(st, cfg, p, emit, typed)
     if typed.strip() != cfg["device_name"]:
         raise ToolError("You need to type %s exactly to confirm." % cfg["device_name"])
+    if enable_writes and not cfg.get("allow_writes"):
+        # The user ticked "turn on writing" on the card and typed the device name.
+        planned = devices.plan_changes(APP.registry, APP.registry.path_for(cfg["device_name"]), {"allow_writes": True})
+        devices.apply_changes(cfg, planned)
+        APP.registry.status.clear()
+        cfg = (APP.device(p["device"]) if p.get("device") else st).cfg()
+        emit({"type": "note", "text": "Writing is now on for %s. You can turn it off again any time by asking me to "
+                                      "turn off writing." % cfg["device_name"]})
     del st.pending[pid]
     entry, result = device_write(cfg, p, emit)
     emit({"type": "answer", "text": result})
@@ -2935,7 +2943,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         chat_turn(st, text, emit)
                 elif path == "/api/confirm":
-                    do_confirm(st, data.get("id", ""), data.get("typed", ""), emit)
+                    do_confirm(st, data.get("id", ""), data.get("typed", ""), emit, bool(data.get("enable_writes")))
                 else:
                     do_cancel(st, data.get("id", ""), emit)
             except Stopped:

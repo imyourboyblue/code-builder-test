@@ -454,14 +454,15 @@ function card(ev,closed){
   if(ev.on_mac)return macCard(ev,closed);
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
     '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
-    (ev.writes_on?'':'<div style="color:var(--bad)">Writing is turned off for '+esc(ev.device)+', so this will be refused until you set "allow_writes": true in its settings file.</div>')+
+    (/\.(nro|nsp|ovl|3dsx|elf)$/i.test(ev.remote||'')?'<div>If this app is open on '+esc(ev.device)+', close it first.</div>':'')+
+    (ev.writes_on?'':'<label style="display:block;margin-top:6px"><input type="checkbox" class="ew" checked style="width:auto"> Also turn on writing for '+esc(ev.device)+' (it\'s off right now, and this change needs it). You can turn it off again any time by asking.</label>')+
     (ev.diff?'<details open><summary>Exact change</summary><pre>'+diffHtml(ev.diff)+'</pre></details>':'')+
     '<div class="row">Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off"><button class="primary">Confirm</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
   const [inp,ok,no]=[c.querySelector('input'),...row.querySelectorAll('button')];
   ok.onclick=async()=>{if(busy)return;if(inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
-    close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value})};
+    const ew=c.querySelector('.ew');close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value,enable_writes:!!(ew&&ew.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
