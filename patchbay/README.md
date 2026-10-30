@@ -137,6 +137,10 @@ A scan only reads the device. It downloads each file, checks it, and deletes it 
 kept** of files that are fine. PatchBay keeps only a tiny fingerprint of each one (size and checksum), so the next
 scan can tell what changed.
 
+While it scans, each line shows the time left, like "about 8 to 12 min left". PatchBay works this out from how
+long each file really takes on that device (a small cost per file, plus its size divided by the speed). The range
+gets narrower as it goes and follows the device if it slows down. The next scan starts from the last scan's numbers.
+
 Files with problems are kept on the Mac and listed on the device's **Needs attention** tab, with what's wrong. You
 decide what happens to each:
 - **Keep as is**: it's fine for you. That exact version won't be flagged again. If it changes later, it's checked

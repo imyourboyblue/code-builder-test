@@ -688,6 +688,78 @@ def _forget_copy(item):
             pass
 
 
+class Eta:
+    """Time left in a scan, from how long each file really takes: a fixed cost per file (asking the device,
+    checking it) plus its size divided by the speed. Both are learned as the scan goes, with recent files counting
+    most, and start from this device's last scan if there was one. Gives a range while it's still unsure."""
+
+    def __init__(self, files, total_bytes, prior=None):
+        self.files_left, self.bytes_left = files, total_bytes
+        self.total_files = files
+        self.n = 0
+        prior = prior or {}
+        # weighted sums for fitting seconds = per_file + bytes * per_byte
+        self.w = self.sx = self.sy = self.sxx = self.sxy = 0.0
+        self.per_file = prior.get("per_file")
+        self.per_byte = prior.get("per_byte")
+        self.started = time.time()
+
+    def add(self, size, seconds):
+        size = max(0, size or 0)
+        self.files_left -= 1
+        self.bytes_left = max(0, self.bytes_left - size)
+        self.n += 1
+        d = 0.97                     # older files count a little less each time: follows a device that slows down
+        self.w, self.sx, self.sy = self.w * d + 1, self.sx * d + size, self.sy * d + seconds
+        self.sxx, self.sxy = self.sxx * d + size * size, self.sxy * d + size * seconds
+        var = self.sxx * self.w - self.sx * self.sx
+        if self.n >= 4 and var > 1e-9 * self.w * self.w * max(1.0, (self.sx / self.w) ** 2):
+            b = (self.sxy * self.w - self.sx * self.sy) / var
+            a = (self.sy - b * self.sx) / self.w
+            if b >= 0 and a >= 0:
+                self.per_byte, self.per_file = b, a
+                return
+        # sizes too alike to tell the two apart: the average file time, scaled by how big the rest are
+        avg_t, avg_b = self.sy / self.w, self.sx / self.w
+        rest_b = self.bytes_left / float(self.files_left) if self.files_left > 0 and self.bytes_left else avg_b
+        scale = (0.3 + 0.7 * rest_b / avg_b) if avg_b > 0 else 1.0
+        self.per_file, self.per_byte = avg_t * scale, 0.0
+
+    def seconds_left(self):
+        return self.files_left * (self.per_file or 0) + self.bytes_left * (self.per_byte or 0)
+
+    def text(self):
+        guess = self.n < 3            # too few files of its own yet: only the last scan's numbers (if any)
+        if self.per_file is None or (guess and self.n):
+            return "estimating…"
+        left = self.seconds_left()
+        done = 1 - (self.files_left / float(self.total_files or 1))
+        spread = 0.5 if guess else max(0.1, 0.45 * (1 - done))     # wider early on, and when it's a guess
+        return _span(left * (1 - spread), left * (1 + spread))
+
+    def stats(self):
+        if self.per_file is None or self.n < 5:
+            return None
+        return {"per_file": self.per_file, "per_byte": self.per_byte, "files": self.n}
+
+
+def _span(lo, hi):
+    if hi < 45:
+        return "less than a minute left"
+    m_lo, m_hi = max(1, int(round(lo / 60.0))), max(1, int(round(hi / 60.0)))
+    if m_hi >= 120:
+        h_lo, h_hi = lo / 3600.0, hi / 3600.0
+        return "about %s left" % ("%.0f hours" % h_hi if round(h_lo) == round(h_hi) else
+                                  "%.0f to %.0f hours" % (max(1, round(h_lo)), round(h_hi)))
+    if m_lo == m_hi:
+        return "about %d min left" % m_hi
+    return "about %d to %d min left" % (m_lo, m_hi)
+
+
+def scan_stats_file(root):
+    return Path(root) / "scan-speed.json"
+
+
 def cmd_scan(cfg, args):
     """Download each file, check it, and delete it again unless it has a problem. Only a fingerprint (size and
     checksum) is kept for clean files, so the next scan can spot changes. Problem files are kept in
@@ -724,13 +796,15 @@ def cmd_scan(cfg, args):
     report = {"device": cfg["device_name"], "host": cfg["host"], "port": dev.port,
               "time": stamp, "snapshot": "", "files": [], "skipped": skipped}
     stopped, kept = False, 0
+    eta = Eta(len(files), sum(f["size"] or 0 for f in files), _json_file(scan_stats_file(root), {}))
     try:
         for i, f in enumerate(files, 1):
             if should_stop():
                 stopped = True
                 break
             local = local_path_for(work, f["path"])
-            say("[%d/%d] %s" % (i, len(files), f["path"]))
+            say("[%d/%d] %s · %s" % (i, len(files), f["path"], eta.text()))
+            t0 = time.time()
             try:
                 dev.download(f["path"], local)
             except Cancelled:
@@ -769,6 +843,7 @@ def cmd_scan(cfg, args):
             prints[f["path"]] = {"size": real_size, "sha256": sha, "modified": f["modified"], "ok": not serious, "checked": stamp}
             report["files"].append({"path": f["path"], "size": prints[f["path"]]["size"], "sha256": sha,
                                     "problems": probs})
+            eta.add(real_size, time.time() - t0)
     finally:
         try:
             dev.close()
@@ -778,6 +853,8 @@ def cmd_scan(cfg, args):
         shutil.rmtree(str(work), ignore_errors=True)     # nothing is left behind, even after Stop
         _save_json(fingerprints_file(root), prints)
         _save_json(attention_file(root), att)
+        if eta.stats():
+            _save_json(scan_stats_file(root), eta.stats())     # the next scan's first guess
     if stopped:
         report["stopped"] = "Stopped after %d of %d files." % (len(report["files"]), len(files))
     report["kept"] = kept
