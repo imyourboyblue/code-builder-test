@@ -365,11 +365,11 @@ function renderFound(){const j=scanData;if(!j)return;const r=j.results||[];
       '<div style="font-size:13.5px">'+(d.port_names.length?'Open: '+esc(d.port_names.join(', ')):'No open doors Patchbay knows yet')+'</div>'+
       (d.access.length?'<ul style="margin:4px 0">'+d.access.map(a=>'<li>'+esc(a.how)+'</li>').join('')+'</ul>':'')+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">'+(d.ftp_port&&!sv?'<button class="primary ns-add" data-i="'+i+'">Add as a device</button>':'')+
-      '<button class="ns-ask" data-i="'+i+'">How do I connect to it?</button></div></details>'}).join('');
+      '<button class="ns-ask" data-i="'+i+'">Help me see its files</button></div></details>'}).join('');
   document.querySelectorAll('.ns-add').forEach(b=>b.onclick=()=>{const d=r[+b.dataset.i];addDevice();$('a-host').value=d.ip;
     $('a-ports').value=String(d.ftp_port)+(d.ftp_port===21?', 5000':', 21');$('a-name').value=(d.name||'').replace(/[^A-Za-z0-9 _-]/g,'').slice(0,20)});
   document.querySelectorAll('.ns-ask').forEach(b=>b.onclick=async()=>{const d=r[+b.dataset.i];if(busy)return;
-    const q='How do I connect to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+'? Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'.';
+    const q='Help me connect Patchbay to the '+(d.name?d.name+' ('+d.kind+')':d.kind)+(d.model?', model '+d.model:'')+(d.vendor&&d.vendor!=='Private address'?' made by '+d.vendor:'')+' at '+d.ip+' so I can look at its files. Open on it: '+(d.port_names.join(', ')||'nothing Patchbay knows')+'. Find the documented way for Patchbay to see its files (FTP, SFTP/SSH, file sharing, or a developer mode or debug bridge) and walk me through turning it on. If this kind of device has no way to see its files, say so plainly and tell me what it does allow. No screen mirroring or casting steps.';
     add('msg me',esc(q),q);await chatStream('/api/chat',{text:q})})}
 $('netscan-btn').onclick=startScan;$('ns-again').onclick=startScan;
 

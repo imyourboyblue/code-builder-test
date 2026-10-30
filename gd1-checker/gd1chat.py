@@ -1543,6 +1543,13 @@ device say in plain words what it is and the normal way to connect (its "Ways in
 that has no open door yet, look up that model's documented way to turn on access (developer mode, network/remote \
 settings, file sharing) with web_search using generic words, and walk them through it step by step. Connect only \
 with the user's own login. Never guess or try passwords, and never try to break in.
+- When the user wants to connect Patchbay to a found device or "see its files": the goal is a way for PATCHBAY to \
+read the device's files (FTP, SFTP/SSH, SMB file sharing, or a documented developer mode / debug bridge such as ADB \
+on Android/Google/Fire TV). Look up that model's documented options with web_search (generic words, no addresses). \
+Don't give screen mirroring, casting, AirPlay or remote-control app steps: they don't help. If the platform has no \
+file access at all (for example a Roku: its developer mode only installs your own apps; a PlayStation), say that \
+plainly in one or two sentences and say what it does allow. When there is a way, walk them through turning it on, \
+then add it with add_device (FTP) or explain the next step.
 - For "search <address> port <n>" or "find/connect <address>": check_address. If an FTP server answers and it isn't \
 a saved device, offer add_device (ask for a short name if they didn't give one). If they mean a saved device moved, \
 propose_settings for its host/ports, then test_connection.
