@@ -54,6 +54,7 @@ import collections
 import mac_app
 import netscan
 import securitycheck
+import updater
 import selfcheck
 import devices
 import firmware
@@ -2626,6 +2627,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
         elif path == "/api/netscan":
             self.json(last_scan())
+        elif path == "/api/update":
+            self.json(updater.status(fetch=q.get("fetch") != "0"))
         elif path == "/api/security":
             ip = (q.get("ip") or "").strip()
             job = SECURITY.get(ip)
@@ -2802,6 +2805,18 @@ class Handler(BaseHTTPRequestHandler):
             if job and not job.done:
                 STOP.set()
             self.json({"ok": True})
+        elif path == "/api/update/apply":
+            job = APP.chat_job
+            if job and not job.done:
+                raise ToolError("Wait for the chat to finish (or press Stop) first, then update.")
+            try:
+                msg = updater.update()
+            except RuntimeError as e:
+                raise ToolError(str(e))
+            restart = msg.startswith("Updated")
+            if restart:
+                updater.restart_soon()
+            self.json({"message": msg, "restarting": restart})
         elif path == "/api/security/start":
             if not data.get("owner_confirmed"):
                 raise ToolError("First confirm that this device is yours (or that you're allowed to check it).")
@@ -3342,6 +3357,13 @@ def main():
         if not sys.stdin.isatty():
             sys.exit("Opening the app to your network needs a password. Run: python3 patchbay.py --set-password")
         APP.access.ask_for_new_password()
+    if os.environ.pop("PATCHBAY_RESTARTED", None):
+        for _ in range(20):   # just restarted after an update: the old copy may still be letting go of the port
+            try:
+                make_server(lan, port).server_close()
+                break
+            except OSError:
+                time.sleep(0.5)
     try:
         server = make_server(lan, port)
     except OSError:

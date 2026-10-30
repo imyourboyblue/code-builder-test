@@ -635,6 +635,7 @@ async function openSetup(msg){
       '<div style="font-size:13.5px">'+(a.app?'✅ The Patchbay app is in your Applications folder. Drag it onto the Dock to start Patchbay with one click.':'Make a Patchbay app you can double-click or keep in the Dock, so you don\'t need Terminal.')+'</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the Patchbay app')+'</button>'+
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>':'')+
+    '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
     '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
   const say=t=>$('sc-msg').innerHTML=t;
@@ -643,11 +644,33 @@ async function openSetup(msg){
   const ap=$('sc-app');if(ap)ap.onclick=async()=>{try{await postJSON('/api/macapp',{action:'make_app'});openSetup('Made the Patchbay app. Open Applications in Finder and drag Patchbay onto the Dock.')}catch(e){say(esc(e.message))}};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'Patchbay will now start by itself when you log in.':'Patchbay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
   $('sc-again').onclick=()=>openSetup();
+  checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
     say(okc?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Select the text below and copy it.')+'';
     if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
 }
 $('setup-btn').onclick=()=>openSetup();
+
+// ---- one-button update (git pull + restart)
+async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;
+  try{u=await getJSON('/api/update')}catch(e){box.textContent=e.message;return}
+  if(!$('sc-upd'))return;
+  if(u.error){box.innerHTML='<span style="color:var(--bad)">'+esc(u.error)+'</span>';return}
+  if(!u.behind){box.innerHTML='✅ Patchbay is up to date'+(u.current?' <span style="color:var(--mute)">(version '+esc(u.current)+')</span>':'')+'.';setUpdBadge(false);return}
+  setUpdBadge(true);
+  box.innerHTML='<b>An update is ready</b> ('+u.behind+' change'+(u.behind>1?'s':'')+'):<ul style="margin:4px 0;max-height:140px;overflow:auto">'+u.changes.map(c=>'<li>'+esc(c)+'</li>').join('')+'</ul>'+
+    (u.edited.length?'<div style="color:var(--bad)">These Patchbay files were changed on this Mac, so it won\'t update by itself: '+esc(u.edited.join(', '))+'</div>':
+     '<button class="primary" id="sc-update">Update and restart</button> <span style="font-size:12.5px;color:var(--mute)">Your settings, devices, backups and chats stay as they are.</span>');
+  const b=$('sc-update');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Updating…';
+    try{const r=await postJSON('/api/update/apply',{});
+      if(!r.restarting){box.textContent=r.message;return}
+      box.textContent='Updated. Restarting Patchbay…';
+      await new Promise(ok=>setTimeout(ok,2500));
+      for(let i=0;i<60;i++){try{await getJSON('/api/update?fetch=0');location.reload();return}catch(e){await new Promise(ok=>setTimeout(ok,1000))}}
+      box.textContent='Patchbay didn\'t come back by itself. Start it again from the Dock or Terminal.'}
+    catch(e){b.disabled=false;b.textContent='Try again';box.insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>')}}}
+function setUpdBadge(on){const s=$('setup-btn');if(s)s.textContent=on?'🩺 Setup · update ready':'🩺 Setup'}
+setTimeout(async()=>{try{const u=await getJSON('/api/update');setUpdBadge(!u.error&&u.behind>0)}catch(e){}},4000);
 
 // ---- Claude (cloud help with your own API key)
 function money(x){return '$'+(x<0.995?(+x).toFixed(x<0.1?3:2):(+x).toFixed(2))}

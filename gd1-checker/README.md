@@ -78,6 +78,13 @@ databases, or FTP that lets anyone in. You get a plain-language report, worst fi
 **Help me fix this** walks you through it in the chat. It only looks: no break-in attempts and no password guessing
 (the only login it tries is FTP's public "anonymous" one). It only checks private addresses on your own network.
 
+
+### Updating
+
+Open **🩺 Setup**. Under **Updates** it says whether a newer Patchbay is on GitHub and lists what changed; click
+**Update and restart**. (The Setup button says "update ready" when there is one.) Your settings, devices, backups and
+chats aren't touched. If you edited a Patchbay file by hand, it tells you which one and doesn't update.
+
 ### Device pictures
 
 - Every device you've added gets a round picture. The ones that answer on the network right now are at the top, with a green dot. Click one to open it.
