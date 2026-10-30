@@ -359,6 +359,23 @@ def _nums(v):
     return tuple(int(x) for x in m.group(0).split(".")) if m else None
 
 
+def code_since(repo, tag, fetch=None):
+    """How much newer the source code is than a release: (number of changes, date of the newest one), or None."""
+    def get(url):
+        req = urllib.request.Request(url, headers={"User-Agent": "patchbay/1.0", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())
+    fetch = fetch or get
+    try:
+        branch = fetch("https://api.github.com/repos/%s" % repo).get("default_branch") or "HEAD"
+        c = fetch("https://api.github.com/repos/%s/compare/%s...%s" % (repo, tag, branch))
+    except Exception:
+        return None
+    commits = c.get("commits") or []
+    newest = ((commits[-1].get("commit") or {}).get("committer") or {}).get("date", "")[:10] if commits else ""
+    return int(c.get("ahead_by") or 0), newest
+
+
 def compare(installed, latest):
     """'newer' if latest is newer, 'same', 'older' (yours is newer, e.g. your own build), or 'unknown'."""
     a, b = _nums(installed), _nums(latest)

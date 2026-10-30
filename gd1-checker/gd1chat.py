@@ -1340,11 +1340,54 @@ def t_prepare(st, emit, a):
         "%s in %s (build: %s, output: %s, goes to: %s)" % (p["name"], p["folder"], p["build"], p.get("output") or "?",
                                                          p.get("device_path") or "?") for p in mine)
         or "None yet: get it with propose_get_source (a known source address above, or find it with web_search)."))
-    parts.append("NEXT, without asking the user anything: if a newer release of the program already exists, say so "
-                 "and offer it. Otherwise get the source (propose_get_source), read its README / build files, "
-                 "set_project with the right output file and device_path (where it was found above), "
-                 "propose_build, fix errors, and propose_install.")
+    up_to_date = _release_check(st, emit, name, found, parts)
+    if up_to_date:
+        parts.append("NEXT: the device already has the newest RELEASE. Say that in one or two plain sentences, and that "
+                     "the buttons below let them build the newest source code instead (it can have fixes made since "
+                     "the release, but it's less tested), or keep what they have. Then STOP and wait for their choice. "
+                     "Don't just say there's nothing to do.")
+    else:
+        parts.append("NEXT, without asking the user anything: if a newer release of the program already exists, say "
+                     "so and offer it. Otherwise get the source (propose_get_source), read its README / build files, "
+                     "set_project with the right output file and device_path (where it was found above), "
+                     "propose_build, fix errors, and propose_install.")
     return clip("\n\n".join(parts))
+
+
+def _release_check(st, emit, name, found, parts):
+    """If the program on the device is already the newest release, say how much newer its source code is and offer
+    to build that (instead of stopping at "nothing newer"). True when it's already the newest release."""
+    repo = (re.findall(r"latest_release (\S+)\)", found) or [None])[0]
+    best = re.search(r"Best match: [^(]*\((.*?)\)", found)
+    have = re.search(r"version v?(\d+(?:\.\d+)*)", best.group(1)) if best else None
+    if not repo or not have:
+        return False
+    try:
+        tag, date, url = library.latest_tag(repo)
+    except Exception:
+        return False
+    if not tag or library.compare(have.group(1), tag) not in ("same", "older"):
+        return False
+    emit({"type": "status", "text": "Checking for newer source code of %s..." % repo})
+    since = library.code_since(repo, tag)
+    if since and since[0]:
+        code = "Its source code has %d change%s since that release (newest %s)." % (
+            since[0], "" if since[0] == 1 else "s", since[1] or "date unknown")
+    elif since:
+        code = "Its source code hasn't changed since that release."
+    else:
+        code = "Couldn't check whether its source code changed since the release."
+    parts.append("== Update check ==\nOn the device: %s. Newest release of %s: %s (%s). That's the same, so there's "
+                 "no newer release. %s" % (have.group(1), repo, tag, date or "?", code))
+    m = re.search(r"name ([^,]+)", best.group(1))
+    prog = m.group(1).strip() if m else name
+    opts = [{"label": "Build the newest code" if since and since[0] else "Rebuild it from source anyway",
+             "send": "Build %s from its newest source code (%s), not the release, for my firmware, and install it. "
+                     "Back up the current one first." % (prog, repo)},
+            {"label": "Keep what I have", "send": "Keep the %s I have. No changes." % prog}]
+    emit({"type": "choices", "text": "**%s %s is already the newest release** (%s). %s" % (
+        prog, have.group(1), date or "", code.replace("Its source code", "The source code")), "options": opts})
+    return True
 
 
 @tool("latest_release",
