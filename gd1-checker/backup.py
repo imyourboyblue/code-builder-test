@@ -87,21 +87,23 @@ def list_backups(cfg):
         out.append({"name": d.name, "path": str(d), "complete": bool(man.get("complete")),
                     "files": len(man.get("files", {})), "bytes": sum(f["size"] or 0 for f in man.get("files", {}).values()),
                     "failed": len(man.get("failed", [])), "started": man.get("started"), "finished": man.get("finished"),
-                    "linked": man.get("linked", 0), "folders": man.get("folders", ["/"])})
+                    "linked": man.get("linked", 0), "folders": man.get("folders", ["/"]),
+                    "partial": bool(man.get("partial"))})
     return out
 
 
 def unfinished(cfg):
     """The newest backup, if it never finished. Only the newest one is carried on."""
-    backups = list_backups(cfg)
+    backups = [b for b in list_backups(cfg) if not b["partial"]]
     return backups[0] if backups and not backups[0]["complete"] else None
 
 
 class Job:
     """One backup running in the background. The page asks for .status() every second or two."""
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, items=None):
         self.cfg = cfg
+        self.items = items     # None = everything; else [{"path": ..., "kind": "file"|"dir"}] picked by the user
         self.stop_flag = threading.Event()
         self.thread = None
         self.lock = threading.Lock()
@@ -126,7 +128,7 @@ class Job:
 
     def _run_safe(self):
         try:
-            run(self.cfg, self)
+            run(self.cfg, self, self.items)
         except BackupError as e:
             self.set(phase="failed", message=str(e))
         except SystemExit as e:
@@ -135,15 +137,15 @@ class Job:
             self.set(phase="failed", message="%s: %s" % (type(e).__name__, e))
 
 
-def run(cfg, job):
+def run(cfg, job, items=None):
     root = backup_root(cfg)
     check_folder(root.parent)
     root.mkdir(parents=True, exist_ok=True)
-    folders = cfg.get("backup_folders") or ["/"]
-    skip = cfg.get("backup_exclude") or []
+    folders = [i["path"] for i in items] if items else (cfg.get("backup_folders") or ["/"])
+    skip = [] if items else (cfg.get("backup_exclude") or [])
 
-    # Carry on an unfinished backup, or start a new one.
-    left = unfinished(cfg)
+    # Carry on an unfinished backup, or start a new one. Backups of picked items always start fresh.
+    left = None if items else unfinished(cfg)
     if left:
         dest = Path(left["path"])
         man = read_manifest(dest)
@@ -151,17 +153,20 @@ def run(cfg, job):
     else:
         dest = core.unique_dir(root, core.now_stamp())
         man = {"device": cfg["device_name"], "host": cfg["host"], "folders": folders, "started": core.now_stamp(),
-               "finished": None, "complete": False, "files": {}, "failed": []}
+               "finished": None, "complete": False, "files": {}, "failed": [], "partial": bool(items)}
         write_manifest(dest, man)
     job.set(folder=str(dest))
 
-    # The newest complete backup, so unchanged files can be linked instead of copied.
-    prev_dir, prev_files = None, {}
-    for b in list_backups(cfg):
-        if b["complete"] and b["path"] != str(dest):
-            prev_dir = Path(b["path"])
-            prev_files = (read_manifest(prev_dir) or {}).get("files", {})
-            break
+    # Earlier complete backups (newest first), so unchanged files can be linked instead of copied.
+    earlier = {}    # device path -> (backup folder, its manifest entry)
+    for b in list_backups(cfg)[:30]:
+        if not b["complete"] or b["path"] == str(dest):
+            continue
+        for path, entry in (read_manifest(b["path"]) or {}).get("files", {}).items():
+            earlier.setdefault(path, (Path(b["path"]), entry))
+        if not b["partial"]:
+            break      # a full backup has everything older ones had
+    prev_files = {p: e for p, (d, e) in earlier.items()}
 
     dev = core.GD1(cfg)
     dev.connect(quiet=True)
@@ -170,7 +175,8 @@ def run(cfg, job):
         job.set(phase="listing", message="Listing every folder on %s..." % cfg["device_name"])
         todo, seen = [], set()
         for folder in folders:
-            for path, size, modified in dev.walk(folder):
+            kind = next((i.get("kind") for i in items or [] if i["path"] == folder), "dir")
+            for path, size, modified in (one_file(dev, folder) if kind == "file" else dev.walk(folder)):
                 if job.stop_flag.is_set():
                     break
                 if path in seen or any(fnmatch.fnmatch(path, p) or fnmatch.fnmatch(PurePosixPath(path).name, p)
@@ -207,7 +213,7 @@ def run(cfg, job):
             local.parent.mkdir(parents=True, exist_ok=True)
             try:
                 old = prev_files.get(path)
-                if prev_dir and same(old, size, modified) and link(core.local_path_for(prev_dir, path), local):
+                if old and same(old, size, modified) and link(core.local_path_for(earlier[path][0], path), local):
                     job.set(linked=job.st["linked"] + 1, bytes_done=job.st["bytes_done"] + (size or 0))
                     man["linked"] = man.get("linked", 0) + 1
                 else:
@@ -243,12 +249,25 @@ def run(cfg, job):
             return
         man["complete"], man["finished"] = True, core.now_stamp()
         write_manifest(dest, man)
-        msg = "Backup finished: %d files, %s, in %s." % (len(man["files"]), core.human_size(total), dest)
+        msg = "Backup %sfinished: %d files, %s, in %s." % ("of the picked items " if items else "", len(man["files"]),
+                                                            core.human_size(total), dest)
         if failed:
             msg += " %d file%s couldn't be read (listed in %s)." % (len(failed), "" if len(failed) == 1 else "s", MANIFEST)
         job.set(phase="done", message=msg, current="")
     finally:
         dev.close()
+
+
+def one_file(dev, path):
+    """(path, size, modified) for a single file, read from its folder's listing."""
+    folder, name = str(PurePosixPath(path).parent), PurePosixPath(path).name
+    try:
+        for n, kind, size, modified in dev._list(folder):
+            if n == name and kind == "file":
+                return [(path, size, modified)]
+    except ftplib.error_perm:
+        pass
+    return [(path, None, None)]
 
 
 def same(old, size, modified):

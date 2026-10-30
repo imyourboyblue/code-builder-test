@@ -84,23 +84,26 @@ To build Switch homebrew, the Mac Studio needs devkitPro installed (from devkitp
 
 ### Update a homebrew app for your firmware (like Chiaki)
 
-In a device's chat, click **Update a homebrew app so it works with my firmware**, or just ask, for example "Update Chiaki so it works with my Atmosphère". The AI then works through these steps, telling you what it's doing:
+In a device's chat, click **Update a homebrew app so it works with my firmware**, or just ask in your own words, for example "Update FTPD light so it works with my firmware". You don't need to know file names or versions: the AI finds them on the device. It then does the whole job, telling you in one line what it's doing:
 
-1. It reads which firmware and Atmosphère version the console runs, and the app's current version.
-2. It looks up the newest releases of Atmosphère, libnx and the app itself. If a newer release of the app already supports your firmware, it tells you first.
-3. It checks the build tools on the Mac Studio (devkitPro, libnx). If something is missing or old, it gives you one command to paste into Terminal, like `sudo dkp-pacman -Syu`. Commands that need your Mac password always go through you.
-4. It downloads the app's source code from GitHub into `~/Patchbay-projects/`. You click **Download it** on a card first.
-5. It runs the setup steps the project needs, like `cmake` or `git submodule update`. Each one is a card you click **Run it** on.
-6. It builds, reads the errors, fixes the code, and builds again until it works. Each code change is a card you click **Save the change** on.
-7. It installs the new .nro on the console. You type the device's name, and the old .nro is backed up first. Then test it on the console.
+1. It finds the app on the device from your words (apps in `/switch`, and background programs in `/atmosphere/contents`), reads the firmware and Atmosphère versions, and looks up the newest releases of Atmosphère, libnx and the app. If a newer release of the app already supports your firmware, it tells you first.
+2. It checks the build tools on the Mac Studio. If something is missing or old, it gives you one command to paste into Terminal, like `sudo dkp-pacman -Syu`. Commands that need your Mac password always go through you.
+3. It downloads the app's source code into `~/Patchbay-projects/`, runs simple setup steps, builds, reads the errors, fixes the code and builds again until it works. These steps happen on the Mac by themselves (every changed code file is backed up first). To get a card for each one again, ask "turn off automatic Mac steps".
+4. It installs the new file on the console. You type the device's name on a card, and the old file is backed up first. Then test it on the console (restart it for a background program).
 
 Only general things (version numbers, library names, error messages) are looked up on the web. Your code and files are never sent anywhere.
+
+### Homebrew on any device
+
+The same works for homebrew on other systems: 3DS, Wii, Wii U, PS Vita, PSP, PS4, Linux handhelds, or your own devices. Patchbay knows the basics of these (where apps live, file types, build tools). For anything it doesn't know, the AI researches it on the web with general questions, then saves what it learned on the Mac (in `<data folder>/_platforms/`) so next time it already knows.
 
 ### What firmware is it running?
 
 Each device's picture shows its firmware or operating system once it's known, for example `FreeBSD 14.1-RELEASE` or `Switch 19.0.1, Atmosphère 1.8.0`. New devices are identified automatically. For others, click **Identify firmware** on the tile, or ask in the chat "What firmware is GD1 running?".
 
 It works on any device. It reads version files (like `/etc/os-release`, `freebsd-version` or Android's `build.prop`), the FTP server's greeting, folder names, and the greetings of the device's other services (SSH, web pages). It only reads. If that isn't enough, the AI searches the web for the most telling clue (only the clue, such as a version string) and saves the answer.
+
+**Switch:** the console doesn't keep its firmware number in a normal file on the SD card, so over FTP Patchbay reads Atmosphère's crash and error reports (the newest one wins). Those can be old, so for exact, current versions Patchbay can put a tiny helper app on the console, **Patchbay system info**. Ask "what firmware is my Switch on?" and confirm the card. Then open the app once from the Homebrew Menu: it saves the firmware and Atmosphère versions to `/switch/patchbay-sysinfo/sysinfo.txt` and closes. Patchbay notices by itself and carries on. Run it again after you update the console. The app only reads system information. Its source is in `helper/patchbay-sysinfo/`.
 
 ### Change settings by asking
 
@@ -114,7 +117,7 @@ It shows a card with every old and new value. Click **Save settings**. The setti
 
 ### Files
 
-Each device has a **Files** tab. The left side is the Mac Studio's folders, the right side is the device's folders.
+Each device has a **Files** tab. The left side is the Mac Studio's folders, the right side is the device's folders. The buttons at the top switch between **Both**, **Mac Studio only** and **device only**; Patchbay remembers your choice.
 
 - Double-click a folder to open it. Click to select, Cmd+click or Shift+click to select several.
 - **Copy from the device:** drag files or folders from the right side to the left side (or onto a folder on the left). This only reads the device. It never overwrites anything on the Mac: a second copy gets a name like `game (2).db`.
@@ -132,6 +135,8 @@ Writing to a device still needs `"allow_writes": true` in that device's settings
 ### Backups
 
 Each device has a **Backups** tab for making a full copy of everything on it.
+
+**Just some files or folders:** in the Files tab, select them on the device side and click **Back up** (or right-click > **Back up**). The Backups tab's **Back up only some files or folders…** button takes you there. You can also ask in the chat, e.g. "back up /switch/ftpd". These go into the same backup folder, marked "Only …" in the list.
 
 1. Click **Change…** and pick where backups go: any folder on the Mac Studio, or an external drive or network share (they're under **Drives**). Make the folder in Finder first if it doesn't exist yet. Each device gets its own folder inside, named after it.
 2. Click **Back up now**. You see how many files and how much data is done, the speed, and roughly how long is left. You can close the page, or switch to the laptop, and the backup keeps going on the Mac Studio.

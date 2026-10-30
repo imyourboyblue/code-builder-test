@@ -51,6 +51,7 @@ import backup
 import devices
 import firmware
 import nro
+import platforms
 import projects
 import filemanager as fm
 import webauth
@@ -373,7 +374,29 @@ def t_folders(st, emit, a):
 
 # ---- write proposals: these never write. They make a card you must confirm.
 
+AUTO_KINDS = ("get_source", "project_edit", "build")
+# Setup commands that only touch the project folder may run without a card when automatic Mac steps are on.
+SAFE_COMMAND = re.compile(r"^(git (submodule|pull|fetch|checkout|switch|status|log|tag)|cmake|make|ninja|meson|mkdir|ls)"
+                          r"\b[^;|&<>`$\\]*$")
+
+
+def runs_by_itself(cfg, kind, extra):
+    if not cfg.get("auto_mac_steps", True):
+        return False
+    if kind in AUTO_KINDS:
+        return True
+    cmd = (extra or {}).get("command") or ""
+    return kind == "command" and bool(SAFE_COMMAND.match(cmd.strip())) and ".." not in cmd
+
+
 def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, on_mac=False, extra_fields=None):
+    if on_mac and runs_by_itself(cfg, kind, extra_fields):
+        # Automatic Mac step (setting auto_mac_steps): project files are backed up first, downloads go to a new folder.
+        p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
+        emit({"type": "note", "text": "On %s: %s" % (APP.computer if APP else "the Mac", summary)})
+        short, detail = run_mac_step(st, cfg, p, emit)
+        emit({"type": "note", "text": short})
+        return "Done automatically (no card needed). " + detail
     if on_mac:
         # Changes on the Mac (project files, builds): pressing Confirm is enough.
         pid = uuid.uuid4().hex[:8]
@@ -684,7 +707,7 @@ def t_show_settings(st, emit, a):
     cfg = st.cfg()
     rows = ["Settings for %s (file %s):" % (cfg["device_name"], Path(st.config_path).name)]
     for k, (kind, what) in devices.SETTINGS.items():
-        rows.append("  %s = %s   (%s)" % (k, devices.show(k, cfg.get(k)), what))
+        rows.append("  %s = %s   (%s)" % (k, devices.show(k, cfg.get(k, True if k == "auto_mac_steps" else None)), what))
     return "\n".join(rows)
 
 
@@ -780,11 +803,206 @@ def t_search_web(st, emit, a):
         raise ToolError("The search didn't work: %s" % e)
 
 
+def clean_items(items):
+    """Picked files/folders for a backup of just those: [{"path": "/switch/ftpd", "kind": "dir"}]."""
+    if not items:
+        return None
+    out = []
+    for i in items:
+        path = norm(i.get("path") if isinstance(i, dict) else i)
+        kind = (i.get("kind") if isinstance(i, dict) else None) or "dir"
+        if path and path not in [o["path"] for o in out]:
+            out.append({"path": path, "kind": "file" if kind == "file" else "dir"})
+    return out or None
+
+
+def start_backup(cfg, items=None):
+    """Start a backup (everything, or just the picked items) in the background. Only reads the device."""
+    with APP.lock:
+        job = APP.backups.get(cfg["device_name"])
+        if job and job.status()["running"]:
+            raise ToolError("A backup of %s is already running. Wait for it, or stop it on the Backups tab."
+                            % cfg["device_name"])
+        folder = backup.backup_root(cfg).parent
+        if not cfg.get("backup_folder"):
+            folder.mkdir(exist_ok=True)   # the default folder is made for you; a chosen one must exist
+        try:
+            backup.check_folder(folder)
+        except backup.BackupError as e:
+            raise ToolError(str(e))
+        job = APP.backups[cfg["device_name"]] = backup.Job(cfg, clean_items(items))
+        job.start()
+    return job
+
+
+@tool("backup",
+      "Back up files from the device to the user's backup folder on the Mac: give paths for just those files or "
+      "folders, or nothing for a full backup. Only reads the device, so no card is needed. Runs in the background; "
+      "progress shows on the Backups tab.",
+      {"paths": {"type": "array", "items": S, "description": "Files or folders on the device; leave out for everything"}})
+def t_backup(st, emit, a):
+    cfg = st.cfg()
+    paths = a.get("paths") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    items = []
+    if paths:
+        dev = core.GD1(cfg)
+
+        def kinds():
+            dev.connect(quiet=True)
+            try:
+                for p in paths:
+                    p = norm(p)
+                    parent, name = str(PurePosixPath(p).parent), PurePosixPath(p).name
+                    entry = next((e for e in dev._list(parent) if e[0] == name), None) if p != "/" else ("/", "dir")
+                    if not entry:
+                        raise ToolError("%s isn't on %s." % (p, cfg["device_name"]))
+                    items.append({"path": p, "kind": entry[1]})
+            finally:
+                dev.close()
+        run_captured(emit, kinds)
+        if len(items) != len(paths):
+            raise ToolError("Couldn't look at those paths on %s." % cfg["device_name"])
+    start_backup(cfg, items or None)
+    return ("Started backing up %s to %s. It runs in the background; the Backups tab shows progress." % (
+        ", ".join(i["path"] for i in items) if items else "everything on " + cfg["device_name"],
+        backup.backup_root(cfg)))
+
+
+@tool("platform_notes",
+      "What Patchbay knows about a kind of device that runs homebrew (switch, 3ds, wiiu, wii, vita, psp, ps4, "
+      "linux-handheld, or any platform saved before): where apps live, file types, build tools, firmware. If it "
+      "knows nothing, research it on the web and save it with save_platform_notes.",
+      {"platform": dict(S, description="e.g. switch, vita, or the name of the user's own device")}, ["platform"])
+def t_platform(st, emit, a):
+    return platforms.describe(st.cfg(), a.get("platform"))
+
+
+@tool("save_platform_notes",
+      "Save facts you researched about a kind of device (generic facts only, no user files), so next time you "
+      "already know. Only writes a notes file on the Mac; no card needed.",
+      {"platform": S, "notes": {"type": "object", "description": "e.g. {\"apps\": \"where apps live\", "
+                                "\"files\": \"app file types\", \"toolchain\": \"how to build\", "
+                                "\"install\": \"how to install\", \"firmware\": \"how to tell the version\"}"}},
+      ["platform", "notes"])
+def t_save_platform(st, emit, a):
+    notes = a.get("notes")
+    if isinstance(notes, str):
+        try:
+            notes = json.loads(notes)
+        except ValueError:
+            notes = {"note": notes}
+    try:
+        k, f = platforms.save(st.cfg(), a.get("platform"), notes)
+    except ValueError as e:
+        raise ToolError(str(e))
+    return "Saved notes for %s (%s). platform_notes will show them from now on." % (k, f)
+
+
 @tool("device_firmware",
-      "Find out which firmware and custom firmware (Atmosphère, hekate) the device runs, and which homebrew is "
-      "installed in /switch. Best effort; read-only.")
+      "Find out the Switch's firmware and Atmosphère versions from the SD card (the helper app's file, crash and "
+      "error reports), plus hekate, the homebrew in /switch and the background programs. Read-only.")
 def t_firmware(st, emit, a):
-    return firmware.device_report(st.cfg())
+    emit({"type": "status", "text": "Reading version clues on %s..." % st.cfg()["device_name"]})
+    rep = firmware.device_report(st.cfg())
+    fw = re.search(r"(?m)^FIRMWARE: (\d+\.\d+\.\d+)", rep)
+    ams = re.search(r"(?m)^ATMOSPHERE: (\d+\.\d+\.\d+)", rep)
+    if fw:
+        APP.registry.set_firmware(st.cfg(), "Switch %s%s" % (fw.group(1), ", Atmosphère " + ams.group(1) if ams else ""))
+    return rep
+
+
+HELPER_NRO = Path(__file__).resolve().parent / "helper" / "patchbay-sysinfo" / "prebuilt" / "patchbay-sysinfo.nro"
+
+
+@tool("setup_firmware_helper",
+      "Put Patchbay's tiny helper app on the Switch (/switch/patchbay-sysinfo). When the user opens it once from "
+      "the Homebrew Menu, it saves the exact firmware and Atmosphère versions to the SD card, and Patchbay picks "
+      "them up by itself. Does NOT write: shows a card the user confirms.")
+def t_helper(st, emit, a):
+    cfg = st.cfg()
+    if not HELPER_NRO.is_file():
+        raise ToolError("The helper app file is missing from Patchbay's folder (%s). Run git pull." % HELPER_NRO)
+    return add_pending(st, emit, "helper", cfg, firmware.HELPER_NRO, HELPER_NRO, "Patchbay helper app",
+                       "Put the Patchbay helper app on %s (%s, %s). Then open it once from the Homebrew Menu."
+                       % (cfg["device_name"], firmware.HELPER_NRO, core.human_size(HELPER_NRO.stat().st_size)))
+
+
+@tool("find_homebrew",
+      "Find the homebrew the user means from their words (e.g. 'FTPD light', 'chiaki', 'sys-clk'): searches the "
+      ".nro apps in /switch and the background programs in /atmosphere/contents, and says where its source code "
+      "probably lives. Read-only. Use this instead of asking the user which file.",
+      {"name": dict(S, description="The user's words for the program")}, ["name"])
+def t_find_hb(st, emit, a):
+    emit({"type": "status", "text": "Looking for %s on %s..." % (a.get("name"), st.cfg()["device_name"])})
+    try:
+        return firmware.find_homebrew(st.cfg(), a.get("name"))
+    except ValueError as e:
+        raise ToolError(str(e))
+
+
+@tool("prepare_homebrew_update",
+      "First step of updating or changing a homebrew program on ANY device. In one go: finds the program on the "
+      "device from the user's words, works out the kind of device and its firmware, gives what Patchbay knows "
+      "about that platform, checks newest releases (Switch), checks the Mac's build tools, and lists matching "
+      "source projects. Read-only.",
+      {"name": dict(S, description="The user's words for the program, e.g. 'FTPD light'")}, ["name"])
+def t_prepare(st, emit, a):
+    cfg, name = st.cfg(), (a.get("name") or "").strip()
+    parts = []
+    emit({"type": "status", "text": "Looking for %s on %s..." % (name, cfg["device_name"])})
+    try:
+        found = firmware.find_homebrew(cfg, name)
+    except ValueError as e:
+        found = "Couldn't search the device: %s" % e
+    parts.append("== The program ==\n" + found)
+    switch = "/atmosphere/" in found or "Background program" in found or "App /switch/" in found
+    if not switch:
+        dev = core.GD1(cfg)
+
+        def tops():
+            dev.connect(quiet=True)
+            try:
+                return firmware._names(dev, "/") or []
+            finally:
+                dev.close()
+        top, _ = run_captured(emit, tops)
+        switch = "atmosphere" in [t.lower() for t in top or []]
+    if switch:
+        emit({"type": "status", "text": "Reading firmware versions..."})
+        rep = t_firmware(st, emit, {})
+        parts.append("== The console ==\n" + "\n".join(l for l in rep.splitlines()
+                                                        if not l.startswith(("Homebrew in", "Top-level"))))
+        parts.append("== Platform ==\n" + platforms.describe(cfg, "switch"))
+        repos = ["Atmosphere-NX/Atmosphere", "switchbrew/libnx"] + re.findall(r"latest_release (\S+)\)", found)[:1]
+        for repo in repos:
+            emit({"type": "status", "text": "Checking the newest %s..." % repo})
+            try:
+                parts.append("== Newest %s ==\n%s" % (repo, firmware.latest_release(repo)[:1800]))
+            except (OSError, ValueError) as e:
+                parts.append("== %s == couldn't check (%s)" % (repo, e))
+    else:
+        emit({"type": "status", "text": "Working out what %s runs..." % cfg["device_name"]})
+        report, guess = firmware.identify(cfg)
+        if guess:
+            APP.registry.set_firmware(cfg, guess)
+        parts.append("== The device ==\n" + report[:2500])
+        plat = platforms.guess(top or [])
+        parts.append("== Platform ==\n" + (platforms.describe(cfg, plat) if plat else
+                     "Patchbay doesn't know this kind of device yet. Research it (generic questions only): where its "
+                     "homebrew lives, the file format, the build toolchain, how to install. Then save_platform_notes."))
+    parts.append("== Build tools on the Mac ==\n" + t_tools(st, emit, {}))
+    mine = [p for p in projects.all_projects(cfg) if firmware._match(name, p["name"]) or firmware._match(p["name"], name)]
+    parts.append("== Source projects already on the Mac ==\n" + ("\n".join(
+        "%s in %s (build: %s, output: %s, goes to: %s)" % (p["name"], p["folder"], p["build"], p.get("output") or "?",
+                                                         p.get("device_path") or "?") for p in mine)
+        or "None yet: get it with propose_get_source (a known source address above, or find it with web_search)."))
+    parts.append("NEXT, without asking the user anything: if a newer release of the program already exists, say so "
+                 "and offer it. Otherwise get the source (propose_get_source), read its README / build files, "
+                 "set_project with the right output file and device_path (where it was found above), "
+                 "propose_build, fix errors, and propose_install.")
+    return clip("\n\n".join(parts))
 
 
 @tool("latest_release",
@@ -799,10 +1017,10 @@ def t_latest(st, emit, a):
 
 
 @tool("check_build_tools",
-      "Check what's installed on the Mac for building Switch homebrew (devkitPro, libnx, devkitA64, portlibs) and "
-      "their versions. Read-only.")
+      "Check what's installed on the Mac for building homebrew: devkitPro (Switch, 3DS, Wii, Wii U) with package "
+      "versions, VitaSDK, PSPSDK, OpenOrbis, compilers, cmake, git. Read-only.")
 def t_tools(st, emit, a):
-    return projects.toolchain_report()
+    return projects.toolchain_report() + "\n\nOther build tools:\n" + platforms.toolchains()
 
 
 @tool("propose_get_source",
@@ -1032,20 +1250,34 @@ it's a different device than this one, offer add_device; if they mean this devic
 host/ports. After a change to host or ports, use test_connection.
 - To tell what firmware or operating system a device runs, use identify_firmware first. If its guess is vague, \
 look up the most specific clue with web_search (generic text only), then save_firmware_name with a short answer.
-- When the user asks to update a homebrew program for their firmware (like a newer Atmosphère), follow these \
-steps, telling the user briefly what you're doing at each one:
-  1. device_firmware to learn the firmware and Atmosphère versions (ask the user if it's unclear), and read_file \
-the program's .nro to see its current version.
-  2. latest_release for Atmosphere-NX/Atmosphere and switchbrew/libnx, and for the program's own repository, to \
-see what changed. Maybe a newer release of the program already supports the firmware: then say so first.
-  3. check_build_tools. If devkitPro or libnx is missing or old, give the user the exact Terminal command \
-(e.g. sudo dkp-pacman -Syu) and wait until they say it's done.
-  4. Get the source: list_projects, or propose_get_source with the program's public git address.
-  5. Read the project's build instructions (README, Makefile, CMakeLists.txt). Use propose_command for setup steps \
-(cmake configure, git submodule update) and set_project to save the right build command and output file.
-  6. propose_build. Read the errors; fix the code with propose_project_edit (libnx renames and changed functions \
-are the usual cause; look up the libnx changelog); build again until it builds cleanly.
-  7. propose_install (the device's current file is backed up first). Then ask the user to test it on the console.
+- Never ask the user for something a tool can find: the firmware and Atmosphère versions (device_firmware), \
+which file a program is (find_homebrew: the user's own words like "FTPD light" are enough), its version \
+(read_file), or its source code address (find_homebrew, then web_search). If something truly can't be found, \
+pick the most likely answer, say which you picked, and carry on.
+- If the firmware version isn't on the SD card, offer setup_firmware_helper once (a tiny app the user opens one \
+time from the Homebrew Menu). Don't wait for it: building with the newest libnx works for current firmware.
+- Homebrew works the same way on any device (Switch, 3DS, Wii, Wii U, Vita, PSP, PS4, Linux handhelds, the user's \
+own devices): platform_notes says what Patchbay knows about that kind of device. When it doesn't know something \
+(where apps live, the file format, the toolchain, how to install or tell the firmware), research it yourself with \
+web_search and read_web_page using generic questions only (never the user's files, code, names or addresses), \
+then save_platform_notes so it's known next time. Don't ask the user to research.
+- When the user asks to update or change a homebrew program (for example for newer firmware), do the whole job \
+yourself, saying in one short line what you're doing at each step:
+  1. prepare_homebrew_update with the user's words for the program. It finds the program, the versions, the newest \
+releases, the build tools and any source project. If a newer release of the program already supports the \
+firmware, say so first.
+  2. If the build tools are missing or old, give the user the exact Terminal commands (e.g. sudo dkp-pacman -Syu \
+for devkitPro; research other platforms' toolchains) and continue once they say it's done.
+  3. Get the source with propose_get_source (or use the existing project).
+  4. Read its README, Makefile or CMakeLists.txt. Use propose_command for setup steps (cmake configure, git \
+submodule update) and set_project for the build command, the built file and device_path (where find_homebrew \
+found it on the device; a background program's file is /atmosphere/contents/<id>/exefs.nsp).
+  5. propose_build. Read the errors; fix the code with propose_project_edit (libnx renames and changed functions \
+are the usual cause on Switch; look up the library's changelog); build again until it builds cleanly.
+  6. propose_install (the device's current file is backed up first). Then tell the user how to test it (restart \
+the console for a background program).
+  Downloading, project edits, builds and simple setup commands on the Mac may run by themselves (the tool result \
+says "Done automatically"); then just keep going. Writing to the device always needs the user's card.
 - If something fails, say what failed in one line and what to try next.
 
 Scanning settings: folders %(folders)s. Writing to the device is currently %(writes)s."""
@@ -1158,6 +1390,49 @@ def do_confirm(st, pid, typed, emit):
     emit({"type": "answer", "text": result})
     st.messages.append({"role": "user", "content": "[I confirmed the %s of %s on the card. Result: %s]"
                                                    % (p["kind"], p["remote"], result)})
+    if p["kind"] == "helper" and entry:
+        wait_for_helper(st, cfg, emit)
+
+
+HELPER_WAIT = 300
+
+
+def read_helper(cfg):
+    dev = core.GD1(cfg)
+    try:
+        dev.connect(quiet=True)
+        try:
+            return firmware._fetch(dev, firmware.HELPER_FILE, 64 * 1024)
+        finally:
+            dev.close()
+    except (SystemExit, ftplib.Error, OSError, EOFError):
+        return None
+
+
+def wait_for_helper(st, cfg, emit):
+    """After the helper app is installed: wait for the user to open it on the console, then read the versions."""
+    before = read_helper(cfg)
+    emit({"type": "answer", "text": "Now on the Switch: open the Homebrew Menu and start \"Patchbay system info\". "
+                                    "I'll notice by myself when it has run. (If you use the ftpd app for FTP, start "
+                                    "it again afterwards.)"})
+    start = time.time()
+    while time.time() - start < HELPER_WAIT:
+        time.sleep(4)
+        now = read_helper(cfg)
+        if now and now != before:
+            kv = dict(re.findall(r"(?m)^\s*([a-z_]+)\s*=\s*(.*?)\s*$", now.decode("utf-8", "replace")))
+            label = "Switch %s, Atmosphère %s" % (kv.get("firmware") or "?", kv.get("atmosphere") or "?")
+            APP.registry.set_firmware(cfg, label)
+            emit({"type": "answer", "text": "Got it: %s (%s)." % (label, kv.get("emummc") or "")})
+            st.messages.append({"role": "user", "content": "[The helper app ran on the console: firmware %s, "
+                                "Atmosphère %s, %s. Carry on with what I asked before, without asking me again.]"
+                                % (kv.get("firmware"), kv.get("atmosphere"), kv.get("emummc"))})
+            chat_turn(st, None, emit)
+            return
+        emit({"type": "status", "text": "Waiting for Patchbay system info to run on the Switch... (%d s)"
+                                        % (time.time() - start)})
+    emit({"type": "answer", "text": "I didn't see the helper app run yet. Open it from the Homebrew Menu, then tell "
+                                    "me \"done\"."})
 
 
 def confirm_on_mac(st, cfg, p, emit, typed=""):
@@ -1174,6 +1449,16 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
         emit({"type": "answer", "text": result})
         st.messages.append({"role": "user", "content": "[I confirmed the settings change. %s]" % result})
         return
+    short, detail = run_mac_step(st, cfg, p, emit)
+    emit({"type": "answer", "text": short})
+    st.messages.append({"role": "user", "content": "[I confirmed the %s. %s]" % (p["kind"].replace("_", " "), detail)})
+    if p["kind"] != "project_edit":
+        # Let the AI read the output and say what's next (fix errors, or offer to install).
+        chat_turn(st, None, emit)
+
+
+def run_mac_step(st, cfg, p, emit):
+    """Do one confirmed (or automatic) step on the Mac. Returns (one line for the user, full result for the AI)."""
     if p["kind"] == "get_source":
         emit({"type": "status", "text": "Downloading %s..." % p["project"]})
         dest = Path(p["source"])
@@ -1185,10 +1470,7 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
             result = str(e)
         else:
             result = "Downloaded %s to %s and saved it as project %s." % (p["url"], dest, pr["name"])
-        emit({"type": "answer", "text": result.splitlines()[0]})
-        st.messages.append({"role": "user", "content": "[I confirmed the download. Result: %s]" % result})
-        chat_turn(st, None, emit)
-        return
+        return result.splitlines()[0], "Result: " + result
     pr = project(st, p["project"])
     if p["kind"] == "command":
         emit({"type": "status", "text": "Running %s..." % p["command"][:60]})
@@ -1196,12 +1478,8 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
             code, out = projects.run_shell(projects.folder_of(pr), p["command"], emit)
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't run it: %s" % e)
-        result = "The command %s (exit code %d)." % ("worked" if code == 0 else "failed", code)
-        emit({"type": "answer", "text": result})
-        st.messages.append({"role": "user", "content": "[I confirmed running: %s. %s Last part of its output:\n%s]"
-                                                       % (p["command"], result, out[-6000:])})
-        chat_turn(st, None, emit)
-        return
+        result = "The command %s %s (exit code %d)." % (p["command"][:80], "worked" if code == 0 else "failed", code)
+        return result, "%s Last part of its output:\n%s" % (result, out[-6000:])
     if p["kind"] == "project_edit":
         try:
             bk = projects.write_file(cfg, pr, p["remote"], Path(p["source"]).read_text("utf-8"))
@@ -1209,9 +1487,7 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
             raise ToolError("Couldn't save %s: %s" % (p["remote"], e))
         result = "Saved %s in project %s.%s" % (p["remote"], pr["name"],
                                                 " The old version was backed up to %s." % bk if bk else " (new file)")
-        emit({"type": "answer", "text": result})
-        st.messages.append({"role": "user", "content": "[I confirmed the edit of %s. Result: %s]" % (p["remote"], result)})
-        return
+        return result, "Result: " + result
     emit({"type": "status", "text": "Building %s..." % pr["name"]})
     try:
         code, out, built = projects.run_build(pr, emit)
@@ -1225,14 +1501,11 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
                                                ", but it fails the damage checks: " + probs[0] if probs else
                                                ", which passes the damage checks")
         elif pr.get("output"):
-            result += " But %s wasn't made. Check the project's output setting." % pr["output"]
+            result += " But %s wasn't made. Find the built file (project_files) and fix the output with set_project." \
+                      % pr["output"]
     else:
         result = "The build of %s failed (exit code %d)." % (pr["name"], code)
-    emit({"type": "answer", "text": result})
-    st.messages.append({"role": "user", "content": "[I confirmed the build. %s Last part of the build output:\n%s]"
-                                                   % (result, out[-6000:])})
-    # Let the AI read the output and say what's next (fix errors, or offer to install).
-    chat_turn(st, None, emit)
+    return result, "%s Last part of the build output:\n%s" % (result, out[-6000:])
 
 
 def do_cancel(st, pid, emit):
@@ -1544,16 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
                        "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
         elif path == "/api/backup/start":
             cfg = APP.device(data.get("device")).cfg()
-            with APP.lock:
-                job = APP.backups.get(cfg["device_name"])
-                if job and job.status()["running"]:
-                    raise ToolError("A backup of %s is already running." % cfg["device_name"])
-                folder = backup.backup_root(cfg).parent
-                if not cfg.get("backup_folder"):
-                    folder.mkdir(exist_ok=True)   # the default folder is made for you; a chosen one must exist
-                backup.check_folder(folder)
-                job = APP.backups[cfg["device_name"]] = backup.Job(cfg)
-                job.start()
+            start_backup(cfg, data.get("items"))
             self.json({"ok": True})
         elif path == "/api/backup/stop":
             job = APP.backups.get(APP.device(data.get("device")).cfg()["device_name"])

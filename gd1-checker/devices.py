@@ -218,8 +218,10 @@ SETTINGS = {
     "data_folder": ("text", "where scans and backups of changes are kept (shared)"),
     "lan_access": ("bool", "let the laptop open the app (shared, takes effect after a restart)"),
     "port": ("int", "the app's web port (shared, takes effect after a restart)"),
+    "auto_mac_steps": ("bool", "download source, edit project files and build on the Mac without a card each time "
+                               "(shared; device writes always need a card)"),
 }
-SHARED = {"ollama_model", "chat_context", "data_folder", "lan_access", "port", "ollama_url"}
+SHARED = {"ollama_model", "chat_context", "data_folder", "lan_access", "port", "ollama_url", "auto_mac_steps"}
 
 
 def coerce(key, value):

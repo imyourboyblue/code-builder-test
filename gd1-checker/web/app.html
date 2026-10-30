@@ -74,6 +74,12 @@ color:var(--ink);resize:none;min-height:46px;max-height:200px}
 /* files */
 #files{flex-direction:column;padding:10px 16px 0;gap:10px}
 .panes{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.panes.only-mac,.panes.only-dev{grid-template-columns:1fr}
+.panes.only-mac #pane-dev,.panes.only-dev #pane-mac{display:none}
+.viewpick{display:flex;gap:0;align-self:flex-start;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.viewpick button{border:0;border-radius:0;padding:4px 12px;font-size:13px;background:var(--card)}
+.viewpick button.on{background:var(--me);color:var(--meink)}
+.viewpick button+button{border-left:1px solid var(--line)}
 @media (max-width:760px){.panes{grid-template-columns:1fr;grid-auto-rows:minmax(300px,1fr);overflow-y:auto}}
 .pane{display:flex;flex-direction:column;min-height:0;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .pane.dropping{outline:3px dashed var(--drop);outline-offset:-3px}
@@ -157,7 +163,8 @@ border:2px solid var(--line)}
 </main>
 
 <main class="view" id="files">
-  <div class="panes">
+  <div class="viewpick" id="viewpick"><button data-v="both">Both</button><button data-v="mac" id="vp-mac">Mac only</button><button data-v="dev" id="vp-dev">Device only</button></div>
+  <div class="panes" id="panes">
     <section class="pane" id="pane-mac"></section>
     <section class="pane" id="pane-dev"></section>
   </div>
@@ -169,7 +176,7 @@ border:2px solid var(--line)}
     <h2 id="bk-title">Back up everything</h2>
     <div class="note">Copies every file on the device to a folder you choose. This only reads the device.</div>
     <div class="row">Saved to: <code id="bk-folder">…</code><button id="bk-change">Change…</button></div>
-    <div class="row"><button class="primary" id="bk-start">Back up now</button><button id="bk-stop" hidden>Stop</button></div>
+    <div class="row"><button class="primary" id="bk-start">Back up now</button><button id="bk-pick">Back up only some files or folders…</button><button id="bk-stop" hidden>Stop</button></div>
     <div id="bk-progress" hidden><div class="bar"><div id="bk-bar"></div></div><div id="bk-line"></div><div id="bk-cur"></div></div>
     <div id="bk-msg" class="msgline" style="margin-top:8px"></div>
   </section>
@@ -413,7 +420,8 @@ function paneShell(p){
     <div class="tools">${isDev?`
       <button data-a="tomac" title="Copy the selected items to the folder open on the left">← Copy to ${esc(info.computer||'Mac')}</button>
       <button data-a="upload">Upload from this computer…</button><button data-a="download">Download</button>
-      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>`:`
+      <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button><button data-a="delete">Delete</button>
+      <button data-a="backup" title="Copy the selected files or folders to your backup folder">Back up</button>`:`
       <button data-a="home">Home</button><button data-a="todev" title="Copy the selected items to the folder open on the right">Copy to ${esc(cur)} →</button>
       <button data-a="mkdir">New folder</button><button data-a="rename">Rename</button>
       <label style="font-size:13px;color:var(--mute)"><input type="checkbox" data-a="hidden"> hidden files</label>`}</div></div>
@@ -427,6 +435,7 @@ function paneShell(p){
 async function openFiles(changed){
   if(filesFor!==cur||changed){filesFor=cur;$('activity').innerHTML='';panes.dev.path='/';
     if(!info.computer)await loadInfo();paneShell(panes.mac);paneShell(panes.dev);
+    $('vp-mac').textContent=(info.computer||'Mac')+' only';$('vp-dev').textContent=cur+' only';
     act('Drag files between the two sides, or drop files from Finder onto '+cur+'. Double-click a folder to open it.');
     load(panes.mac,panes.mac.path||'~');load(panes.dev,'/')}
 }
@@ -511,13 +520,24 @@ function menu(ev,p,e){ // right-click menu on a file or folder
   if(e.kind==='dir')acts.push(['Open',()=>load(p,full(p,e.name))]);
   acts.push(['Rename…',()=>tool(p,'rename')]);
   if(dev){if(e.kind==='file')acts.push(['Download to this computer',()=>tool(p,'download')]);
-    acts.push(['Copy to '+(info.computer||'the Mac'),()=>tool(p,'tomac')],['Delete…',()=>tool(p,'delete')])}
+    acts.push(['Copy to '+(info.computer||'the Mac'),()=>tool(p,'tomac')],['Back up',()=>tool(p,'backup')],['Delete…',()=>tool(p,'delete')])}
   else acts.push(['Copy to '+cur,()=>tool(p,'todev')]);
   acts.push(['New folder here…',()=>tool(p,'mkdir')]);
   c.innerHTML='';acts.forEach(([l,f])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>{c.style.display='none';f()};c.appendChild(b)});
   c.style.display='block';c.style.left=Math.min(ev.clientX,innerWidth-190)+'px';c.style.top=Math.min(ev.clientY,innerHeight-c.offsetHeight-8)+'px'}
 document.addEventListener('click',()=>{$('ctx').style.display='none'});
 document.addEventListener('scroll',()=>{$('ctx').style.display='none'},true);
+async function backupItems(items){
+  if(!items.length)return act('Select the files or folders to back up first (click, or Cmd-click for more).','bad');
+  try{await postJSON('/api/backup/start',{device:cur,items:items.map(x=>({path:x.path,kind:x.kind}))});
+    act('Backing up '+items.map(x=>x.name).join(', ')+' to your backup folder. The Backups tab shows progress.','good')}
+  catch(e){act(e.message,'bad')}}
+function setFilesView(v){let ok=['both','mac','dev'].includes(v)?v:'both';
+  try{localStorage.setItem('pb-files-view',ok)}catch(e){}
+  $('panes').classList.toggle('only-mac',ok==='mac');$('panes').classList.toggle('only-dev',ok==='dev');
+  $('viewpick').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v===ok))}
+$('viewpick').querySelectorAll('button').forEach(b=>b.onclick=()=>setFilesView(b.dataset.v));
+{let v='both';try{v=localStorage.getItem('pb-files-view')||'both'}catch(e){}setFilesView(v)}
 async function macDo(url,body,okMsg){try{await postJSON(url,body);act(okMsg,'good');load(panes.mac,panes.mac.path)}catch(e){act(e.message,'bad')}}
 async function renameDevice(){
   const n=prompt('New name for '+cur+' in Patchbay (letters, numbers, spaces, - or _). This changes the name you type to confirm changes, too:',cur);
@@ -541,6 +561,7 @@ function tool(p,a){
   if(a==='mkdir'){const n=prompt('Name for the new folder in '+p.path+':');if(n)plan({op:'mkdir',target:p.path,name:n});return}
   if(a==='rename'){if(items.length!==1)return act('Select exactly one item to rename.','bad');
     const n=prompt('New name for '+items[0].name+':',items[0].name);if(n&&n!==items[0].name)plan({op:'rename',path:items[0].path,new_name:n});return}
+  if(a==='backup')return backupItems(items);
   if(a==='delete'){if(!items.length)return act('Select what to delete first.','bad');return plan({op:'delete',paths:items.map(x=>x.path)})}
 }
 /* ---------- backups */
@@ -567,7 +588,7 @@ async function loadBackups(){
   else if(job&&job.message){$('bk-msg').className='msgline'+(job.phase==='failed'?' bad':'');$('bk-msg').textContent=job.message}
   $('bk-list').innerHTML=j.backups.length?j.backups.map(b=>`<div class="bk"><span class="when">${esc(b.name.replace('_',' ').replace(/-(\d\d)-(\d\d)$/,':$1:$2'))}</span>
     <span class="badge ${b.complete?'ok':'part'}">${b.complete?'complete':'unfinished'}</span>
-    <span class="meta">${b.files} files · ${size(b.bytes)}${b.linked?' · '+b.linked+' unchanged (no extra space)':''}${b.failed?' · '+b.failed+' couldn\'t be read':''}</span>
+    <span class="meta">${b.partial?'<b>Only '+esc(b.folders.slice(0,3).join(', '))+(b.folders.length>3?' and '+(b.folders.length-3)+' more':'')+'</b> · ':''}${b.files} files · ${size(b.bytes)}${b.linked?' · '+b.linked+' unchanged (no extra space)':''}${b.failed?' · '+b.failed+' couldn\'t be read':''}</span>
     <button data-path="${esc(b.path)}">Show in Files</button></div>`).join(''):'<div class="note">No backups yet.</div>';
   $('bk-list').querySelectorAll('button').forEach(x=>x.onclick=()=>showInFiles(x.dataset.path));
 }
@@ -575,6 +596,8 @@ function dur(s){if(s<90)return Math.round(s)+' s';if(s<5400)return Math.round(s/
 function showInFiles(path){panes.mac.path=path;if(filesFor===cur)load(panes.mac,path);location.hash='#/d/'+enc(cur)+'/files'}
 $('bk-start').onclick=async()=>{$('bk-msg').className='msgline';$('bk-msg').textContent='Starting…';bkLast=null;bkRate=0;
   try{await postJSON('/api/backup/start',{device:cur});loadBackups()}catch(e){$('bk-msg').className='msgline bad';$('bk-msg').textContent=e.message}};
+$('bk-pick').onclick=()=>{location.hash='#/d/'+enc(cur)+'/files';
+  setTimeout(()=>act('Select the files or folders on '+cur+' you want to back up, then press Back up (or right-click > Back up).','good'),300)};
 $('bk-stop').onclick=async()=>{await postJSON('/api/backup/stop',{device:cur});$('bk-msg').textContent='Stopping…'};
 $('bk-change').onclick=()=>chooseFolder($('bk-folder').textContent.replace(/\/[^/]*$/,''));
 async function chooseFolder(start){
