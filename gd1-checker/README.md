@@ -292,6 +292,10 @@ Ask the chat on the Devices screen for a change to Patchbay ("add a Back up all 
 
 Page changes need a reload, Python changes a restart (the chat offers a **Restart Patchbay** card). If Patchbay can't start after a change, it puts the previous version back by itself and says so in Health. If the page itself is broken, open **http://127.0.0.1:8765/fix**: a plain repair page with Undo and Restart buttons. Updates keep Patchbay's own changes; if one clashes with an update, the update wins and your change stays saved so it can be made again.
 
+### Themes
+
+**🩺 Setup → Look** picks how Patchbay looks: **Match my Mac** (light or dark, following macOS), **Pirate** (ocean night, parchment and gold), **Mac Tahoe** (clean and bright), or **Dark neon glass** (frosted panels with a neon glow; it turns solid if macOS "Reduce transparency" is on). **Spacing** can be Comfortable or Compact. The choice is saved on the Mac (`data-cache/ui.json`), so the Patchbay app and your laptop's browser match, and it's applied before the page appears, so there's no flash. Themes are colour settings at the top of `web/app.html`, so a new one is a short block of colours.
+
 ## Use it from your laptop
 
 The Mac Studio does all the work (scanning, AI, copying). Your laptop only shows the page, so it needs nothing installed.

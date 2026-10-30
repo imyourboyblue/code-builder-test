@@ -2822,7 +2822,16 @@ value="1"><button>Restart Patchbay</button></form>""" % (
         self.send_body(body.encode(), "text/html; charset=utf-8")
 
     def page(self, name):
-        self.send_body((WEB / name).read_bytes(), "text/html; charset=utf-8")
+        body = (WEB / name).read_bytes()
+        ui = load_ui()   # the chosen theme goes on the page before it's drawn, so it never flashes
+        attrs = ""
+        if ui.get("theme") in THEMES and ui["theme"] != "auto":
+            attrs += ' data-theme="%s"' % ui["theme"]
+        if ui.get("density") == "compact":
+            attrs += ' data-density="compact"'
+        if attrs:
+            body = body.replace(b'<html lang="en">', ('<html lang="en"%s>' % attrs).encode(), 1)
+        self.send_body(body, "text/html; charset=utf-8")
 
     def start_stream(self):
         self.send_response(200)
@@ -2926,6 +2935,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             self.wfile.write(data)
         elif path == "/api/health":
             self.json({"alerts": health.check(APP.registry, deep=q.get("deep") == "1"), "checked": time.time()})
+        elif path == "/api/ui":
+            self.json(dict({"theme": "auto", "density": "comfortable"}, **load_ui()))
         elif path == "/api/prompts":
             self.json({"prompts": load_prompts()})
         elif path == "/api/activity":
@@ -3148,6 +3159,8 @@ value="1"><button>Restart Patchbay</button></form>""" % (
             except ValueError as e:
                 raise ToolError(str(e))
             self.json({"repo": repo})
+        elif path == "/api/ui":
+            self.json(save_ui(data))
         elif path == "/api/prompts":
             items = load_prompts()
             name = (data.get("name") or "").strip()[:80]
@@ -3622,6 +3635,34 @@ class NetScanJob:
     def status(self):
         return {"running": self.finished is None, "progress": round(self.progress, 3), "note": self.note,
                 "results": self.results, "error": self.error, "finished": self.finished}
+
+
+UI_FILE = core.HERE / "data-cache" / "ui.json"
+THEMES = ("auto", "pirate", "mac-tahoe", "dark-neon-glass")
+
+
+def load_ui():
+    try:
+        return json.loads(UI_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ui(changes):
+    ui = load_ui()
+    if "theme" in changes:
+        if changes["theme"] not in THEMES:
+            raise ToolError("Unknown theme.")
+        ui["theme"] = changes["theme"]
+    if "density" in changes:
+        if changes["density"] not in ("comfortable", "compact"):
+            raise ToolError("Density is comfortable or compact.")
+        ui["density"] = changes["density"]
+    UI_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = UI_FILE.with_name("ui.json.tmp")
+    tmp.write_text(json.dumps(ui, indent=2))
+    tmp.replace(UI_FILE)
+    return ui
 
 
 PROMPTS_FILE = core.HERE / "data-cache" / "prompts.json"

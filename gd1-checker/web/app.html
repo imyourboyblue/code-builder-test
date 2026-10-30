@@ -6,6 +6,51 @@
 --ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecece8;--mute:#9a9a93;--line:#33332f;
 --me:#4a74e8;--code:#2a2a27;--ok:#5cc184;--warn:#e0a24a;--bad:#ff7b72;--sel:#26324f;--drop:#7c9cf0}}
+/* ---- themes: pick one in 🩺 Setup. Each one only changes these colour and shape settings. */
+:root{--overlay:rgba(0,0,0,.4);--shadow:0 6px 24px rgba(0,0,0,.18);--radius:12px;--panel-blur:none;--glow:none;--bg-art:none;--head-font:inherit}
+html[data-theme=pirate]{color-scheme:dark;--bg:#0B132B;--card:#13213F;--ink:#E0E1DD;--mute:#A9B4C2;--line:#6B4F2A;
+--me:#D4AF37;--meink:#0B132B;--ok:#5FBF77;--warn:#E8A33D;--bad:#EF6B5E;--code:#0F1A33;--sel:#3A3220;--drop:#D4AF37;
+--overlay:rgba(3,6,16,.62);--shadow:0 8px 26px rgba(0,0,0,.45);--radius:10px;--head-font:Georgia,"Iowan Old Style","Palatino",serif;
+--bg-art:radial-gradient(ellipse at 50% -20%,rgba(212,175,55,.12),transparent 55%),linear-gradient(180deg,#0B132B 0%,#0B1A33 70%,#0A2238 100%)}
+html[data-theme=mac-tahoe]{color-scheme:light;--bg:#F6F6F6;--card:#FFFFFF;--ink:#1C1C1E;--mute:#6E6E73;--line:#E5E5EA;
+--me:#007AFF;--meink:#FFFFFF;--ok:#1E7B34;--warn:#B25000;--bad:#D70015;--code:#F2F2F7;--sel:#E1EEFF;--drop:#007AFF;
+--overlay:rgba(0,0,0,.22);--shadow:0 10px 30px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);--radius:14px}
+html[data-theme=dark-neon-glass]{color-scheme:dark;--bg:#0A0F1D;--card:rgba(30,41,59,.70);--ink:#E2E8F0;--mute:#94A3B8;
+--line:rgba(148,163,184,.20);--me:#00F5D4;--meink:#0A0F1D;--ok:#34D399;--warn:#FBBF24;--bad:#FB7185;--code:rgba(15,23,42,.72);
+--sel:rgba(123,44,191,.38);--drop:#00F5D4;--overlay:rgba(2,6,18,.6);--shadow:0 10px 34px rgba(0,0,0,.5);--radius:12px;
+--panel-blur:blur(16px) saturate(140%);--glow:0 0 0 1px rgba(0,245,212,.22),0 0 22px rgba(123,44,191,.22);
+--bg-art:radial-gradient(circle at 12% 8%,rgba(123,44,191,.35),transparent 42%),radial-gradient(circle at 88% 92%,rgba(0,245,212,.20),transparent 45%),linear-gradient(160deg,#0A0F1D,#0D1428 60%,#0A0F1D)}
+html[data-theme] body{background:var(--bg-art),var(--bg);background-attachment:fixed}
+html[data-theme=pirate] h1,html[data-theme=pirate] h2,html[data-theme=pirate] h3,html[data-theme=pirate] header b,html[data-theme=pirate] .hl-h{font-family:var(--head-font);letter-spacing:.2px}
+html[data-theme=pirate] header{border-bottom:2px solid var(--me)}
+html[data-theme=pirate] button.primary{background:linear-gradient(180deg,#E3C25A,#B8912A);border-color:#8A6A1E}
+html[data-theme=pirate] .tile,html[data-theme=pirate] .hl-card{box-shadow:inset 0 0 0 1px rgba(212,175,55,.08)}
+html[data-theme=mac-tahoe] button{border-radius:8px;box-shadow:0 .5px 1.5px rgba(0,0,0,.12)}
+html[data-theme=mac-tahoe] .tile,html[data-theme=mac-tahoe] .hl-card,html[data-theme=mac-tahoe] .card{box-shadow:var(--shadow);border-color:transparent}
+html[data-theme=mac-tahoe] .card{border-left:3px solid var(--warn)}
+html[data-theme=dark-neon-glass] .tile,html[data-theme=dark-neon-glass] .hl-card,html[data-theme=dark-neon-glass] .card,
+html[data-theme=dark-neon-glass] .modal .box,html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat,
+html[data-theme=dark-neon-glass] .msg.ai{-webkit-backdrop-filter:var(--panel-blur);backdrop-filter:var(--panel-blur)}
+html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat{background:rgba(10,15,29,.55)}
+html[data-theme=dark-neon-glass] .tile,html[data-theme=dark-neon-glass] .hl-card,html[data-theme=dark-neon-glass] .modal .box{box-shadow:var(--glow)}
+html[data-theme=dark-neon-glass] a.tile:hover{box-shadow:0 0 0 1px #00F5D4,0 0 26px rgba(0,245,212,.35)}
+html[data-theme=dark-neon-glass] button.primary{box-shadow:0 0 14px rgba(0,245,212,.45)}
+html[data-theme=dark-neon-glass] .modal .box{background:rgba(22,30,48,.86)}
+html[data-theme=dark-neon-glass] #chatlist,html[data-theme=dark-neon-glass] #ctx{background:#1E293B}
+@media (prefers-reduced-transparency:reduce){html[data-theme=dark-neon-glass]{--card:#1E293B;--panel-blur:none;--code:#0F172A}
+  html[data-theme=dark-neon-glass] header,html[data-theme=dark-neon-glass] #homechat{background:#0F172A}html[data-theme=dark-neon-glass] .modal .box{background:#1E293B}}
+/* density: Compact squeezes spacing so more fits on screen */
+html[data-density=compact] body{font-size:14px;line-height:1.4}
+html[data-density=compact] button{padding:3px 9px;font-size:13px}
+html[data-density=compact] .tile{padding:12px 10px 10px}html[data-density=compact] .grid{gap:10px}
+html[data-density=compact] .msg{padding:7px 11px}html[data-density=compact] .card{padding:9px 11px}
+html[data-density=compact] #home h2{margin:12px 0 7px}html[data-density=compact] .hl-row{padding:7px 0}
+html[data-density=compact] header{padding:5px 12px}html[data-density=compact] #f{padding:8px 12px}
+html[data-density=compact] textarea{min-height:38px;padding:7px 10px}
+.theme-pick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:6px}
+.theme-pick button{text-align:left;padding:8px;border-radius:10px;display:flex;flex-direction:column;gap:6px}
+.theme-pick button.on{outline:2px solid var(--me);outline-offset:1px}
+.theme-pick .sw{height:34px;border-radius:7px;display:flex;overflow:hidden;border:1px solid rgba(128,128,128,.3)}.theme-pick .sw i{flex:1}
 *{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
 display:flex;flex-direction:column}
@@ -86,7 +131,7 @@ pre{background:var(--code);padding:8px 10px;border-radius:8px;overflow:auto;font
 white-space:pre;margin:6px 0}
 .msg a{color:inherit;text-decoration:underline;word-break:break-all}.ai a{color:var(--me)}
 code{background:var(--code);padding:1px 4px;border-radius:4px;font:13px ui-monospace,Menlo,monospace}
-.card{align-self:stretch;border:2px solid var(--warn);border-radius:12px;padding:12px 14px;background:var(--card)}
+.card{align-self:stretch;border:2px solid var(--warn);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .card h3{margin:0 0 6px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
 input[type=text],input[type=password],input:not([type]){font:inherit;padding:6px 10px;border-radius:8px;
 border:1px solid var(--line);background:var(--bg);color:var(--ink)}
@@ -132,7 +177,7 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 .chatbar select{font:13px inherit;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:220px}
 .chatbar button{font-size:13px;padding:3px 10px}
 #chatlist{position:absolute;z-index:15;background:var(--card);border:1px solid var(--line);border-radius:12px;
-  box-shadow:0 6px 24px rgba(0,0,0,.18);width:min(380px,92vw);max-height:60vh;overflow:auto;padding:6px;display:none}
+  box-shadow:var(--shadow);width:min(380px,92vw);max-height:60vh;overflow:auto;padding:6px;display:none}
 #chatlist .it{display:flex;gap:6px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:14px}
 #chatlist .it:hover{background:var(--sel)}#chatlist .it.on{background:var(--sel);font-weight:600}
 #chatlist .it .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -174,7 +219,7 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 .list tr .pen{opacity:0}.list tr:hover .pen,.list tr.sel .pen{opacity:1}@media (hover:none){.list tr .pen{opacity:1}}
 .pen:hover{border-color:var(--line);color:var(--ink)}
 #ctx{position:fixed;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;
-box-shadow:0 6px 24px rgba(0,0,0,.18);display:none;min-width:170px}
+box-shadow:var(--shadow);display:none;min-width:170px}
 #ctx button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 10px;border-radius:6px;font-size:14px}
 #ctx button:hover{background:var(--sel)}.list tr.sel{background:var(--sel)}.list tr.target{outline:2px solid var(--drop);outline-offset:-2px}
 .list .hint{padding:16px;color:var(--mute);font-size:13px}
@@ -222,7 +267,7 @@ background:var(--card);margin-bottom:8px;font-size:14px}
 .picker div:hover{background:var(--sel)}
 
 /* dialogs */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;place-items:center;padding:16px;z-index:10}
+.modal{position:fixed;inset:0;background:var(--overlay);display:none;place-items:center;padding:16px;z-index:10}
 .modal.on{display:grid}
 .modal .box{background:var(--card);border-radius:14px;padding:18px;max-width:560px;width:100%;max-height:90vh;overflow:auto;
 border:2px solid var(--line)}
@@ -460,7 +505,7 @@ async function drawScan(){let j;try{j=await getJSON('/api/netscan')}catch(e){ret
   if(!j.running&&!j.finished&&!j.error){$('foundh').hidden=true;return}
   $('foundh').hidden=false;
   if(j.running){$('foundwhen').textContent='looking now...';
-    $('found').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
+    $('found').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="ns-stop">Stop</button></div>';
     $('ns-stop').onclick=()=>postJSON('/api/netscan/stop',{});return}
   if(j.error){$('foundwhen').textContent='';$('found').innerHTML='<span style="color:var(--bad)">'+esc(j.error)+'</span>';return}
   scanData=j;renderFound()}
@@ -502,7 +547,7 @@ async function openSecurity(d){
     $('sec-own').onchange=()=>$('sec-go').disabled=!$('sec-own').checked;
     $('sec-go').onclick=async()=>{try{await postJSON('/api/security/start',{ip:d.ip,kind:d.kind,owner_confirmed:true})}catch(e){$('sec-body').insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>');return}poll()}};
   const draw=async()=>{if(!$('sec-body'))return clearInterval(secTimer);let j;try{j=await getJSON('/api/security?ip='+enc(d.ip))}catch(e){return}
-    if(j.running){$('sec-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="sec-stop">Stop</button></div>';
+    if(j.running){$('sec-body').innerHTML='<div>'+esc(j.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round((j.progress||0)*100)+'%"></div></div><div class="row" style="margin-top:8px"><button id="sec-stop">Stop</button></div>';
       $('sec-stop').onclick=()=>postJSON('/api/security/stop',{ip:d.ip});return}
     clearInterval(secTimer);
     if(j.error){$('sec-body').innerHTML='<div style="color:var(--bad)">'+esc(j.error)+'</div><div class="row" style="margin-top:10px"><button id="sec-retry">Try again</button><button onclick="closeModal()">Close</button></div>';$('sec-retry').onclick=ask;return}
@@ -706,6 +751,23 @@ function thinking(){
     meta.textContent=(steps?'step '+steps+' · ':'')+(m?m+'m '+String(s%60).padStart(2,'0')+'s':s+'s')+(s>=90&&!steps?' · big models can take a minute or two':'')};
   tick();const timer=setInterval(tick,1000);
   el.step=()=>{steps++;tick()};el.stop=()=>clearInterval(timer);return el}
+// ---- themes and density (saved on the Mac, so every browser and the Patchbay app match)
+const THEMES=[['auto','Match my Mac','Light or dark, like macOS',['#f6f6f4','#1e1e1c','#2f5bd3','#5cc184']],
+  ['pirate','Pirate','Ocean night, parchment and gold',['#0B132B','#13213F','#D4AF37','#EF6B5E']],
+  ['mac-tahoe','Mac Tahoe','Clean, bright and native',['#F6F6F6','#FFFFFF','#007AFF','#E5E5EA']],
+  ['dark-neon-glass','Dark neon glass','Frosted panels, neon glow',['#0A0F1D','#1E293B','#00F5D4','#7B2CBF']]];
+function setLook(theme,density){const h=document.documentElement;
+  if(theme!==undefined){if(theme==='auto')h.removeAttribute('data-theme');else h.setAttribute('data-theme',theme)}
+  if(density!==undefined){if(density==='compact')h.setAttribute('data-density','compact');else h.removeAttribute('data-density')}}
+function drawLook(){const box=$('sc-look');if(!box)return;const h=document.documentElement;
+  const cur_t=h.getAttribute('data-theme')||'auto',cur_d=h.getAttribute('data-density')||'comfortable';
+  box.innerHTML='<div class="theme-pick">'+THEMES.map(([id,name,sub,c])=>'<button type="button" data-t="'+id+'" class="'+(id===cur_t?'on':'')+'">'+
+      '<span class="sw">'+c.map(x=>'<i style="background:'+x+'"></i>').join('')+'</span><b style="font-size:13.5px">'+esc(name)+'</b><small style="color:var(--mute);font-size:12px">'+esc(sub)+'</small></button>').join('')+'</div>'+
+    '<div style="display:flex;gap:14px;align-items:center;margin-top:8px;font-size:13.5px">Spacing: '+
+    ['comfortable','compact'].map(d=>'<label style="display:flex;gap:5px;align-items:center;margin:0;color:inherit"><input type="radio" name="dens" value="'+d+'" style="width:auto"'+(d===cur_d?' checked':'')+'> '+(d==='compact'?'Compact (fits more)':'Comfortable')+'</label>').join('')+'</div>';
+  box.querySelectorAll('[data-t]').forEach(b=>b.onclick=async()=>{setLook(b.dataset.t);drawLook();try{await postJSON('/api/ui',{theme:b.dataset.t})}catch(e){}});
+  box.querySelectorAll('[name=dens]').forEach(r=>r.onchange=async()=>{setLook(undefined,r.value);try{await postJSON('/api/ui',{density:r.value})}catch(e){}})}
+
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
   const dev=cur;busy=true;setSend(true);const ctx={status:thinking(),live:null,stream:null};
@@ -859,6 +921,7 @@ async function openSetup(msg){
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
+    '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
     '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
     '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
@@ -871,6 +934,7 @@ async function openSetup(msg){
   const tl=$('sc-tools');if(tl)tl.onclick=async()=>{tl.disabled=true;try{await postJSON('/api/macapp',{action:'install_tools'});say('Apple\'s installer should be open now (it may be behind this window). Click Install, wait for it to finish, then press Rebuild the app.')}catch(e){tl.disabled=false;say(esc(e.message))}};
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'Patchbay will now start by itself when you log in.':'Patchbay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
+  drawLook();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -884,7 +948,7 @@ let apTimer=null;
 async function loadApps(){clearInterval(apTimer);const dev=cur;let j;
   try{j=await getJSON('/api/library?device='+enc(dev))}catch(e){$('ap-body').textContent=e.message;return}
   if(view!=='apps'||cur!==dev)return;
-  if(j.job&&j.job.running){$('ap-scan').disabled=true;$('ap-body').innerHTML='<div>'+esc(j.job.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--accent,#2b6cdf);width:'+Math.round(j.job.progress*100)+'%"></div></div>';
+  if(j.job&&j.job.running){$('ap-scan').disabled=true;$('ap-body').innerHTML='<div>'+esc(j.job.note)+'</div><div style="height:8px;background:var(--line,#ddd);border-radius:4px;margin-top:6px;max-width:420px"><div style="height:8px;border-radius:4px;background:var(--me);width:'+Math.round(j.job.progress*100)+'%"></div></div>';
     apTimer=setTimeout(loadApps,1200);return}
   $('ap-scan').disabled=false;
   const lib=j.library;
