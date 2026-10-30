@@ -6,3 +6,7 @@ gd1-checker/*.tmp
 __pycache__/
 *.pyc
 .DS_Store
+gd1-checker/claude.json
+gd1-checker/claude-usage.json
+gd1-checker/claude-aliases.json
+gd1-checker/claude-sent/

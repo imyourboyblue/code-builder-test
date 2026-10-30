@@ -102,6 +102,23 @@ In a device's chat, click **Update a homebrew app so it works with my firmware**
 
 Only general things (version numbers, library names, error messages) are looked up on the web. Your code and files are never sent anywhere.
 
+### Ask Claude for help
+
+The AI on your Mac does the work, but it can get stuck or guess wrong. Patchbay can ask Claude (Anthropic's cloud AI) instead, using your own API key. Click **☁ Claude** above the chat:
+
+1. Paste your API key (make one at https://platform.claude.com/settings/keys). It's saved only on this Mac, in `claude.json`, which is never uploaded to GitHub.
+2. Pick when to use Claude:
+   - **Off:** only the AI on your Mac.
+   - **When stuck:** if the same step fails twice, Patchbay asks Claude what to do.
+   - **Plan + when stuck** (the default): Claude also writes the plan for big jobs, like updating an app. Your Mac still does every step.
+   - **Always:** Claude answers everything. It's sent automatically and costs the most.
+3. Pick the model: Claude Opus 5.5 (best) or Claude Sonnet 5.5 (about half the price).
+4. Set a monthly spending limit. When it's reached, nothing more is sent until you raise it.
+
+Before anything is sent, your Mac user name, home folder, IP addresses, device names, the Mac's name, email addresses and passwords are swapped for stand-ins like `<device-1>` or `<ip-1>`. Unless you tick **Send automatically**, a card shows exactly what will be sent and you press **Send to Claude**. **See what was sent** lists every request that left the Mac. The button shows what this session cost so far. A question usually costs a few cents, and a big job in Always mode about $1 to $3.
+
+The AI also never asks you to type build commands in Terminal. If it tries, Patchbay sends it back to do the step itself, and an exact step that already failed can't be retried unchanged. Starting a new job like "update ftpd classic" in an old chat starts a fresh chat on its own (the old one is kept under **Past chats**).
+
 ### Homebrew on any device
 
 The same works for homebrew on other systems: 3DS, Wii, Wii U, PS Vita, PSP, PS4, Linux handhelds, or your own devices. Patchbay knows the basics of these (where apps live, file types, build tools). For anything it doesn't know, the AI researches it on the web with general questions, then saves what it learned on the Mac (in `<data folder>/_platforms/`) so next time it already knows.

@@ -321,7 +321,8 @@ def install_plan(manager, packages, update_all=False):
 
 def run_admin(commands, emit, stop=None):
     """Run commands that need the Mac password. On macOS the Mac shows its own password box (nothing is typed here)."""
-    script = "(" + " && ".join("(%s)" % c for c in commands) + ") 2>&1"
+    # Note: never start with "((": the shell reads that as arithmetic.
+    script = "{ %s; } 2>&1" % " && ".join(commands)
     if sys.platform == "darwin":
         apple = 'do shell script "%s" with administrator privileges' % script.replace("\\", "\\\\").replace('"', '\\"')
         emit({"type": "status", "text": "Waiting for the Mac's password box..."})

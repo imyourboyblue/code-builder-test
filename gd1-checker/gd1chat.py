@@ -48,6 +48,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import gd1check as core
 import backup
+import claude
 import devices
 import firmware
 import nro
@@ -561,6 +562,12 @@ def runs_by_itself(cfg, kind, extra):
 
 
 def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, on_mac=False, extra_fields=None):
+    if on_mac:
+        before = getattr(st, "failed_steps", {}).get(step_key(dict({"kind": kind, "remote": remote}, **(extra_fields or {}))))
+        if before:
+            raise ToolError("This exact step already failed: %s Don't try it again unchanged and don't call it "
+                            "temporary. Read the error, fix the cause (a different command, a missing package, a code "
+                            "change), or call ask_claude if you're stuck." % before)
     if on_mac and runs_by_itself(cfg, kind, extra_fields):
         # Automatic Mac step (setting auto_mac_steps): project files are backed up first, downloads go to a new folder.
         p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
@@ -1532,7 +1539,9 @@ firmware, say so first.
   2. If build tools or packages are missing or old (check_build_tools), install them yourself with \
 propose_install_packages (devkitPro packages like switch-dev and switch-zlib, or Homebrew ones like cmake). The \
 Mac shows its own password box after the user confirms. Never ask the user to type commands in Terminal, and \
-never tell them to export variables or edit shell files: Patchbay sets up devkitPro and Homebrew paths itself.
+never tell them to export variables or edit shell files: Patchbay sets up devkitPro and Homebrew paths itself. \
+Console builds link the console's own libraries from devkitPro (switch-zlib, switch-curl, switch-libzstd...), \
+never the Mac's (brew zlib won't work).
   3. Get the source with propose_get_source (or use the existing project).
   4. Use a build recipe when find_homebrew gives one. Otherwise read the real build files (CMakeLists.txt, \
 Makefile, and the CI workflow in .github/workflows, which shows the exact commands that work); READMEs are often \
@@ -1554,7 +1563,8 @@ without another card).
 read_attachment reads more of a long one.
 - If something fails, read the output (it shows the error lines), say what failed in one line, and fix it \
 yourself: install a missing package, correct the command, or edit the code. Exit code 127 means a program isn't \
-installed. A tool result starting "A confirmation card" means nothing has run yet: wait for the user's card.
+installed. A tool result starting "A confirmation card" means nothing has run yet: wait for the user's card. \
+Never call an error temporary or retry the exact same step: something has to change first.
 
 Scanning settings: folders %(folders)s. Writing to the device is currently %(writes)s."""
 
@@ -1591,8 +1601,186 @@ class ThinkFilter:
             return out
 
 
+# ----------------------------------------------------------------- Claude (cloud help, with the user's own key)
+
+def claude_known():
+    """Personal values that are swapped for stand-ins before anything goes to Claude."""
+    known = []
+    try:
+        for _, c in APP.registry.all():
+            known += [("device", c.get("device_name")), ("ip", c.get("host")), ("secret", c.get("password"))
+                      if c.get("password") not in ("anonymous@", "", None) else ("x", ""),
+                      ("user", c.get("username")) if c.get("username") not in ("anonymous", "ftp", None) else ("x", "")]
+    except Exception:
+        traceback.print_exc()
+    names = {APP.computer, socket.gethostname().split(".")[0]}
+    for n in names:
+        known.append(("mac", n))
+        m = re.match(r"^([A-Z][a-z]+)(?:['’]s|s)?[\s-]+(?:Mac|MacBook|iMac)", n or "")
+        if m:
+            known.append(("name", m.group(1)))
+    return [(k, v) for k, v in known if v]
+
+
+def claude_scrubber():
+    return APP.claude.scrubber(claude_known())
+
+
+def claude_cost(emit):
+    if emit and APP:
+        p = APP.claude.public()
+        emit({"type": "claude_cost", "session": p["session_cost"], "month": p["month_cost"],
+              "cap": p["monthly_cap"]})
+
+
+def claude_question(st, question, details, purpose):
+    """The exact text that would go to Claude for one question (already scrubbed), and the scrubber."""
+    sc = claude_scrubber()
+    parts = ["Purpose: %s" % ("write a step-by-step plan for this job" if purpose == "plan"
+                              else "the local AI is stuck; say what to do next")]
+    last_user = next((m.get("content") for m in reversed(st.messages) if m.get("role") == "user"
+                      and not str(m.get("content", "")).startswith("[")), "")
+    if last_user:
+        parts.append("What the user asked:\n" + str(last_user)[:2000])
+    parts.append("Question:\n" + (question or "").strip())
+    if details:
+        parts.append("Details:\n" + str(details)[:12000])
+    recent = [m for m in st.messages if m.get("role") == "tool"
+              and str(m.get("content"))[-2000:] not in str(details or "")][-3:]
+    if recent:
+        parts.append("Recent step results (newest last):\n" + "\n---\n".join(
+            "[%s]\n%s" % (m.get("tool_name"), str(m.get("content"))[-3500:]) for m in recent))
+    return sc.scrub("\n\n".join(parts)), sc
+
+
+def send_question(st, emit, text, sc, why):
+    emit({"type": "status", "text": "Asking Claude..."})
+    try:
+        answer = APP.claude.ask(text, sc, why)
+    finally:
+        APP.claude.save_aliases(sc)
+        claude_cost(emit)
+    return answer
+
+
+def offer_question(st, emit, cfg, question, details, purpose):
+    """Ask Claude now (automatic sending on) or show a card with exactly what will be sent."""
+    if APP.claude.mode() == "off":
+        raise ToolError("Asking Claude is off (or there's no API key yet). Carry on yourself.")
+    try:
+        APP.claude.check_cap()
+    except claude.ClaudeError as e:
+        raise ToolError(str(e))
+    text, sc = claude_question(st, question, details, purpose)
+    if APP.claude.settings().get("auto_send"):
+        try:
+            answer = send_question(st, emit, text, sc, purpose)
+        except claude.ClaudeError as e:
+            raise ToolError(str(e))
+        emit({"type": "note", "text": "**Claude's advice:**\n\n" + answer})
+        return "Claude's answer (follow it):\n" + answer
+    APP.claude.save_aliases(sc)
+    return add_pending(st, emit, "ask_claude", cfg, "Claude", Path.home(), purpose,
+                       "Ask Claude for %s" % ("a plan" if purpose == "plan" else "help with the failing step"),
+                       text, on_mac=True, extra_fields={"text": text, "purpose": purpose})
+
+
+@tool("ask_claude",
+      "Ask Claude, a much stronger cloud AI, instead of guessing. Use it when a step has failed twice, when you don't "
+      "know how to do something, or (purpose plan) to get a step-by-step plan for a big job after gathering the "
+      "facts. Personal details are removed automatically; the user sees what is sent. Never include file contents "
+      "the user didn't ask to share, except build errors and logs.",
+      {"question": dict(S, description="What you need to know, in general terms"),
+       "details": dict(S, description="Error lines, build output, versions, what you already tried"),
+       "purpose": dict(S, description="'stuck' (default) or 'plan'")}, ["question"])
+def t_ask_claude(st, emit, a):
+    purpose = "plan" if (a.get("purpose") or "").strip().lower() == "plan" else "stuck"
+    return offer_question(st, emit, st.cfg(), a.get("question"), a.get("details"), purpose)
+
+
+def claude_tools(tools):
+    mode = APP.claude.mode() if APP else "off"
+    if mode in ("off", "always"):
+        return [t for t in tools if t["function"]["name"] != "ask_claude"]
+    return tools
+
+
+def claude_system(system):
+    mode = APP.claude.mode() if APP else "off"
+    if mode == "plan":
+        return system + ("\n\nClaude, a stronger cloud AI, plans big jobs. For a job with more than 3 steps (like "
+                         "updating or rebuilding an app): first gather the facts (prepare_homebrew_update, or read the "
+                         "files), then call ask_claude with purpose plan and those facts, then propose_plan using "
+                         "Claude's steps and carry them out yourself. If a step fails twice, call ask_claude instead "
+                         "of guessing. Simple things (browsing, questions, backups) never need Claude.")
+    if mode == "stuck":
+        return system + ("\n\nIf a step fails twice, or you don't know how to do something, call ask_claude "
+                         "(a stronger cloud AI) instead of guessing. Simple things never need it.")
+    return system
+
+
+def stuck_help(st, emit, cfg, name, args, result):
+    """The same step failed twice: ask Claude. Returns True when a card is now waiting for the user."""
+    question = "This step failed twice: %s %s. What is wrong, and exactly what should be done next?" % (
+        name, json.dumps(args)[:600])
+    try:
+        out = offer_question(st, emit, cfg, question, result[-6000:], "stuck")
+    except ToolError as e:
+        st.messages.append({"role": "user", "content": "[Patchbay couldn't ask Claude: %s]" % e})
+        return False
+    if out.startswith("A confirmation card"):
+        emit({"type": "answer", "text": "That step failed twice, so I'd like to ask Claude for help instead of "
+                                        "guessing. The card shows exactly what will be sent; personal details "
+                                        "are already removed."})
+        return True
+    st.messages.append({"role": "user", "content": "[That step failed twice, so Patchbay asked Claude. " + out + "]"})
+    return False
+
+
+TERMINAL_CMD = re.compile(r"(?im)^\s*(\$\s*)?(sudo|brew|export|cmake|make|git|dkp-pacman|pacman|cd|source|"
+                          r"aarch64-none-elf-\S+|arm-none-eabi-\S+|ninja|meson|chmod|ln|rm|mkdir|curl|echo)\b")
+TERMINAL_WORDS = re.compile(r"(?i)\b(run|type|paste|enter|copy)\b[^.\n]{0,80}\b(terminal|command line|shell)\b|"
+                            r"\bin (the )?terminal\b")
+TERMINAL_NUDGE = ("[Patchbay: Don't ask the user to run commands in Terminal or set environment variables. Do it "
+                  "yourself now with your tools: propose_install_packages for missing packages (devkitPro ones like "
+                  "switch-zlib, or Homebrew ones like cmake), propose_command for project commands, set_project and "
+                  "propose_build for builds. Console builds use devkitPro libraries (switch-zlib, switch-curl...), "
+                  "never the Mac's own (brew zlib). Builds already have devkitPro and Homebrew on the PATH.]")
+
+
+def sends_to_terminal(text):
+    t = clean_answer(text)
+    if re.search(r"(?i)brew\.sh|ollama pull|python3 patchbay\.py|git pull", t) and not re.search(
+            r"(?im)^\s*(sudo|export|cmake|make|brew install|dkp-pacman)\b", t):
+        return False      # the few things only the user can do (install Homebrew, get a model, restart Patchbay)
+    blocks = re.findall(r"```[^\n]*\n(.*?)```", t, re.S)
+    if any(TERMINAL_CMD.search(b) for b in blocks):
+        return True
+    return bool(TERMINAL_WORDS.search(t)) and bool(TERMINAL_CMD.search(t) or "`" in t)
+
+
+def failed(result):
+    r = result or ""
+    return r.startswith("Error:") or bool(re.search(r"\b(failed|did not work)\b.*\(exit code [1-9]", r[:600]))
+
+
 def ask_model(cfg, messages, tools=None, emit=None, model=None):
     """Ask the AI. Its words are passed to emit as they arrive ("delta" events), so the page shows them live."""
+    if APP and APP.claude.mode() == "always" and not model:
+        try:
+            emit and emit({"type": "status", "text": "Asking Claude..."})
+            sc = claude_scrubber()
+            system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+            msg = APP.claude.chat(system, [m for m in messages if m.get("role") != "system"], tools or TOOLS, sc)
+            APP.claude.save_aliases(sc)
+            claude_cost(emit)
+            return msg
+        except claude.ClaudeError as e:
+            claude_cost(emit)
+            if emit:
+                emit({"type": "note", "text": "I couldn't use Claude (%s) Using the AI on %s for this answer instead."
+                                              % (str(e).rstrip(".") + ".", APP.computer)})
+    messages = [{k: v for k, v in m.items() if k != "claude"} if "claude" in m else m for m in messages]
     model = model or cfg["ollama_model"]
     body = json.dumps({"model": model, "stream": True, "messages": messages, "tools": tools or TOOLS,
                        "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}).encode()
@@ -1641,11 +1829,11 @@ def clean_answer(text):
 def chat_turn(st, user_text, emit, user_msg=None):
     cfg = st.cfg()
     if getattr(st, "home", False):
-        return chat_loop(st, user_text, emit, cfg, home_system(), HOME_TOOLS, HOME_HANDLERS, user_msg)
+        return chat_loop(st, user_text, emit, cfg, home_system(), claude_tools(HOME_TOOLS), HOME_HANDLERS, user_msg)
     system = SYSTEM % {"device": cfg["device_name"], "host": cfg["host"], "about": devices.about_text(cfg),
                        "folders": ", ".join(cfg["remote_folders"]),
                        "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"}
-    return chat_loop(st, user_text, emit, cfg, system, TOOLS, HANDLERS, user_msg)
+    return chat_loop(st, user_text, emit, cfg, claude_system(system), claude_tools(TOOLS), HANDLERS, user_msg)
 
 
 def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
@@ -1657,6 +1845,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
         system += ("\n\nThe user approved this plan. Carry it out now, step by step, without stopping to ask. "
                    "Say in one short line what each step does.\n" + "\n".join(
                        "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
+    fails, nudges = {}, 0
     for _ in range(PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS):
         check_stop()
         emit({"type": "status", "text": "Thinking..."})
@@ -1664,6 +1853,14 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
                            if calls else {"role": "assistant", "content": msg.get("content") or ""})
+        if msg.get("claude"):
+            st.messages[-1]["claude"] = msg["claude"]
+        if not calls and sends_to_terminal(msg.get("content")) and nudges < 2:
+            # Never hand the user commands to type: do it with the tools (install cards, project commands).
+            nudges += 1
+            st.messages.append({"role": "user", "content": TERMINAL_NUDGE})
+            emit({"type": "status", "text": "Doing that step myself instead..."})
+            continue
         if not calls:
             emit({"type": "answer", "text": clean_answer(msg.get("content"))})
             return
@@ -1694,6 +1891,12 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             result = clip(result or "(no output)")
             emit({"type": "tool_result", "name": name, "text": result, "summary": step_summary(name, args, result)})
             st.messages.append({"role": "tool", "content": result, "tool_name": name})
+            if failed(result) and name != "ask_claude" and APP and APP.claude.mode() in ("stuck", "plan"):
+                key = name + ":" + str(args.get("project") or args.get("command") or args.get("path") or "")
+                fails[key] = fails.get(key, 0) + 1
+                if fails[key] == 2:
+                    if stuck_help(st, emit, cfg, name, args, result):
+                        return          # a card is waiting for the user
     emit({"type": "answer", "text": "I stopped after %d steps so I don't loop forever. Tell me how to continue."
           % (PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS)})
 
@@ -1720,14 +1923,15 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "ask_claude": "Asking Claude", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
 def step_doing(name, args):
     words = STEP_WORDS.get(name) or ("Using " + (name or "a tool").replace("_", " "))
     try:
-        return words.format(**{k: str(v)[:60] for k, v in (args or {}).items()}) if "{" in words else words
+        return words.format(**{k: (", ".join(map(str, v)) if isinstance(v, list) else str(v))[:60]
+                               for k, v in (args or {}).items()}) if "{" in words else words
     except (KeyError, IndexError, ValueError):
         return re.sub(r"\s*\{\w+\}", "", words)
 
@@ -1761,7 +1965,8 @@ def do_confirm(st, pid, typed, emit):
         raise ToolError("That change is no longer waiting (it was already handled, or the app was restarted).")
     if getattr(st, "home", False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
-    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages"):
+    if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages",
+                     "ask_claude"):
         if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
             raise ToolError("Turning writing on needs you to type %s exactly." % cfg["device_name"])
         del st.pending[pid]
@@ -1859,6 +2064,19 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
                                                                 ", ".join(p["writes"]) if p["writes"] else "")})
         chat_turn(st, None, emit)
         return
+    if p["kind"] == "ask_claude":
+        sc = claude_scrubber()
+        try:
+            answer = send_question(st, emit, p["text"], sc, p.get("purpose") or "stuck")
+        except claude.ClaudeError as e:
+            emit({"type": "answer", "text": str(e)})
+            st.messages.append({"role": "user", "content": "[Asking Claude failed: %s. Carry on yourself.]" % e})
+            return
+        emit({"type": "note", "text": "**Claude's advice:**\n\n" + answer})
+        st.messages.append({"role": "user", "content": "[I sent the question to Claude. Its answer, which you should "
+                                                       "follow now:\n%s]" % answer})
+        chat_turn(st, None, emit)
+        return
     if p["kind"] == "settings":
         try:
             folder = devices.apply_changes(cfg, p["planned"])
@@ -1880,7 +2098,24 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
         chat_turn(st, None, emit)
 
 
+def step_key(p):
+    return json.dumps([p.get("kind"), p.get("project"), p.get("command"), p.get("packages"), p.get("update_all"),
+                       p.get("remote") if p.get("kind") == "project_edit" else None], sort_keys=True, default=str)
+
+
 def run_mac_step(st, cfg, p, emit):
+    """Do one confirmed (or automatic) step on the Mac, and remember it if it failed."""
+    short, detail = _run_mac_step(st, cfg, p, emit)
+    failed_steps = st.__dict__.setdefault("failed_steps", {})
+    if re.search(r"\bfailed\b", short) and p.get("kind") in ("command", "install_packages") \
+            and "password box was cancelled" not in detail:
+        failed_steps[step_key(p)] = short
+    else:
+        failed_steps.pop(step_key(p), None)
+    return short, detail
+
+
+def _run_mac_step(st, cfg, p, emit):
     """Do one confirmed (or automatic) step on the Mac. Returns (one line for the user, full result for the AI)."""
     if p["kind"] == "get_source":
         emit({"type": "status", "text": "Downloading %s..." % p["project"]})
@@ -1970,8 +2205,14 @@ def show_output(emit, result, code, out):
         err = (err or "command not found") + " (exit code 127 means a program isn't installed or isn't on the PATH)"
         if re.search(r"(-cmake|aarch64-none-elf|arm-none-eabi|dkp-|elf2nro|nacptool)", out or ""):
             err += ". That's a devkitPro tool: install devkitPro's packages with propose_install_packages"
-        elif re.search(r"\bcmake\b", out or ""):
+        elif re.search(r"\bcmake\b", out or "") and not re.search(r"-cmake", out or ""):
             err += ". Install cmake with propose_install_packages (homebrew)"
+    m = re.search(r"Could NOT find (\w+)|Package '?([\w-]+)'?,? (?:was )?not found|No package '([\w-]+)' found",
+                  out or "")
+    if code != 0 and m:
+        lib = (m.group(1) or m.group(2) or m.group(3) or "").lower() or "?"
+        err += (". A library is missing: for a console build install devkitPro's version (for example switch-%s) with "
+                "propose_install_packages" % lib)
     summary = result + (" First error: " + err if err else "")
     emit({"type": "tool_result", "name": "output", "summary": summary, "text": tail or "(no output)", "open": code != 0})
     return summary, "%s\nOutput (last lines):\n%s" % (summary, tail or "(no output)")
@@ -1979,6 +2220,11 @@ def show_output(emit, result, code, out):
 
 def do_cancel(st, pid, emit):
     p = st.pending.pop(pid, None)
+    if p and p["kind"] == "ask_claude":
+        st.messages.append({"role": "user", "content": "[I chose not to send the question to Claude. Carry on "
+                                                       "yourself.]"})
+        emit({"type": "answer", "text": "Not sent. Nothing went to Claude."})
+        return
     if p:
         st.messages.append({"role": "user", "content": "[I cancelled the %s of %s. Nothing was written.]"
                                                        % (p["kind"], p["remote"])})
@@ -2000,6 +2246,7 @@ class App:
         self.transfers = {}     # transfer id -> fm.Transfer (copies shown in the Files transfer queue)
         self.lock = threading.Lock()
         self.computer = computer_name()
+        self.claude = claude.Claude(Path(config_path).parent)
 
     def device(self, name):
         """The chat state for one saved device, by name. "__home__" is the home screen's own chat."""
@@ -2180,6 +2427,10 @@ class Handler(BaseHTTPRequestHandler):
             st = APP.device(q.get("device"))
             st.ensure_loaded()
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
+        elif path == "/api/claude":
+            self.json(APP.claude.public())
+        elif path == "/api/claude/sent":
+            self.json({"items": APP.claude.sent_list()})
         elif path == "/api/models":
             cfg = APP.home.cfg()
             try:
@@ -2341,6 +2592,18 @@ class Handler(BaseHTTPRequestHandler):
             if job and not job.done:
                 STOP.set()
             self.json({"ok": True})
+        elif path == "/api/claude/settings":
+            try:
+                self.json(APP.claude.save_settings({k: v for k, v in data.items() if k in claude.DEFAULTS}))
+            except claude.ClaudeError as e:
+                raise ToolError(str(e))
+        elif path == "/api/claude/test":
+            sc = claude_scrubber()
+            try:
+                answer = APP.claude.ask("Patchbay is checking that its API key works. Reply with just: OK", sc, "key test")
+            except claude.ClaudeError as e:
+                raise ToolError(str(e))
+            self.json(dict(APP.claude.public(), answer=answer[:200]))
         elif path == "/api/model":
             name = (data.get("model") or "").strip()
             if not re.match(r"^[\w.:/-]{1,100}$", name):
@@ -2549,6 +2812,14 @@ class Handler(BaseHTTPRequestHandler):
                     text = (data.get("text") or "").strip()
                     refs = [str(r) for r in (data.get("attachments") or [])][:10]
                     st.plan = None    # a new message ends any plan approved earlier
+                    st.failed_steps = {}    # the user may have fixed something, so failed steps may be tried again
+                    if NEW_JOB.match(text) and any(m.get("role") == "tool" for m in st.messages):
+                        # A new big job gets a fresh chat, so old answers don't steer it. The old one is saved.
+                        st.new_chat()
+                        emit({"type": "new_chat", "text": text})
+                        emit({"type": "note", "text": "I started a new chat for this job, so the earlier "
+                                                      "conversation doesn't get in the way. It's saved under "
+                                                      "Past chats."})
                     if text or refs:
                         st.record({"type": "user", "text": text, "files": [attachment_name(r) for r in refs]})
                     if refs:
@@ -2641,6 +2912,10 @@ def run_transfer(tr, work):
             tr.set(state="failed", message="Something went wrong: %s" % e, finished=time.time())
     threading.Thread(target=go, daemon=True).start()
     return tr.id
+
+
+NEW_JOB = re.compile(r"(?i)^\s*(please\s+|can you\s+|could you\s+)?(update|rebuild|recompile|port)\s+"
+                     r"(?!it\b|that\b|this\b|them\b|again\b)\S")
 
 
 class ChatJob:

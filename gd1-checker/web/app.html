@@ -202,7 +202,8 @@ border:2px solid var(--line)}
 <main class="view" id="chat" style="position:relative">
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
-    <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select></label></div>
+    <label style="font-size:13px;color:var(--mute)">AI model <select id="model" title="Which AI model answers"></select></label>
+    <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent">☁ Claude</button></div>
   <div id="chatlist"></div>
   <div id="log"></div>
   <div class="quick" id="quick"></div>
@@ -393,7 +394,7 @@ async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
   $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
   $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${info.model} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
   catch(e){$('info').textContent=e.message}}
-async function loadChat(){log.innerHTML='';drawQuick();loadChatBar();loadModels();
+async function loadChat(){log.innerHTML='';drawQuick();loadChatBar();loadModels();loadClaude();
   try{const h=await getJSON('/api/history?device='+enc(cur));
     if(!h.events.length&&cur===HOMECHAT){add('msg ai','Hi! I\'m Patchbay. Ask me about any of your devices, find or add a device by its address, '+
       'or change a setting. To work on one device, click its picture.');
@@ -426,6 +427,8 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
   else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
   else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
+  else if(ev.type==='new_chat'){log.innerHTML='';add('msg me',esc(ev.text),ev.text);if(ctx)log.appendChild(ctx.status);loadChatBar()}
+  else if(ev.type==='claude_cost'){showCost(ev)}
 }
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
@@ -458,15 +461,15 @@ function card(ev,closed){
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
-  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages';
+  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude';
   const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
   if(plan)return planCard(ev,closed);
-  const label=inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const label=ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
-    '<div>'+(inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+    '<div>'+(ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre>'+(build||sets||inst?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
+    (ev.diff?'<details open><summary>'+(ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary><pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask?esc(ev.diff):diffHtml(ev.diff))+'</pre></details>':'')+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
@@ -530,6 +533,36 @@ $('chats-btn').onclick=async e=>{e.stopPropagation();const l=$('chatlist');if(l.
       l.style.display='none';if(ev.target.dataset.del===j.current)loadChat();else loadChatBar();return}
     if(busy)return;try{await postJSON('/api/chats/open',{device:cur,id:it.dataset.id});l.style.display='none';loadChat()}catch(x){alert(x.message)}})};
 document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('chatlist').style.display='none'});
+// ---- Claude (cloud help with your own API key)
+function money(x){return '$'+(x<0.995?(+x).toFixed(x<0.1?3:2):(+x).toFixed(2))}
+function showCost(c){const b=$('claude-btn');if(!b)return;
+  b.textContent='☁ Claude'+(c&&c.session>0?' · '+money(c.session)+' today':'');
+  b.title='Ask Claude for help. This session: '+money(c.session||0)+'. This month: '+money(c.month||0)+(c.cap?' of '+money(c.cap)+' limit':'')+'.'}
+async function loadClaude(){try{const j=await getJSON('/api/claude');showCost({session:j.session_cost,month:j.month_cost,cap:j.monthly_cap});return j}catch(e){return null}}
+$('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;
+  modal('<h3>☁ Ask Claude for help</h3><div style="font-size:13.5px">Claude is Anthropic\'s cloud AI. It uses your own API key, which stays on '+esc(info.computer||'this Mac')+
+    '. Before anything is sent, your user name, home folder, IP addresses, device names, the Mac\'s name, emails and passwords are swapped for stand-ins like &lt;device-1&gt;.</div>'+
+    '<label>When to use Claude<select id="cl-mode" style="width:100%;margin-top:2px">'+Object.entries(j.modes).map(([k,v])=>'<option value="'+k+'"'+(k===j.mode?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>'+
+    '<label>Claude model<select id="cl-model" style="width:100%;margin-top:2px">'+Object.entries(j.models).map(([k,v])=>'<option value="'+k+'"'+(k===j.model?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>'+
+    '<label><input type="checkbox" id="cl-auto" style="width:auto"'+(j.auto_send?' checked':'')+'> Send automatically (otherwise a card shows exactly what will be sent, and you press Send). "Always" mode always sends automatically.</label>'+
+    '<label>Monthly spending limit in dollars (0 = no limit)<input id="cl-cap" type="number" min="0" step="1" value="'+j.monthly_cap+'"></label>'+
+    '<label>API key '+(j.key_set?'(saved, ends in …'+esc(j.key_end)+'; leave empty to keep it)':'(get one at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>)')+
+    '<input id="cl-key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>'+
+    '<div style="margin-top:10px;font-size:13.5px">This session: <b>'+money(j.session_cost)+'</b> ('+j.session_calls+' questions). This month: <b>'+money(j.month_cost)+'</b>'+(j.monthly_cap?' of '+money(j.monthly_cap):'')+'.'+
+      (j.cap_reached?' <b style="color:var(--bad)">The monthly limit is reached, so nothing is sent until you raise it.</b>':'')+'<br><small>Costs are worked out from what Claude reports for each answer; your Anthropic account shows the exact bill.</small></div>'+
+    '<div id="cl-msg" style="font-size:13px;margin-top:6px"></div>'+
+    '<div class="row" style="margin-top:12px;gap:6px;display:flex;flex-wrap:wrap"><button class="primary" id="cl-save">Save</button><button id="cl-test"'+(j.key_set?'':' disabled')+'>Test the key</button><button id="cl-sent">See what was sent</button>'+
+    (j.key_set?'<button id="cl-forget">Remove the key</button>':'')+'<button onclick="closeModal()">Close</button></div>');
+  const msg=t=>$('cl-msg').innerHTML=t;
+  const save=async extra=>{const b={mode:$('cl-mode').value,model:$('cl-model').value,auto_send:$('cl-auto').checked,monthly_cap:$('cl-cap').value};
+    const k=$('cl-key').value.trim();if(k)b.key=k;Object.assign(b,extra||{});return postJSON('/api/claude/settings',b)};
+  $('cl-save').onclick=async()=>{try{const r=await save();showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap});msg('Saved.'+(r.key_set?'':' Add an API key to start using Claude.'));$('cl-key').value=''}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  $('cl-test').onclick=async()=>{msg('Asking Claude…');try{await save();const r=await postJSON('/api/claude/test',{});msg('It works. Claude said: '+esc(r.answer));showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap})}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  const f=$('cl-forget');if(f)f.onclick=async()=>{if(!confirm('Remove the saved API key from this Mac?'))return;try{await save({key:''});closeModal()}catch(e){msg(esc(e.message))}};
+  $('cl-sent').onclick=async()=>{try{const r=await getJSON('/api/claude/sent');
+    modal('<h3>What was sent to Claude</h3>'+(r.items.length?r.items.map(x=>'<details><summary>'+esc(x.time)+' · '+esc(x.why)+'</summary><pre style="white-space:pre-wrap;font-size:12px">'+esc(x.text)+'</pre></details>').join(''):'<div>Nothing yet.</div>')+
+      '<div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');$('box').classList.add('wide')}catch(e){msg(esc(e.message))}}};
+
 async function loadModels(){try{const j=await getJSON('/api/models');const s=$('model');
   s.innerHTML=j.models.map(m=>`<option value="${esc(m.name)}"${m.name===j.current?' selected':''}>${esc(m.name)}${m.size?' ('+esc(m.size)+')':''}</option>`).join('');
   s.title=j.error||'Which AI model answers. Bigger models are slower but think harder.'}catch(e){}}
