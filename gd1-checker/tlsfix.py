@@ -76,7 +76,9 @@ def context():
 
 def install():
     """Make every https request in Patchbay use context(), but only when Python's own list is missing."""
+    global _source
     if _count(ssl.create_default_context()):
+        _source = "python"
         return "python"
     ctx = context()
     ssl._create_default_https_context = lambda *a, **k: ctx   # still verifies certificates and host names

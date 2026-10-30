@@ -50,6 +50,9 @@ import tlsfix  # https certificates for python.org Python on a Mac (must come fi
 import gd1check as core
 import backup
 import claude
+import collections
+import mac_app
+import selfcheck
 import devices
 import firmware
 import nro
@@ -171,6 +174,9 @@ class State:
             self.chat_id, self.title = None, ""
 
     def record(self, ev):
+        t = ev.get("type")
+        if t == "error" or (t == "tool_result" and failed(ev.get("text") or "")):
+            note_problem("%s: %s" % (getattr(self, "name", "") or "chat", ev.get("summary") or ev.get("text") or ""))
         if ev.get("type") in ("user", "answer", "note", "error", "confirm", "tool_result"):
             if ev["type"] == "tool_result":
                 ev = dict(ev, text=clip(ev.get("text") or "", 3000))
@@ -2541,6 +2547,10 @@ class Handler(BaseHTTPRequestHandler):
             st = APP.device(q.get("device"))
             st.ensure_loaded()
             self.json({"chats": st.list_chats()[:200], "current": st.chat_id})
+        elif path == "/api/selfcheck":
+            self.json({"checks": selfcheck.run_checks(APP), "app": mac_app.status()})
+        elif path == "/api/report":
+            self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
             self.json(APP.claude.public())
         elif path == "/api/claude/sent":
@@ -2706,6 +2716,26 @@ class Handler(BaseHTTPRequestHandler):
             if job and not job.done:
                 STOP.set()
             self.json({"ok": True})
+        elif path == "/api/selfcheck/fix":
+            try:
+                msg = selfcheck.fix(APP, data.get("id"), lambda ev: None)
+            except RuntimeError as e:
+                raise ToolError(str(e))
+            self.json({"message": msg})
+        elif path == "/api/macapp":
+            act = data.get("action")
+            try:
+                if act == "make_app":
+                    mac_app.make_app()
+                elif act == "remove_app":
+                    mac_app.remove_app()
+                elif act in ("login_on", "login_off"):
+                    mac_app.set_login(act == "login_on")
+                else:
+                    raise ToolError("Unknown action.")
+            except OSError as e:
+                raise ToolError(str(e))
+            self.json(mac_app.status())
         elif path == "/api/claude/settings":
             try:
                 self.json(APP.claude.save_settings({k: v for k, v in data.items() if k in claude.DEFAULTS}))
@@ -2954,6 +2984,7 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"type": "error", "text": str(e)})
             except Exception as e:
                 traceback.print_exc()
+                note_problem("crash: " + traceback.format_exc()[-600:].replace("\n", " | "))
                 emit({"type": "error", "text": "Something went wrong: %s" % e})
             finally:
                 try:
@@ -3034,6 +3065,13 @@ NEW_JOB = re.compile(r"(?i)^\s*(please\s+|can you\s+|could you\s+)?(update|rebui
                      r"(?!it\b|that\b|this\b|them\b|again\b)\S")
 
 
+RECENT_ERRORS = collections.deque(maxlen=60)    # for the error report
+
+
+def note_problem(text):
+    RECENT_ERRORS.append("%s %s" % (time.strftime("%H:%M:%S"), re.sub(r"\s+", " ", str(text))[:400]))
+
+
 class ChatJob:
     """One chat request being worked on: everything it has shown so far."""
 
@@ -3085,7 +3123,18 @@ def main():
     ap.add_argument("--lan", action="store_true", help="let other computers on your network (like your laptop) open it")
     ap.add_argument("--set-password", action="store_true", help="choose or change the password for other computers")
     ap.add_argument("--no-browser", action="store_true", help="don't open the browser automatically")
+    ap.add_argument("--install-app", action="store_true",
+                    help="make a Patchbay app icon (in your Applications folder) and start Patchbay when you log in")
     args = ap.parse_args()
+    if args.install_app:
+        try:
+            path = mac_app.make_app()
+            mac_app.set_login(True)
+        except OSError as e:
+            sys.exit(str(e))
+        print("Done. Patchbay is now in your Applications folder (%s), and it starts by itself when you log in." % path)
+        print("To put it in the Dock: open Applications in Finder and drag Patchbay onto the Dock.")
+        return
     try:
         main_cfg = core.load_config(args.config)
     except SystemExit as e:
@@ -3109,8 +3158,18 @@ def main():
     try:
         server = make_server(lan, port)
     except OSError:
-        sys.exit("Port %d is already in use. Is the app already open? Or try: python3 patchbay.py --port %d"
-                 % (port, port + 1))
+        url = "http://127.0.0.1:%d" % port
+        try:
+            with urllib.request.urlopen(url + "/", timeout=3) as r:
+                mine = b"Patchbay" in r.read(20000)
+        except OSError:
+            mine = False
+        if mine:
+            print("Patchbay is already running. Opening it: %s" % url)
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+        sys.exit("Port %d is already in use by another program. Try: python3 patchbay.py --port %d" % (port, port + 1))
     url = "http://127.0.0.1:%d" % port
     print("Patchbay is running. On this Mac, open: %s" % url)
     if lan:

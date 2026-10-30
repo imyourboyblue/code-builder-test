@@ -186,6 +186,7 @@ border:2px solid var(--line)}
   <span id="crumb"></span>
   <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a></nav>
   <span id="info"></span>
+  <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
   <button id="reset" type="button" hidden>New chat</button>
   <button id="logout" type="button" hidden>Sign out</button>
 </header>
@@ -423,7 +424,8 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
     add('step','<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':'✓ ')+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
   else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
   else if(ev.type==='answer'){endStream();add('msg ai',md(ev.text||'(no answer)'),ev.text||'')}
-  else if(ev.type==='error')add('msg err',esc(ev.text),ev.text);
+  else if(ev.type==='error'){const d=add('msg err',esc(ev.text)+' <button class="rep" style="margin-left:6px;font-size:12px">Copy error report</button>',ev.text);
+    d.querySelector('.rep').onclick=async e=>{try{const r=await getJSON('/api/report');e.target.textContent=(await copyText(r.text))?'Copied — paste it to me':'Open 🩺 Setup to copy it'}catch(x){e.target.textContent='Open 🩺 Setup'}}}
   else if(ev.type==='confirm'){card(ev,pending&&!pending.includes(ev.id));keep()}
   else if(ev.type==='open'&&ctx){location.hash='#/d/'+enc(ev.device)+'/'+(ev.tab||'chat')}
   else if(ev.type==='devices_changed'&&ctx){loadHome(true)}
@@ -538,6 +540,35 @@ $('chats-btn').onclick=async e=>{e.stopPropagation();const l=$('chatlist');if(l.
       l.style.display='none';if(ev.target.dataset.del===j.current)loadChat();else loadChatBar();return}
     if(busy)return;try{await postJSON('/api/chats/open',{device:cur,id:it.dataset.id});l.style.display='none';loadChat()}catch(x){alert(x.message)}})};
 document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('chatlist').style.display='none'});
+// ---- Setup: self-check with Fix buttons, the app icon / start at login, and the error report
+const LV={ok:['✅','var(--ok,#2a7)'],warn:['⚠️','var(--warn,#b80)'],bad:['❌','var(--bad)']};
+async function openSetup(msg){
+  modal('<h3>🩺 Setup check</h3><div id="sc-body">Checking…</div>');
+  let j;try{j=await getJSON('/api/selfcheck')}catch(e){$('sc-body').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>';return}
+  const a=j.app;
+  $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    j.checks.map(c=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line,#ddd)">'+
+      '<span>'+LV[c.level][0]+'</span><div style="flex:1"><b>'+esc(c.name)+'</b><div style="font-size:13.5px">'+esc(c.detail)+'</div>'+
+      (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
+      (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>').join('')+
+    (a.mac?'<h3 style="margin-top:14px">Starting Patchbay</h3>'+
+      '<div style="font-size:13.5px">'+(a.app?'✅ The Patchbay app is in your Applications folder. Drag it onto the Dock to start Patchbay with one click.':'Make a Patchbay app you can double-click or keep in the Dock, so you don\'t need Terminal.')+'</div>'+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the Patchbay app')+'</button>'+
+      '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start Patchbay by itself when I log in to the Mac</label></div>':'')+
+    '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
+    '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
+  const say=t=>$('sc-msg').innerHTML=t;
+  document.querySelectorAll('.sc-fix').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='Working…';
+    try{const r=await postJSON('/api/selfcheck/fix',{id:b.dataset.id});openSetup(r.message)}catch(e){b.disabled=false;b.textContent='Try again';say('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}});
+  const ap=$('sc-app');if(ap)ap.onclick=async()=>{try{await postJSON('/api/macapp',{action:'make_app'});openSetup('Made the Patchbay app. Open Applications in Finder and drag Patchbay onto the Dock.')}catch(e){say(esc(e.message))}};
+  const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'Patchbay will now start by itself when you log in.':'Patchbay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
+  $('sc-again').onclick=()=>openSetup();
+  $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
+    say(okc?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Select the text below and copy it.')+'';
+    if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
+}
+$('setup-btn').onclick=()=>openSetup();
+
 // ---- Claude (cloud help with your own API key)
 function money(x){return '$'+(x<0.995?(+x).toFixed(x<0.1?3:2):(+x).toFixed(2))}
 function showCost(c){const b=$('claude-btn');if(!b)return;

@@ -35,6 +35,17 @@ Scanning only reads from GD1. Every scan copies GD1's files to a dated snapshot 
 
 There is nothing else to install. The script only uses parts of Python that come built in.
 
+## Easy start, and checking everything works
+
+The first time, start Patchbay from Terminal (above). After that you have two shortcuts:
+
+- **A Patchbay app you can double-click.** In Terminal run `python3 patchbay.py --install-app` once, or click **🩺 Setup** at the top of the page and press **Make the Patchbay app**. It appears in your Applications folder; drag it onto the Dock. Double-clicking it opens Patchbay (and just opens the page if it's already running).
+- **Start on its own when the Mac turns on.** The same **🩺 Setup** panel has a tick-box for this (`--install-app` turns it on too). It runs Patchbay quietly in the background; open the page whenever you want it.
+
+### Is everything working? (🩺 Setup)
+
+Click **🩺 Setup** at the top of the page for a quick check of Ollama (the AI), secure connections, the build tools, the internet, and your devices. Anything not right shows a **Fix** button where Patchbay can put it right itself (start Ollama, load the Mac's certificates, install the Switch build tools). If something ever goes wrong, **Copy error report** copies the versions, these checks and the recent errors (never your passwords or keys) so you can paste it to get help.
+
 ## The Patchbay app
 
 Start it on the Mac Studio, in Terminal, from inside the `gd1-checker` folder:
