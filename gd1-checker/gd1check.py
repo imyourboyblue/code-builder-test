@@ -5,7 +5,7 @@ Patchbay checker (gd1check): finds files damaged by a crash during a save, over 
 What it does
   test     Check that the Mac can reach GD1's FTP server.
   browse   Look through GD1's folders, preview files, and pick which folders to scan.
-  scan     Copy GD1's files to a dated snapshot on the Mac (read-only on GD1),
+  scan     Copy GD1's files to a dated snapshot on the Mac (read-only on GD1; the newest keep_scans are kept),
            check every file for crash damage, and write a report.
   explain  Ask the AI on your Mac (Ollama) to explain the last report in plain words.
   restore  Put a good copy of one file back on GD1. Backs up the current file
@@ -121,6 +121,7 @@ def load_config(path):
     cfg.setdefault("exclude", [])
     cfg.setdefault("max_file_mb", 200)
     cfg.setdefault("max_files", 5000)
+    cfg.setdefault("keep_scans", 5)     # scan copies kept per device (older ones go, unless they hold the only good copy)
     cfg.setdefault("data_folder", str(HERE / "gd1-data"))
     cfg.setdefault("ollama_url", "http://localhost:11434")
     cfg.setdefault("ollama_model", "auto")     # Automatic: picks the model for each job
@@ -630,6 +631,7 @@ def cmd_scan(cfg, args):
     say("Found %d files to check (%d skipped as too big)." % (len(files), len(skipped)))
 
     previous = latest_manifest(root, exclude=stamp)
+    prev_dir = latest_snapshot_dir(root, exclude=stamp)
     leftovers = leftover_notes([f["path"] for f in files])
     report = {"device": cfg["device_name"], "host": cfg["host"], "port": dev.port,
               "time": stamp, "snapshot": str(snap), "files": [], "skipped": skipped}
@@ -651,6 +653,8 @@ def cmd_scan(cfg, args):
         if old and old["size"] > 1024 and len(data) < old["size"] * 0.5:
             probs.append(problem("warning", "File shrank from %d to %d bytes since the last scan." % (old["size"], len(data))))
         sha = hashlib.sha256(data).hexdigest()
+        if old and old.get("sha256") == sha and prev_dir:
+            share_copy(local_path_for(prev_dir, f["path"]), local)   # unchanged: no second copy on the disk
         manifest[f["path"]] = {"size": len(data), "sha256": sha, "modified": f["modified"],
                                "ok": not any(p["level"] == "error" for p in probs)}
         report["files"].append({"path": f["path"], "size": len(data), "sha256": sha, "problems": probs})
@@ -665,6 +669,77 @@ def cmd_scan(cfg, args):
     say()
     say(report_text(report))
     say("Report saved: %s" % tpath)
+    gone = prune_scans(root, int(cfg.get("keep_scans") or 5))
+    if gone:
+        say("Removed %d older scan cop%s (keeping the newest %d)." % (gone, "y" if gone == 1 else "ies",
+                                                                     int(cfg.get("keep_scans") or 5)))
+
+
+def share_copy(old, new):
+    """Point new at the same disk space as old (a hard link), when the files are identical."""
+    try:
+        if old.exists() and old.stat().st_size == new.stat().st_size:
+            tmp = new.with_name(new.name + ".link")
+            os.link(str(old), str(tmp))
+            tmp.replace(new)
+    except OSError:
+        pass
+
+
+def latest_snapshot_dir(root, exclude=None):
+    snaps = sorted(p for p in (root / "snapshots").glob("*") if p.is_dir() and p.name != exclude)
+    for s in reversed(snaps):
+        if (s / "_manifest.json").exists():
+            return s
+    return None
+
+
+def prune_scans(root, keep, dry=False):
+    """Delete scan copies older than the newest `keep`, except ones holding the only good copy of a file.
+    Returns how many were removed."""
+    import shutil
+    snaps = sorted(p for p in (root / "snapshots").glob("*") if p.is_dir())
+    keep = max(1, keep)
+    kept, old = snaps[-keep:], snaps[:-keep]
+    good = set()
+    for s in kept:
+        try:
+            good |= {p for p, m in json.loads((s / "_manifest.json").read_text()).items() if m.get("ok")}
+        except (OSError, ValueError):
+            pass
+    removed = 0
+    for s in reversed(old):
+        try:
+            man = json.loads((s / "_manifest.json").read_text())
+        except (OSError, ValueError):
+            man = {}
+        only = {p for p, m in man.items() if m.get("ok")} - good
+        if only:
+            good |= only          # keep it: it has the last good copy of something
+            continue
+        if not dry:
+            shutil.rmtree(str(s), ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def scan_usage(root):
+    """(bytes on disk, number of scan copies) for one device. Shared (unchanged) files count once."""
+    seen, total, count = set(), 0, 0
+    for s in (root / "snapshots").glob("*"):
+        if not s.is_dir():
+            continue
+        count += 1
+        for dirpath, _, names in os.walk(str(s)):
+            for n in names:
+                try:
+                    st = os.stat(os.path.join(dirpath, n))
+                except OSError:
+                    continue
+                if (st.st_dev, st.st_ino) not in seen:
+                    seen.add((st.st_dev, st.st_ino))
+                    total += st.st_size
+    return total, count
 
 
 def latest_manifest(root, exclude=None):

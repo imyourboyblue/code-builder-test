@@ -125,6 +125,28 @@ def _secrets(app):
               % k["in_keychain"])
 
 
+def _scan_data(app):
+    import gd1chat
+    total, count, per = 0, 0, []
+    for _, cfg in app.registry.all():
+        try:
+            b, n = gd1chat.core.scan_usage(gd1chat.core.data_dir(cfg))
+        except Exception:
+            continue
+        total, count = total + b, count + n
+        if n:
+            per.append("%s %s" % (cfg["device_name"], gd1chat.core.human_size(b)))
+    if not count:
+        return ok("scans", "Scan copies", "None saved yet.")
+    text = ("%s in %d scan cop%s (%s). Scans keep copies so damaged files can be put back from a good one; "
+            "unchanged files share space, and only the newest few are kept."
+            % (gd1chat.core.human_size(total), count, "y" if count == 1 else "ies", ", ".join(per)))
+    return ok("scans", "Scan copies", text) if count <= 1 else \
+        warn("scans", "Scan copies", text, "Clearing keeps each device's newest scan and any last good copies.",
+             "Clear old scan copies", "scans") if total > 20e9 else \
+        dict(ok("scans", "Scan copies", text), fix="Clear old scan copies", fix_id="scans")
+
+
 def _claude(app):
     st = app.claude.key_status()
     if st["state"] == "connected":
@@ -137,7 +159,7 @@ def _claude(app):
     return warn("claude", "Claude (cloud AI)", st["text"], "Check the internet connection, then look again.")
 
 
-CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _secrets, _claude]
+CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _scan_data, _secrets, _claude]
 
 
 def migrate_secrets(app):
@@ -168,6 +190,13 @@ def fix(app, check_id, emit):
         moved = migrate_secrets(app)
         return ("Moved into the Mac's Keychain: %s." % ", ".join(moved)) if moved else \
             "Nothing more to move (or the Keychain said no)."
+    if check_id == "scans":
+        import gd1chat
+        gone = 0
+        for _, cfg in app.registry.all():
+            gone += gd1chat.core.prune_scans(gd1chat.core.data_dir(cfg), 1)
+        return "Removed %d older scan cop%s. Each device keeps its newest scan (and any last good copies)." % (
+            gone, "y" if gone == 1 else "ies")
     if check_id == "ollama":
         if sys.platform != "darwin":
             raise RuntimeError("Start the Ollama app yourself on this computer.")
