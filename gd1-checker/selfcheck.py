@@ -100,7 +100,36 @@ def _disk(app):
         return warn("disk", "Free space", "Couldn't check: %s" % e, "")
 
 
-CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk]
+def _secrets(app):
+    import keychain
+    k = keychain.status(Path(__file__).resolve().parent)
+    name = "Saved passwords"
+    if not k["available"]:
+        return ok("keychain", name, "Kept in Patchbay's settings files (the Keychain is only on a Mac).")
+    if k["problems"]:
+        return warn("keychain", name, k["problems"][-1], "Restart Patchbay after allowing it.")
+    if k["plain"]:
+        return warn("keychain", name, "Still in a settings file: %s." % ", ".join(k["plain"]),
+                    "Patchbay moves them into the Mac's Keychain by itself.", "Move them now", "keychain")
+    if not k["in_keychain"]:
+        return ok("keychain", name, "No passwords saved (your devices use anonymous logins).")
+    return ok("keychain", name, "%d kept safely in the Mac's Keychain (Keychain Access, \"Patchbay\")."
+              % k["in_keychain"])
+
+
+CHECKS = [_ollama, _certs, _internet, _build_tools, _devices, _disk, _secrets]
+
+
+def migrate_secrets(app):
+    import keychain
+    dirs = set()
+    for f, cfg in app.registry.all():
+        try:
+            import gd1check
+            dirs.add(str(gd1check.data_dir(cfg)))
+        except Exception:
+            pass
+    return keychain.migrate(Path(__file__).resolve().parent, sorted(dirs))
 
 
 def run_checks(app):
@@ -115,6 +144,10 @@ def run_checks(app):
 
 def fix(app, check_id, emit):
     """Try to put one thing right. Returns a sentence for the user. emit streams progress lines."""
+    if check_id == "keychain":
+        moved = migrate_secrets(app)
+        return ("Moved into the Mac's Keychain: %s." % ", ".join(moved)) if moved else \
+            "Nothing more to move (or the Keychain said no)."
     if check_id == "ollama":
         if sys.platform != "darwin":
             raise RuntimeError("Start the Ollama app yourself on this computer.")

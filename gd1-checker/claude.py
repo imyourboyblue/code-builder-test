@@ -12,6 +12,7 @@ Only uses Python's built-in parts (urllib), so nothing extra needs installing.
 
 import getpass
 import json
+import keychain
 import os
 import re
 import threading
@@ -70,6 +71,7 @@ class Claude:
             s["mode"] = DEFAULTS["mode"]
         if s.get("model") not in MODELS:
             s["model"] = DEFAULTS["model"]
+        s["key"] = keychain.reveal(s.get("key") or "")   # kept in the Mac's Keychain when it can be
         return s
 
     def save_settings(self, changes):
@@ -96,7 +98,8 @@ class Claude:
                     raise ClaudeError("That doesn't look like an Anthropic API key (they start with sk-ant-).")
                 s[k] = v
         tmp = self.file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(s, indent=2))
+        tmp.write_text(json.dumps(dict(s, key=keychain.protect(s.get("key") or "", account="claude-api-key")),
+                                  indent=2))
         try:
             os.chmod(str(tmp), 0o600)    # only your Mac user can read the key
         except OSError:

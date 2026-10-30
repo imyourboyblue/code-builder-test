@@ -10,6 +10,7 @@ Only uses Python's built-in parts.
 """
 
 import json
+import keychain
 import os
 import re
 import socket
@@ -174,7 +175,7 @@ class Registry:
                 raise DeviceError("Ports should be numbers like 21, 5000.")
         cfg = dict(NEW_DEVICE, device_name=name, host=host, ports=ports, about=about or "",
                    username=username or ("" if protocol != "ftp" else "anonymous"),
-                   password=password or ("" if protocol != "ftp" else "anonymous@"))
+                   password=keychain.protect(password or ("" if protocol != "ftp" else "anonymous@")))
         if protocol != "ftp":
             cfg["protocol"] = protocol
         if protocol == "smb":
@@ -331,7 +332,7 @@ def apply_changes(cfg, planned):
         (folder / p.name).write_bytes(p.read_bytes())
         raw = json.loads(p.read_text())
         for key, new in items:
-            raw[key] = new
+            raw[key] = keychain.protect(new) if key == "password" else new
         tmp = p.with_name(p.name + ".tmp")
         tmp.write_text(json.dumps(raw, indent=2) + "\n")
         tmp.replace(p)

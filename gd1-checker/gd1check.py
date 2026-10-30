@@ -26,6 +26,7 @@ import gzip
 import hashlib
 import io
 import json
+import keychain
 import os
 import re
 import socket
@@ -112,6 +113,7 @@ def load_config(path):
     cfg.setdefault("ports", {"sftp": [22], "smb": [445], "folder": []}.get(cfg["protocol"], [21, 5000]))
     cfg.setdefault("username", "anonymous")
     cfg.setdefault("password", "anonymous@")
+    cfg["password"] = keychain.reveal(cfg["password"])   # "@keychain:..." means it's kept in the Mac's Keychain
     cfg.setdefault("passive_mode", True)
     cfg.setdefault("timeout_seconds", 20)
     cfg.setdefault("remote_folders", ["/"])

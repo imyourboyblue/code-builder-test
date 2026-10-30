@@ -365,6 +365,8 @@ Browsing only reads from GD1. It never changes anything.
 
 ## Where things are saved
 
+**Passwords and keys** (device passwords, the Claude API key) are kept in the Mac's **Keychain**, not in the settings files. The files only hold a pointer like `@keychain:device-3f9a1c2b`. Patchbay moves any old plain passwords over by itself when it starts (🩺 Setup shows how many are in the Keychain). To see them, open Keychain Access and search for "Patchbay". The first time a new Python reads them, macOS may ask to allow it: choose **Always Allow**. If the Keychain can't be used, they stay in the settings file as before.
+
 Everything goes in `~/GD1-checker-data/<device name>/`, for example `~/GD1-checker-data/GD1/` (you can change this with `data_folder` in `config.json`):
 
 - `snapshots/<date>/`: a copy of GD1's files from each scan

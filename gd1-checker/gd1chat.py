@@ -3724,6 +3724,12 @@ def main():
         if not sys.stdin.isatty():
             sys.exit("Opening the app to your network needs a password. Run: python3 patchbay.py --set-password")
         APP.access.ask_for_new_password()
+    try:   # passwords and keys saved in plain settings files move into the Mac's Keychain
+        moved = selfcheck.migrate_secrets(APP)
+        if moved:
+            print("Moved into the Mac's Keychain: %s. The settings files now only point to them." % ", ".join(moved))
+    except Exception as e:
+        print("Couldn't move passwords into the Keychain (they stay where they were): %s" % e)
     if os.environ.pop("PATCHBAY_RESTARTED", None):
         for _ in range(20):   # just restarted after an update: the old copy may still be letting go of the port
             try:
