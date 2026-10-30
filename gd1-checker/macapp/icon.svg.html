@@ -1,58 +1,95 @@
 <!doctype html><html><body style="margin:0;background:transparent">
 <svg id="i" width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
 <defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#1b1f4b"/><stop offset="0.55" stop-color="#151735"/><stop offset="1" stop-color="#0b0c1e"/>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#0d1630"/><stop offset="0.6" stop-color="#0e2440"/><stop offset="1" stop-color="#06304a"/>
   </linearGradient>
-  <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
-    <stop offset="0" stop-color="#5b5cff" stop-opacity="0.35"/><stop offset="1" stop-color="#5b5cff" stop-opacity="0"/>
+  <radialGradient id="moon" cx="0.5" cy="0.4" r="0.55">
+    <stop offset="0" stop-color="#ffd36b" stop-opacity="0.42"/><stop offset="1" stop-color="#ffd36b" stop-opacity="0"/>
   </radialGradient>
-  <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="#3a3f63"/><stop offset="1" stop-color="#22263f"/>
+  <radialGradient id="bone" cx="0.42" cy="0.32" r="0.8">
+    <stop offset="0" stop-color="#fffaf0"/><stop offset="0.65" stop-color="#ece1c8"/><stop offset="1" stop-color="#bfae8c"/>
+  </radialGradient>
+  <linearGradient id="hat" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#2a2a33"/><stop offset="1" stop-color="#0d0d12"/>
   </linearGradient>
-  <linearGradient id="cA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4fd8"/><stop offset="1" stop-color="#ff8a3d"/></linearGradient>
-  <linearGradient id="cB" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22e3ff"/><stop offset="1" stop-color="#5b7bff"/></linearGradient>
-  <linearGradient id="cC" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7dff8a"/><stop offset="1" stop-color="#16c6a0"/></linearGradient>
-  <radialGradient id="jack" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#e9ecf5"/><stop offset="0.6" stop-color="#9aa1b8"/><stop offset="1" stop-color="#5a6078"/></radialGradient>
-  <filter id="neon" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="14" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.55"/></filter>
-  <clipPath id="sq"><rect x="80" y="80" width="864" height="864" rx="196"/></clipPath>
+  <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#fff0a8"/><stop offset="0.45" stop-color="#f2b632"/><stop offset="1" stop-color="#a8650c"/>
+  </linearGradient>
+  <linearGradient id="cA" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ff4fd8"/><stop offset="1" stop-color="#ff8a3d"/></linearGradient>
+  <linearGradient id="cB" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#22e3ff"/><stop offset="1" stop-color="#5b7bff"/></linearGradient>
+  <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4f6fb"/><stop offset="0.5" stop-color="#a9b0c4"/><stop offset="1" stop-color="#5f6680"/></linearGradient>
+  <filter id="neon" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <feGaussianBlur stdDeviation="16" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="shadow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+    <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.55"/>
+  </filter>
+  <clipPath id="tile"><rect x="80" y="80" width="864" height="864" rx="196"/></clipPath>
+  <!-- a jack plug pointing along +x, its back end at 0,0 -->
+  <g id="plugA"><rect x="-6" y="-30" width="78" height="60" rx="14" fill="#ff5fb8"/><rect x="2" y="-22" width="62" height="10" rx="5" fill="#fff" opacity="0.35"/>
+    <rect x="70" y="-20" width="26" height="40" rx="5" fill="url(#metal)"/><rect x="94" y="-11" width="52" height="22" rx="6" fill="url(#metal)"/>
+    <rect x="118" y="-12" width="5" height="24" fill="#3b4058"/><circle cx="148" cy="0" r="12" fill="url(#metal)"/></g>
+  <g id="plugB"><rect x="-6" y="-30" width="78" height="60" rx="14" fill="#3fa8ff"/><rect x="2" y="-22" width="62" height="10" rx="5" fill="#fff" opacity="0.35"/>
+    <rect x="70" y="-20" width="26" height="40" rx="5" fill="url(#metal)"/><rect x="94" y="-11" width="52" height="22" rx="6" fill="url(#metal)"/>
+    <rect x="118" y="-12" width="5" height="24" fill="#3b4058"/><circle cx="148" cy="0" r="12" fill="url(#metal)"/></g>
 </defs>
-<g filter="url(#shadow)"><rect x="80" y="80" width="864" height="864" rx="196" fill="url(#bg)"/></g>
-<g clip-path="url(#sq)">
-  <rect x="80" y="80" width="864" height="864" fill="url(#glow)"/>
-  <!-- faint circuit grid -->
-  <g stroke="#ffffff" stroke-opacity="0.05" stroke-width="3">
-    <path d="M80 300H944M80 512H944M80 724H944M300 80V944M512 80V944M724 80V944"/>
+
+<g clip-path="url(#tile)">
+  <rect x="80" y="80" width="864" height="864" fill="url(#bg)"/>
+  <rect x="80" y="80" width="864" height="864" fill="url(#moon)"/>
+  <g fill="#fff">
+    <circle cx="170" cy="190" r="4" opacity="0.8"/><circle cx="260" cy="140" r="3" opacity="0.6"/><circle cx="850" cy="170" r="4" opacity="0.8"/>
+    <circle cx="770" cy="125" r="3" opacity="0.55"/><circle cx="140" cy="420" r="3" opacity="0.5"/><circle cx="890" cy="400" r="3" opacity="0.5"/>
+    <circle cx="905" cy="270" r="2.5" opacity="0.6"/><circle cx="120" cy="290" r="2.5" opacity="0.6"/>
   </g>
-  <!-- the patch panel -->
-  <rect x="176" y="250" width="672" height="150" rx="40" fill="url(#panel)" stroke="#4b5280" stroke-width="4"/>
-  <rect x="176" y="624" width="672" height="150" rx="40" fill="url(#panel)" stroke="#4b5280" stroke-width="4"/>
-  <g id="jacks">
-    <g transform="translate(288,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-    <g transform="translate(512,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-    <g transform="translate(736,325)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-    <g transform="translate(288,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-    <g transform="translate(512,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-    <g transform="translate(736,699)"><circle r="46" fill="url(#jack)"/><circle r="22" fill="#0b0c1e"/></g>
-  </g>
-  <!-- glowing cables -->
-  <g fill="none" stroke-linecap="round" stroke-width="30" filter="url(#neon)">
-    <path d="M288 325 C 288 520, 736 500, 736 699" stroke="url(#cA)"/>
-    <path d="M736 325 C 736 540, 288 480, 288 699" stroke="url(#cB)"/>
-    <path d="M512 325 C 430 470, 600 560, 512 699" stroke="url(#cC)"/>
-  </g>
-  <!-- plugs on the jacks -->
-  <g>
-    <circle cx="288" cy="325" r="26" fill="#ff4fd8"/><circle cx="736" cy="699" r="26" fill="#ff8a3d"/>
-    <circle cx="736" cy="325" r="26" fill="#22e3ff"/><circle cx="288" cy="699" r="26" fill="#5b7bff"/>
-    <circle cx="512" cy="325" r="26" fill="#7dff8a"/><circle cx="512" cy="699" r="26" fill="#16c6a0"/>
-  </g>
-  <!-- status LEDs -->
-  <g><circle cx="220" cy="285" r="9" fill="#7dff8a" filter="url(#neon)"/><circle cx="804" cy="285" r="9" fill="#ff4fd8" filter="url(#neon)"/>
-     <circle cx="220" cy="659" r="9" fill="#22e3ff" filter="url(#neon)"/><circle cx="804" cy="659" r="9" fill="#ff8a3d" filter="url(#neon)"/></g>
-  <!-- glass highlight -->
-  <path d="M80 80H944V380C700 300 330 300 80 420Z" fill="#ffffff" fill-opacity="0.05"/>
+  <path d="M80 820 C 180 790, 260 850, 360 818 S 540 790, 640 822 S 830 850, 944 812 L944 944 L80 944Z" fill="#0b4a6b" opacity="0.85"/>
+  <path d="M80 870 C 190 845, 280 895, 390 866 S 590 840, 700 872 S 860 895, 944 860 L944 944 L80 944Z" fill="#08374f"/>
+  <path d="M120 826 C 200 806, 250 838, 330 822" stroke="#6fe3ff" stroke-width="5" fill="none" opacity="0.45" stroke-linecap="round"/>
+  <path d="M640 826 C 720 806, 790 840, 880 818" stroke="#6fe3ff" stroke-width="5" fill="none" opacity="0.45" stroke-linecap="round"/>
 </g>
-<rect x="81.5" y="81.5" width="861" height="861" rx="195" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="3"/>
-</svg></body></html>
+
+<g filter="url(#neon)">
+  <path d="M252 788 Q 512 560 790 302" stroke="url(#cA)" stroke-width="40" fill="none" stroke-linecap="round"/>
+  <path d="M772 788 Q 512 560 234 302" stroke="url(#cB)" stroke-width="40" fill="none" stroke-linecap="round"/>
+</g>
+<path d="M252 788 Q 512 560 790 302" stroke="#fff" stroke-width="8" fill="none" opacity="0.35" stroke-linecap="round" transform="translate(-6,-8)"/>
+<path d="M772 788 Q 512 560 234 302" stroke="#fff" stroke-width="8" fill="none" opacity="0.35" stroke-linecap="round" transform="translate(6,-8)"/>
+<g filter="url(#shadow)">
+  <use href="#plugA" transform="translate(790,302) rotate(-43)"/>
+  <use href="#plugA" transform="translate(252,788) rotate(139)"/>
+  <use href="#plugB" transform="translate(772,788) rotate(41)"/>
+  <use href="#plugB" transform="translate(234,302) rotate(-137)"/>
+</g>
+
+<g filter="url(#shadow)">
+  <path d="M512 300 C 640 300, 710 385, 710 480 C 710 548, 680 590, 640 612 L 640 672 C 640 700, 620 716, 592 716 L 432 716 C 404 716, 384 700, 384 672 L 384 612 C 344 590, 314 548, 314 480 C 314 385, 384 300, 512 300 Z" fill="url(#bone)"/>
+</g>
+<ellipse cx="438" cy="492" rx="56" ry="62" fill="#1a1420"/>
+<circle cx="438" cy="498" r="24" fill="#22e3ff" filter="url(#neon)"/>
+<circle cx="430" cy="490" r="8" fill="#fff"/>
+<path d="M330 410 L 700 560" stroke="#15121a" stroke-width="14" stroke-linecap="round"/>
+<ellipse cx="588" cy="496" rx="66" ry="68" fill="#15121a"/>
+<ellipse cx="572" cy="476" rx="28" ry="16" fill="#fff" opacity="0.12"/>
+<path d="M512 552 L 538 604 C 540 612, 530 616, 512 608 C 494 616, 484 612, 486 604 Z" fill="#2a2030"/>
+<rect x="420" y="640" width="184" height="58" rx="14" fill="#2a2030"/>
+<g fill="#f6efdc">
+  <rect x="428" y="646" width="38" height="46" rx="8"/><rect x="472" y="646" width="38" height="46" rx="8"/>
+  <rect x="516" y="646" width="38" height="46" rx="8" fill="url(#gold)"/><rect x="560" y="646" width="36" height="46" rx="8"/>
+</g>
+
+<g filter="url(#shadow)">
+  <path d="M250 372 C 300 215, 410 150, 512 150 C 614 150, 724 215, 774 372 C 700 320, 610 302, 512 316 C 414 302, 324 320, 250 372 Z" fill="url(#hat)"/>
+</g>
+<path d="M250 372 C 324 320, 414 302, 512 316 C 610 302, 700 320, 774 372" stroke="url(#gold)" stroke-width="16" fill="none" stroke-linecap="round"/>
+<path d="M330 250 C 400 190, 460 172, 512 172" stroke="#fff" stroke-width="7" fill="none" opacity="0.15" stroke-linecap="round"/>
+<circle cx="512" cy="238" r="40" fill="url(#gold)" stroke="#7a4a08" stroke-width="4"/>
+<circle cx="512" cy="238" r="20" fill="#1b1410"/>
+<circle cx="512" cy="238" r="8" fill="url(#metal)"/>
+
+<g clip-path="url(#tile)">
+  <path d="M80 80 L944 80 L944 300 C 700 250, 330 250, 80 360 Z" fill="#fff" opacity="0.05"/>
+</g>
+<rect x="82" y="82" width="860" height="860" rx="194" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="4"/>
+</svg>
+</body></html>

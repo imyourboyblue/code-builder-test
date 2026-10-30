@@ -208,7 +208,7 @@ def refresh_app():
 
 # ---------------------------------------------------------------- the app icon
 
-ICON_VERSION = 2
+ICON_VERSION = 3
 ICON_PNG = HERE / "macapp" / "icon.png"   # 1024x1024; drawn in macapp/icon.svg.html
 
 
