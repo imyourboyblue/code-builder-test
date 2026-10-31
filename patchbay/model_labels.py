@@ -9,6 +9,7 @@ from their size.
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 
 # Models on your Mac (Ollama). (text in the model name, menu label, one-line description)
@@ -79,6 +80,73 @@ SECOND = ["gemma4:26b", "gemma4", "gemma"]      # a different maker, for when th
 SECOND_OPINION_MODEL = "gemma4:26b"             # what 🩺 Setup offers to download (about 18 GB)
 HARD_WORDS = re.compile(r"(?i)\b(build|compile|rebuild|crash|debug|fix|repair|broken|error|fail|plan|update|"
                         r"upgrade|install|source|code|makefile|cmake|patch)\w*")
+
+# ---------------------------------------------------------------- free models 🩺 Setup offers to download
+
+# (Ollama name, what it's best for, a plain description, rough download size in GB)
+# Edit this list to change what Setup offers. Setup checks each name with Ollama's library before showing a
+# Download button, and shows the real size from there, so a name that doesn't exist is simply left out.
+CATALOG = [
+    ("qwen3.6:35b-a3b", "Everyday help", "PatchBay's usual model. Fast for its size because only part of it works "
+                                          "on each word. Good for most questions, checks and fixes.", 24),
+    ("qwen3.8:27b", "Hard problems and building", "Thinks harder and slower. Best for tricky crashes, plans and "
+                                                 "building apps from source.", 17),
+    ("gemma4:26b", "Second opinion", "Google's model. Automatic asks it when the usual models get stuck twice.", 18),
+    ("qwen3-coder:30b", "Writing code", "Made for reading and writing code. Fast, like the everyday model.", 19),
+    ("qwen3-vl:8b", "Reading pictures", "Can look at screenshots and photos, like an error on a TV screen.", 6),
+    ("gemma3:12b", "Pictures and quick help", "Mid-size Google model that can also look at pictures.", 8),
+    ("gpt-oss:20b", "Quick reasoning", "OpenAI's free model. Thinks step by step but stays fairly quick.", 14),
+    ("deepseek-r1:14b", "Careful step-by-step thinking", "Shows its working on hard puzzles. Slow and wordy.", 9),
+    ("mistral-small3.2:24b", "Following instructions", "Mistral's model. Good at doing exactly what it's asked "
+                                                       "and using tools.", 15),
+    ("llama3.2:3b", "Very quick, simple answers", "Tiny and very fast. Fine for simple questions, not for fixes.", 2),
+]
+REGISTRY = "https://registry.ollama.ai/v2/library/%s/manifests/%s"
+_LIB = {}
+
+
+def library_size(name):
+    """(exists, size in GB) from Ollama's own library: True/False, or None when it couldn't be checked.
+    Only the model's name is sent. Remembered for a day."""
+    hit = _LIB.get(name)
+    if hit and time.time() - hit[2] < 86400:
+        return hit[0], hit[1]
+    base, _, tag = name.partition(":")
+    req = urllib.request.Request(REGISTRY % (base, tag or "latest"),
+                                 headers={"Accept": "application/vnd.docker.distribution.manifest.v2+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            layers = json.loads(r.read()).get("layers") or []
+        result = (True, round(sum(l.get("size") or 0 for l in layers) / 1e9, 1))
+    except urllib.error.HTTPError as e:
+        result = (False, None) if e.code == 404 else (None, None)
+    except (OSError, ValueError):
+        result = (None, None)
+    if result[0] is not None:
+        _LIB[name] = (result[0], result[1], time.time())
+    return result
+
+
+def catalog(names, memory_gb=None):
+    """The free models, with whether each is installed, its size and whether it fits in memory."""
+    import concurrent.futures
+    have = {n.lower() for n in names}
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        found = list(pool.map(lambda c: library_size(c[0]), CATALOG))
+    out = []
+    for (name, best, why, rough), (exists, gb) in zip(CATALOG, found):
+        if exists is False:
+            continue        # not in Ollama's library (any more): don't offer it
+        size = gb or rough
+        fits = None
+        if memory_gb:
+            # The model has to fit in memory with room to spare for the Mac and the chat itself.
+            fits = "yes" if size <= memory_gb * 0.7 else ("tight" if size <= memory_gb * 0.85 else "no")
+        out.append({"name": name, "best": best, "why": why, "gb": size, "exact": bool(gb),
+                    "installed": name.lower() in have or (":" not in name and name.lower() + ":latest" in have),
+                    "checked": exists is True, "fits": fits})
+    return out
+
 
 _TAGS = {"at": 0, "names": [], "url": None}
 

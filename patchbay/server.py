@@ -2154,6 +2154,18 @@ def ollama_url(cfg):
         raise ToolError(str(e))
 
 
+def mac_memory_gb():
+    """This computer's memory in GB (None if it can't tell)."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=3).stdout
+        return round(int(out.strip()) / 2 ** 30)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        try:
+            return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30)
+        except (OSError, ValueError, AttributeError):
+            return None
+
+
 def ai_down(cfg):
     """What to check when the AI doesn't answer."""
     where = core.ai_where(cfg)
@@ -3314,6 +3326,24 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                               "found": it.get("found"), "good_backup": good, "good_copy": bool(it.get("good_copy")),
                               "release": p.lower().endswith((".nro", ".nsp", ".ovl"))})
             self.json({"items": items})
+        elif path == "/api/models/catalog":
+            cfg = APP.home.cfg()
+            names, err = [], None
+            installed = []
+            try:
+                with urllib.request.urlopen(ollama_url(cfg) + "/api/tags", timeout=8) as r:
+                    tags = json.loads(r.read()).get("models", [])
+                installed = [{"name": m.get("name"), "bytes": m.get("size") or 0,
+                              "size": core.human_size(m.get("size") or 0)} for m in tags if m.get("name")]
+                names = [m["name"] for m in installed]
+            except (OSError, ValueError, ToolError) as e:
+                err = "Couldn't ask Ollama which models it has (%s). %s" % (e, ai_down(cfg))
+            model_labels.label_all(installed)
+            here = core.ai_where(cfg) == "this Mac"
+            mem = mac_memory_gb() if here else None
+            self.json({"installed": installed, "current": cfg["ollama_model"], "error": err, "where": core.ai_where(cfg),
+                       "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL),
+                       "auto": model_labels.AUTO_LABEL[1]})
         elif path == "/api/laptop":
             cfg = APP.home.cfg()
             self.json({"on": APP.lan, "saved": bool(cfg.get("lan_access")), "has_password": APP.access.has_password(),
@@ -3747,6 +3777,13 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except claude.ClaudeError as e:
                 raise ToolError(str(e))
             self.json(dict(APP.claude.public(), answer=answer[:200]))
+        elif path == "/api/models/pull":
+            name = (data.get("model") or "").strip()
+            if name not in [c[0] for c in model_labels.CATALOG]:
+                raise ToolError("PatchBay only downloads the free models listed in Setup.")
+            if not selfcheck.start_pull(ollama_url(APP.home.cfg()), name):
+                raise ToolError("%s is still downloading. Wait for it to finish first." % selfcheck.PULL["model"])
+            self.json({"pull": dict(selfcheck.PULL)})
         elif path == "/api/model":
             name = (data.get("model") or "").strip()
             if not re.match(r"^[\w.:/-]{1,100}$", name):

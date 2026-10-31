@@ -995,6 +995,7 @@ async function openSetup(msg){
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start PatchBay by itself when I log in to the Mac</label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
+    '<h3 style="margin-top:14px">AI models</h3><div id="sc-models" style="font-size:13.5px">Looking for models…</div>'+
     '<h3 style="margin-top:14px">Laptop access</h3><div id="sc-lap" style="font-size:13.5px">Checking…</div>'+
     '<h3 style="margin-top:14px">Where the AI runs</h3><div id="sc-ai" style="font-size:13.5px">Checking…</div>'+
     '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
@@ -1014,7 +1015,7 @@ async function openSetup(msg){
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{const r=await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});lg.checked=!!r.login;
     say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more. If it still opens after a restart, untick <b>Reopen windows when logging back in</b> in the Mac\'s Restart or Shut Down box.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
-  drawLook();drawAiComputer();drawLaptop();
+  drawLook();drawAiComputer();drawLaptop();drawModels();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -1022,6 +1023,33 @@ async function openSetup(msg){
     if(!okc)$('sc-msg').insertAdjacentHTML('beforeend','<textarea style="width:100%;height:180px;margin-top:6px">'+esc(r.text)+'</textarea>')}catch(e){say(esc(e.message))}};
 }
 $('setup-btn').onclick=()=>openSetup();
+
+// ---- AI models: what's installed, which one answers, and free ones to download
+let MODEL_POLL=null;
+async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
+  try{j=await getJSON('/api/models/catalog')}catch(e){box.textContent=e.message;return}
+  const where=j.where==='this Mac'?'this computer':j.where;const p=j.pull||{};const busy=p.state==='downloading';
+  const row=(title,sub,why,btn)=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line)"><div style="flex:1"><b>'+title+'</b> <span style="font-size:12px;color:var(--mute)">'+sub+'</span><div style="font-size:12.5px;color:var(--mute)">'+why+'</div></div>'+btn+'</div>';
+  const use=(name,label)=>j.current===name?'<span style="font-size:12.5px;color:var(--ok);white-space:nowrap">✓ In use</span>':'<button class="md-use" data-m="'+esc(name)+'" data-l="'+esc(label)+'">Use</button>';
+  let h=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'')+(j.error?'<div style="color:var(--bad)">'+esc(j.error)+'</div>':'');
+  h+='<div style="font-size:12.5px;color:var(--mute)">On '+esc(where)+(j.memory_gb?' ('+j.memory_gb+' GB memory)':'')+'. Pick which one answers. This is the same as the AI model menu at the top.</div>';
+  if(j.installed.length){h+=row('Automatic','',esc(j.auto),use('auto','Automatic'));
+    h+=j.installed.map(m=>row(esc(m.label),esc(m.name)+' · '+esc(m.size),esc(m.why),use(m.name,m.label))).join('')}
+  else if(!j.error)h+='<div>No models yet. Download one below.</div>';
+  const fitTxt={yes:'',tight:' <span style="color:var(--warn)">Tight fit: other apps may slow down while it runs.</span>',no:' <span style="color:var(--bad)">Too big for '+(j.memory_gb||'')+' GB of memory: it would be very slow.</span>'};
+  const free=j.catalog.filter(c=>!c.installed);
+  h+='<div style="margin-top:10px"><b>Free models you can download</b></div>';
+  if(busy){const pct=p.total?Math.floor(100*p.done/p.total)+'%':'starting';h+='<div style="margin:4px 0;color:var(--warn)">Downloading '+esc(p.model)+'… '+pct+'. It keeps going if you close this.</div>'}
+  else if(p.state==='done')h+='<div style="margin:4px 0;color:var(--ok)">Downloaded '+esc(p.model)+'. It\'s in the list above.</div>';
+  else if(p.state==='failed')h+='<div style="margin:4px 0;color:var(--bad)">Downloading '+esc(p.model)+' didn\'t finish: '+esc(p.error)+'</div>';
+  h+=free.length?free.map(c=>row(esc(c.best),esc(c.name)+' · '+(c.exact?'':'about ')+c.gb+' GB',esc(c.why)+(c.fits?fitTxt[c.fits]:'')+(c.checked?'':' <i>(couldn\'t check Ollama\'s library just now)</i>'),
+      '<button class="md-get" data-m="'+esc(c.name)+'"'+(busy?' disabled':'')+'>Download</button>')).join(''):'<div style="color:var(--mute)">You have all of them.</div>';
+  h+='<div style="font-size:12px;color:var(--mute);margin-top:4px">All free, made by others and run by Ollama on '+esc(where)+'. Nothing about you is sent; only the model names are looked up.</div><div id="md-msg" style="font-size:13px"></div>';
+  box.innerHTML=h;
+  box.querySelectorAll('.md-use').forEach(b=>b.onclick=async()=>{try{await postJSON('/api/model',{model:b.dataset.m});info.model=b.dataset.m;loadModels();drawModels('From now on the "'+b.dataset.l+'" model answers.')}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
+  box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
+  clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
+  if(p.state==='done')loadModels()}
 
 // ---- Laptop access: open PatchBay from another computer at home
 async function drawLaptop(note){const box=$('sc-lap');if(!box)return;let j;

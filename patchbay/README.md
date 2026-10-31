@@ -212,6 +212,11 @@ new, the AI researches it and saves what it learned, so next time it already kno
 
 ## AI models and Claude
 
+**🩺 Setup → AI models** lists the models on the computer running the AI, with what each is best for. Press
+**Use** to pick one (or Automatic). Below it, **Free models you can download** shows other free models with a
+description, their download size and whether they fit in your Mac's memory, each with a **Download** button. The
+list is in `model_labels.py` (CATALOG); Setup checks each name with Ollama's library before offering it.
+
 **The AI model menu** (above the chat) shows what each model is for, not its version:
 - **Automatic** (recommended): uses the fast model (Everyday help) for questions and lookups, and switches to the
   stronger one (Hard problems and building) for builds, fixes, updates, plans, or after a step fails. The progress

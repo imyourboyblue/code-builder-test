@@ -151,6 +151,16 @@ def _scan_data(app):
 PULL = {"model": None, "state": None, "done": 0, "total": 0, "error": ""}
 
 
+def start_pull(url, model):
+    """Start downloading a model in the background (one at a time). Returns False if one is already going."""
+    import threading
+    if PULL["state"] == "downloading":
+        return False
+    PULL.update(model=model, state="downloading", done=0, total=0, error="")
+    threading.Thread(target=_pull, args=(url, model), daemon=True).start()
+    return True
+
+
 def _pull(url, model):
     """Download a model with Ollama, in the background. Progress goes to PULL for 🩺 Setup."""
     PULL.update(model=model, state="downloading", done=0, total=0, error="")
@@ -258,10 +268,8 @@ def fix(app, check_id, emit):
         import model_labels
         import server
         import threading
-        if PULL["state"] == "downloading":
-            return "It's already downloading."
-        url = server.ollama_url(app.home.cfg())
-        threading.Thread(target=_pull, args=(url, model_labels.SECOND_OPINION_MODEL), daemon=True).start()
+        if not start_pull(server.ollama_url(app.home.cfg()), model_labels.SECOND_OPINION_MODEL):
+            return "%s is still downloading. Wait for it to finish first." % PULL["model"]
         return ("Started downloading %s (about 18 GB) through Ollama. It keeps going in the background; press Check "
                 "again to see how far it is." % model_labels.SECOND_OPINION_MODEL)
     if check_id == "scans":
