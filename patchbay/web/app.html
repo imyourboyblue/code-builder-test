@@ -1012,7 +1012,8 @@ async function openSetup(msg){
     catch(e){ap.disabled=false;ap.textContent='Try again';say(esc(e.message))}};
   const tl=$('sc-tools');if(tl)tl.onclick=async()=>{tl.disabled=true;try{await postJSON('/api/macapp',{action:'install_tools'});say('Apple\'s installer should be open now (it may be behind this window). Click Install, wait for it to finish, then press Rebuild the app.')}catch(e){tl.disabled=false;say(esc(e.message))}};
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
-  const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
+  const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{const r=await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});lg.checked=!!r.login;
+    say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more. If it still opens after a restart, untick <b>Reopen windows when logging back in</b> in the Mac\'s Restart or Shut Down box.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
   drawLook();drawAiComputer();drawLaptop();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();

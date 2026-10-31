@@ -301,6 +301,36 @@ def _agent_plist():
     }
 
 
+def _our_agents():
+    """Every start-at-login file that starts PatchBay, including ones from before the rename."""
+    found = [AGENT] if AGENT.exists() else []
+    folder = AGENT.parent
+    if folder.is_dir():
+        for p in folder.glob("*.plist"):
+            if p == AGENT:
+                continue
+            try:
+                with open(p, "rb") as f:
+                    args = " ".join(str(a) for a in plistlib.load(f).get("ProgramArguments") or [])
+            except (OSError, ValueError, AttributeError):
+                continue
+            if any(n in args for n in ("patchbay.py", "gd1chat.py", "gd1check.py", "gd1-checker")):
+                found.append(p)
+    return found
+
+
+def _remove_login_items():
+    """Also take PatchBay out of System Settings > General > Login Items (where the Dock's "Open at Login" puts it).
+    macOS may ask once whether PatchBay may control System Events."""
+    script = ('tell application "System Events" to delete (every login item whose name is "PatchBay" '
+              'or name is "Patchbay")')
+    try:
+        subprocess.Popen(["/usr/bin/osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
 def set_login(on):
     """Turn "start PatchBay at login" on or off. Returns True if it's on afterwards."""
     if not is_mac():
@@ -311,10 +341,16 @@ def set_login(on):
             plistlib.dump(_agent_plist(), f)
         _launchctl("load", AGENT)
         return True
-    if AGENT.exists():
-        _launchctl("unload", AGENT)
-        AGENT.unlink()
-    return False
+    # Delete the files first. Unloading would stop the PatchBay that's running right now if it was started at
+    # login, and before, that happened before the file was deleted, so it came back at the next login.
+    # Without the file, nothing starts it at the next login; this PatchBay keeps running until you quit it.
+    for p in _our_agents():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    _remove_login_items()
+    return bool(_our_agents())
 
 
 def _launchctl(action, plist):
@@ -344,4 +380,4 @@ def status():
     return {"mac": is_mac(), "app": APP_DIR.exists(), "app_path": str(APP_DIR), "native": native,
             "note": note, "build_error": "" if native else error, "no_tools": no_tools and not native,
             "building": _BUILD_LOCK.locked(),
-            "login": AGENT.exists(), "script": str(SCRIPT)}
+            "login": bool(_our_agents()) if is_mac() else False, "script": str(SCRIPT)}
