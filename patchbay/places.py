@@ -25,6 +25,9 @@ KINDS = {   # plain word -> OpenStreetMap tags
     "hotel": [("tourism", "hotel|motel|guest_house")], "bank": [("amenity", "bank|atm")],
     "hospital": [("amenity", "hospital|clinic|doctors")], "park": [("leisure", "park")],
 }
+MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter",
+           "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
+PROBLEMS = []      # why each mirror failed last time (for the error report)
 DAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
 
 
@@ -32,16 +35,35 @@ class PlaceError(Exception):
     pass
 
 
-def _get(url, data=None):
+def _get(url, data=None, timeout=20):
     req = urllib.request.Request(url, data=data, headers=UA)
-    with urllib.request.urlopen(req, timeout=40) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
+
+
+def _overpass(query, status=None):
+    """Ask the public Overpass servers in turn (they're often busy) until one answers."""
+    errors = []
+    for i, url in enumerate(MIRRORS):
+        host = urllib.parse.urlparse(url).netloc
+        if status:
+            status("Searching the map (%s)..." % host if not i else "Map server busy, trying another (%s)..." % host)
+        started = time.time()
+        try:
+            data = _get(url, urllib.parse.urlencode({"data": query}).encode(), timeout=30)
+            if data.get("remark") and "runtime error" in str(data.get("remark")) and not data.get("elements"):
+                raise ValueError(str(data["remark"])[:120])
+            return data
+        except Exception as e:      # timeouts, busy (429/504), bad answers: try the next one
+            errors.append("%s: %s after %.0fs" % (host, str(e)[:120] or type(e).__name__, time.time() - started))
+    PROBLEMS[:] = errors
+    raise PlaceError("None of OpenStreetMap's place-search servers answered (%s)." % "; ".join(errors))
 
 
 def find_area(place):
     try:
         rows = _get("https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(
-            {"q": place, "format": "jsonv2", "limit": 1}))
+            {"q": place, "format": "jsonv2", "limit": 1}), timeout=15)
     except (OSError, ValueError) as e:
         raise PlaceError("Couldn't reach OpenStreetMap: %s" % e)
     if not rows:
@@ -115,9 +137,11 @@ def is_open(hours, now):
     return bool(state)
 
 
-def nearby(place, kind="restaurant", radius_km=5, now=None):
+def nearby(place, kind="restaurant", radius_km=5, now=None, status=None):
     """A plain list of places of that kind within radius_km of the place, with open-now where the hours say."""
     kind_key = next((k for k in KINDS if k in (kind or "").lower()), "restaurant")
+    if status:
+        status("Finding %s on the map..." % place)
     area = find_area(place)
     key = (round(area["lat"], 3), round(area["lon"], 3), kind_key, radius_km)
     hit = _CACHE.get(key)
@@ -128,11 +152,8 @@ def nearby(place, kind="restaurant", radius_km=5, now=None):
         parts = "".join('nwr(around:%d,%f,%f)["%s"~"^(%s)$"];' % (r, area["lat"], area["lon"], k, v)
                         if v != "." else 'nwr(around:%d,%f,%f)["%s"];' % (r, area["lat"], area["lon"], k)
                         for k, v in KINDS[kind_key])
-        query = "[out:json][timeout:30];(%s);out center tags 200;" % parts
-        try:
-            data = _get("https://overpass-api.de/api/interpreter", urllib.parse.urlencode({"data": query}).encode())
-        except (OSError, ValueError) as e:
-            raise PlaceError("Couldn't reach OpenStreetMap's place search: %s" % e)
+        query = "[out:json][timeout:25];(%s);out tags 200;" % parts
+        data = _overpass(query, status)
         rows = []
         for el in data.get("elements") or []:
             t = el.get("tags") or {}

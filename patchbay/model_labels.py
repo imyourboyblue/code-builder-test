@@ -285,7 +285,7 @@ def layer_models(names, chosen=None):
     return {k: chosen.get(k) if chosen.get(k) in names else default[k] for k in LAYER_KEYS}
 
 
-LOOKUPS = {"web_search", "read_web_page", "read_repo_file", "latest_release", "find_github_repo"}
+LOOKUPS = {"web_search", "read_web_page", "read_repo_file", "latest_release", "find_github_repo", "places_nearby"}
 
 
 def which_layer(messages):

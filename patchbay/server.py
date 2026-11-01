@@ -1241,9 +1241,12 @@ def cached(kind, key, fetch, seconds=600):
        "radius_km": dict(I, description="How far around the town, default 5")}, ["place"])
 def t_places(st, emit, a):
     try:
-        return clip(places.nearby(a.get("place"), a.get("kind") or "restaurant", a.get("radius_km") or 5))
+        return clip(places.nearby(a.get("place"), a.get("kind") or "restaurant", a.get("radius_km") or 5,
+                                  status=lambda t: emit({"type": "status", "text": t})))
     except places.PlaceError as e:
-        raise ToolError(str(e))
+        note_problem("places_nearby: %s" % e)
+        raise ToolError("%s Look it up with web_search instead (e.g. '%s %s'), then answer with what you found and "
+                        "say plainly what you couldn't confirm." % (e, a.get("kind") or "restaurants", a.get("place")))
 
 
 @tool("web_search",
@@ -2876,7 +2879,7 @@ def claude_system(system):
 
 
 # Steps that move a job forward (as opposed to only reading).
-LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_search", "read_web_page"}
+LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_search", "read_web_page", "places_nearby"}
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
