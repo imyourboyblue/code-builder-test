@@ -45,6 +45,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import hashlib
+import http.client
 import webbrowser
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,6 +68,7 @@ import updater
 import githubpush
 import research
 import macaccess
+import stopper
 import selfcheck
 import selfedit
 import model_labels
@@ -103,6 +105,7 @@ class Stopped(Exception):
 CHAT_THREAD = [None]    # the thread working on the current chat request
 # Stop also halts scans and other long checker jobs, but only the chat's own (never a backup running alongside).
 core.should_stop = lambda: STOP.is_set() and threading.get_ident() == CHAT_THREAD[0]
+claude.should_stop = core.should_stop
 
 
 def check_stop():
@@ -2587,6 +2590,9 @@ def send_question(st, emit, text, sc, why):
     emit({"type": "status", "text": "Asking Claude..."})
     try:
         answer = APP.claude.ask(text, sc, why)
+    except claude.ClaudeError:
+        check_stop()
+        raise
     finally:
         APP.claude.save_aliases(sc)
         claude_cost(emit)
@@ -2803,6 +2809,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
             return msg
         except claude.ClaudeError as e:
             claude_cost(emit)
+            check_stop()
             if emit:
                 emit({"type": "note", "text": "I couldn't use Claude (%s) Using the AI on %s for this answer instead."
                                               % (str(e).rstrip(".") + ".", APP.computer)})
@@ -2839,7 +2846,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
     body = json.dumps(body).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=900) as r:
+        with stopper.urlopen(req, timeout=900) as r:
             content, calls, think = "", [], ThinkFilter()
             for line in r:
                 check_stop()
@@ -2858,8 +2865,10 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                 calls.extend(m.get("tool_calls") or [])
                 if chunk.get("done"):
                     break
+            check_stop()       # the connection was cut by Stop
             return {"content": content, "tool_calls": calls}
     except urllib.error.HTTPError as e:
+        check_stop()
         detail = e.read().decode("utf-8", "replace")[:300]
         if "not found" in detail and "tools" not in detail:
             raise ToolError("Ollama doesn't have the model %s yet. Download it in 🩺 Setup → AI." % model)
@@ -2877,7 +2886,8 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                      if m.get("images") else m for m in messages]
             return ask_model(cfg, plain, tools, emit, model)
         raise ToolError("Ollama said: %s" % detail)
-    except OSError as e:
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        check_stop()
         raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
 
 
@@ -2899,7 +2909,7 @@ def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None):
     req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=900) as r:
+        with stopper.urlopen(req, timeout=900) as r:
             if not stream:
                 return clean_answer(json.loads(r.read()).get("message", {}).get("content"))
             content, tf = "", ThinkFilter()
@@ -2917,10 +2927,13 @@ def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None):
                     emit({"type": "delta", "text": shown})
                 if chunk.get("done"):
                     break
+            check_stop()
             return clean_answer(content)
     except urllib.error.HTTPError as e:
+        check_stop()
         raise ToolError("Ollama said: %s" % e.read().decode("utf-8", "replace")[:300])
-    except OSError as e:
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        check_stop()
         raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
 
 
@@ -2971,7 +2984,7 @@ def second_opinion(cfg, messages, emit):
                 "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
         req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
+        with stopper.urlopen(req, timeout=600) as r:
             advice = clean_answer(json.loads(r.read()).get("message", {}).get("content"))
         if advice:
             emit({"type": "note", "text": "**Second opinion (%s):**\n\n%s" % (model_labels.local(other)[0], advice)})
@@ -4051,6 +4064,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             job = APP.chat_job
             if job and not job.done:
                 STOP.set()
+                stopper.abort(CHAT_THREAD[0])     # cut off the AI right away, even before it says anything
                 job_emit = getattr(job, "emit", None)
                 if job_emit:
                     try:
@@ -4595,6 +4609,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                     st.save_chat()
                 except (OSError, ToolError) as e:
                     print("Couldn't save the chat: %s" % e)
+                stopper.forget()
                 BUSY.release()
                 job.finish()
         threading.Thread(target=work, daemon=True).start()

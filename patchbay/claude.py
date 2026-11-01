@@ -24,6 +24,9 @@ import urllib.request
 from pathlib import Path
 
 import tlsfix
+import stopper
+
+should_stop = lambda: False      # PatchBay's Stop button (set by server.py)
 
 API_URL = os.environ.get("PATCHBAY_CLAUDE_URL") or "https://api.anthropic.com/v1/messages"   # override for tests only
 API_VERSION = "2026-10-21"
@@ -234,7 +237,7 @@ class Claude:
         for attempt in range(4):
             req = urllib.request.Request(API_URL, data=data, headers=headers, method="POST")
             try:
-                with urllib.request.urlopen(req, timeout=600) as r:
+                with stopper.urlopen(req, timeout=600) as r:
                     resp = json.loads(r.read().decode("utf-8"))
                 break
             except urllib.error.HTTPError as e:
@@ -243,7 +246,7 @@ class Claude:
                     msg = json.loads(detail).get("error", {}).get("message") or detail
                 except ValueError:
                     msg = detail
-                if e.code in (429, 500, 502, 503, 504, 529) and attempt < 3:
+                if e.code in (429, 500, 502, 503, 504, 529) and attempt < 3 and not should_stop():
                     last = msg
                     time.sleep(int(e.headers.get("retry-after") or 0) or 2 ** (attempt + 1))
                     continue
@@ -254,6 +257,8 @@ class Claude:
                                       "https://platform.claude.com/settings/billing")
                 raise ClaudeError("Claude said (%d): %s" % (e.code, msg[:400]))
             except OSError as e:
+                if should_stop():
+                    raise ClaudeError("Stopped.")
                 last = str(e)
                 if attempt < 3 and "CERTIFICATE_VERIFY_FAILED" not in last:
                     time.sleep(2 ** (attempt + 1))
