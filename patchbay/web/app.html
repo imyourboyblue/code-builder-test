@@ -1110,8 +1110,9 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
     (big.length?'<details style="margin-top:4px"><summary class="md-why">Too big for this Mac ('+big.length+')</summary>'+big.map(dl).join('')+'</details>':'')+
     '<div class="md-why" style="margin-top:6px">Free, run by Ollama on '+esc(where)+'. Only model names are looked up online.'+
     (free.some(c=>!c.checked)?' Sizes marked ~ are rough: Ollama\'s library couldn\'t be reached just now.':'')+'</div></details>'+
+    '<div class="md-head" style="margin-top:12px">Memory <span>what Ollama has loaded right now</span></div><div id="md-mem" class="md-why">Checking…</div>'+
     '<div id="md-msg" style="font-size:13px"></div>';
-  box.innerHTML=h;
+  box.innerHTML=h;drawMemory();
   box.querySelectorAll('input[name=md-mode]').forEach(r=>r.onchange=async()=>{await setMode(r.value,true);drawModels('Switched to '+modeOf(r.value).label+' mode.')});
   box.querySelectorAll('.md-del').forEach(b=>b.onclick=async e=>{e.preventDefault();const u=b.dataset.used;
     if(!confirm('Delete '+b.dataset.m+' ('+b.dataset.size+') from '+where+'?'+(u?'\n\nIt is used by: '+u+'. That mode will use another model you have, or none.':'')+'\n\nYou can download it again later.'))return;
@@ -1119,6 +1120,15 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}
+
+async function drawMemory(note){const box=$('md-mem');if(!box)return;let j;
+  try{j=await getJSON('/api/models/memory')}catch(e){box.textContent=e.message;return}
+  if(j.error){box.textContent=j.error;return}
+  box.innerHTML=(note?'<b>'+esc(note)+'</b> ':'')+(j.loaded.length?j.loaded.map(m=>esc(m.name)+' uses '+m.gb+' GB').join(', ')+(j.memory_gb?' (of '+j.memory_gb+' GB).':'.')+
+    ' The mode\'s model stays loaded on purpose so answers start fast.':'Nothing is loaded. The model loads again by itself with your next question (that takes a few seconds).')+
+    (j.loaded.length?'<div style="margin-top:4px"><button id="md-free">Free up memory</button></div>':'');
+  const b=$('md-free');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Freeing…';
+    try{const r=await postJSON('/api/models/unload',{});drawMemory(r.unloaded.length?'Freed.':'')}catch(e){b.disabled=false;b.textContent='Free up memory';box.insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>')}}}
 
 // ---- Send the changes PatchBay made to itself to GitHub (own branch, confirmed first)
 async function drawGithub(note){const box=$('sc-gh');if(!box)return;let j;

@@ -226,7 +226,15 @@ The mode's model stays loaded between questions, so answers start quickly. When 
 model (Gemma 4) reviews what went wrong and gives advice, then lets go of the memory again.
 
 **🩺 Setup → AI** shows the mode, the models on your Mac with what uses each one and a **Delete** button, and
-**Get more free models** with descriptions, sizes and a memory check.
+**Get more free models** with descriptions, sizes and a memory check. **Memory** shows what Ollama has loaded right
+now; the mode's model stays loaded on purpose (about 20-30 GB) so answers start fast. **Free up memory** unloads it
+until your next question.
+
+**Coding.** For changes to code, the AI looks at a short map of the project first (files, functions and their line
+numbers), changes only the lines that need it, and every changed file is checked for mistakes before the card even
+shows. After saving, the project is built straight away (when automatic Mac steps are on) and the AI gets the real
+errors with the code around them. Each question only gets the tools it needs, so more of the AI's memory goes to
+your code.
 
 Which models each mode uses, and the free-model list, are set in `model_labels.py` (MODES and CATALOG).
 

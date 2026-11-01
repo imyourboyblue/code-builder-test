@@ -70,6 +70,7 @@ import research
 import macaccess
 import stopper
 import codereview
+import codetools
 import keychain
 import selfcheck
 import selfedit
@@ -972,6 +973,14 @@ def t_project_files(st, emit, a):
     return pe(projects.tree, project(st, a.get("project")), a.get("folder") or "")
 
 
+@tool("project_map", "A short map of a project: every code file with its size, what it defines (name@line) and "
+      "which project files it uses. Look here first to find the right file and line, then project_read just those "
+      "lines.", {"project": S, "folder": dict(S, description="Optional: only this sub-folder")}, ["project"])
+def t_project_map(st, emit, a):
+    root = pe(projects.folder_of, project(st, a.get("project")))
+    return clip(codetools.project_map(root, (a.get("folder") or "").strip("/")))
+
+
 @tool("project_read", "Read a source file in a project, with line numbers (read-only).",
       {"project": S, "path": dict(S, description="File path inside the project, e.g. source/main.c"),
        "start_line": I, "max_lines": I}, ["project", "path"])
@@ -988,12 +997,46 @@ def t_project_search(st, emit, a):
     return pe(projects.search, project(st, a.get("project")), a["text"])
 
 
+EDITS = {"type": "array", "description": "Small changes, applied in order. Each is {find, replace} (find: a few "
+                 "exact lines from the file, unique) or {start_line, end_line, replace} (line numbers from the last "
+                 "read). Prefer this over rewriting the file.",
+                 "items": {"type": "object", "properties": {"find": S, "replace": S, "start_line": I,
+                                                            "end_line": I}}}
+
+
+def edited_text(old_text, a, rel, exists):
+    """The new text of a file from a tool's edits / find+replace / new_content. Raises ToolError."""
+    edits = a.get("edits")
+    if isinstance(edits, str):
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            raise ToolError("edits must be a list of {find, replace} objects.")
+    if a.get("find"):
+        edits = (edits or []) + [{"find": a["find"], "replace": a.get("replace") or ""}]
+    if edits:
+        try:
+            return codetools.apply_edits(old_text, edits)
+        except codetools.EditError as e:
+            raise ToolError("%s Nothing was changed in %s." % (e, rel))
+    if a.get("new_content") is not None:
+        if exists and old_text.count("\n") > codetools.BIG_REWRITE_LINES:
+            raise ToolError("%s has %d lines: change it with edits (only the lines that change), not by rewriting "
+                            "the whole file." % (rel, old_text.count("\n")))
+        return a["new_content"]
+    raise ToolError("Give edits (a list of find/replace), or new_content for a new file.")
+
+
 @tool("propose_project_edit",
-      "Suggest a change to a source file in a project on the Mac (or a new file). Does NOT write: shows the exact "
-      "difference on a card the user confirms. Give find + replace (find must appear exactly once), or new_content. "
-      "Always project_read the file first.",
+      "Change a source file in a project on the Mac (or make a new file). Does NOT write: shows the exact difference "
+      "on a card the user confirms (or runs by itself when automatic Mac steps are on). Use edits: only the lines "
+      "that change. new_content is only for new or short files. The changed file is checked for syntax errors "
+      "first, and after saving the project is built and you get the real errors with their code. project_read the "
+      "lines first.",
       {"project": S, "path": dict(S, description="File path inside the project"),
-       "find": S, "replace": S, "new_content": dict(S, description="The whole new file, instead of find/replace"),
+       "edits": EDITS, "new_content": dict(S, description="The whole file: only for a new or short file"),
+       "build_after": {"type": "boolean", "description": "Build right after saving (default true). Set false while "
+                                                         "more files still need changing for this fix."},
        "reason": dict(S, description="One short sentence on why")}, ["project", "path", "reason"])
 def t_project_edit(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
@@ -1002,17 +1045,12 @@ def t_project_edit(st, emit, a):
     old_text = p.read_text("utf-8", "replace") if p.exists() else ""
     if p.exists() and not projects.is_text(p):
         raise ToolError("%s isn't a text file." % rel)
-    if a.get("new_content") is not None:
-        new_text = a["new_content"]
-    elif a.get("find"):
-        n = old_text.count(a["find"])
-        if n != 1:
-            raise ToolError("The find text appears %d times in %s; it must appear exactly once." % (n, rel))
-        new_text = old_text.replace(a["find"], a.get("replace") or "", 1)
-    else:
-        raise ToolError("Give either find + replace, or new_content.")
-    if new_text == old_text:
-        raise ToolError("That change wouldn't change anything.")
+    new_text = edited_text(old_text, a, rel, p.exists())
+    problem = codetools.quick_check(rel, new_text)
+    if problem and not codetools.quick_check(rel, old_text):
+        line = re.search(r"line (\d+)", problem)
+        raise ToolError("That change would break %s, so it wasn't made: %s%s\nFix the edit and suggest it again." % (
+            rel, problem, "\n" + codetools.show_lines(new_text, int(line.group(1))) if line else ""))
     diff = "".join(difflib.unified_diff(old_text.splitlines(True), new_text.splitlines(True),
                                         "before: " + rel, "after: " + rel, n=3))
     folder = core.unique_dir(core.data_dir(cfg) / "edits", core.now_stamp())
@@ -1020,7 +1058,8 @@ def t_project_edit(st, emit, a):
     staged.write_text(new_text, "utf-8")
     return add_pending(st, emit, "project_edit", cfg, rel, staged, a.get("reason") or "",
                        "%s %s in project %s: %s" % ("Edit" if p.exists() else "Create", rel, pr["name"], a.get("reason") or ""),
-                       clip(diff, 40000), on_mac=True, extra_fields={"project": pr["name"]})
+                       clip(diff, 40000), on_mac=True,
+                       extra_fields={"project": pr["name"], "build_after": a.get("build_after") is not False})
 
 
 @tool("propose_build",
@@ -1959,17 +1998,33 @@ def h_self_search(st, emit, a):
     return se(selfedit.search, a.get("text"))
 
 
+@home_tool("patchbay_map", "A short map of PatchBay's own code: each file with what it defines (name@line) and which "
+           "PatchBay files it uses. Look here first to find where something is, then patchbay_read just those lines.",
+           {"folder": dict(S, description="Optional: only this sub-folder, e.g. web")})
+def h_self_map(st, emit, a):
+    return clip(codetools.project_map(selfedit.HERE, (a.get("folder") or "").strip("/")))
+
+
 @home_tool("propose_patchbay_change",
            "Suggest a change to one of PatchBay's OWN files. Does NOT write: shows the exact difference on a card the "
            "user confirms. The new file is checked first (Python must compile, the page's scripts must parse) and the "
-           "old one is backed up, with Undo in the Activity log. Give find + replace (find must appear exactly once; "
-           "keep it small) or new_content for a new file. Always patchbay_read the place first. One file per card; for "
-           "a change across files, suggest each one.",
-           {"path": S, "find": S, "replace": S, "new_content": dict(S, description="Whole file, only for a new file"),
+           "old one is backed up, with Undo in the Activity log. Use edits: only the lines that change (find + replace "
+           "pairs, or line ranges from patchbay_read). new_content only for a new file. patchbay_map shows where "
+           "things are; patchbay_read the lines first. One file per card; for a change across files, suggest each one.",
+           {"path": S, "edits": EDITS, "new_content": dict(S, description="Whole file, only for a new file"),
             "reason": dict(S, description="One short plain sentence on what this does for the user")},
            ["path", "reason"])
 def h_self_change(st, emit, a):
-    pl = se(selfedit.plan, a.get("path"), a.get("find"), a.get("replace"), a.get("new_content"))
+    target, _ = se(selfedit.inside, a.get("path"))
+    if a.get("edits") or a.get("find"):
+        try:
+            old = target.read_text("utf-8", "replace") if target.is_file() else ""
+        except OSError as e:
+            raise ToolError("Couldn't read %s: %s" % (a.get("path"), e))
+        a = dict(a, new_content=edited_text(old, dict(a, new_content=None), a.get("path"), target.is_file()))
+    elif a.get("new_content") is not None and target.is_file():
+        raise ToolError("%s already exists: change it with edits (only the lines that change)." % a.get("path"))
+    pl = se(selfedit.plan, a.get("path"), None, None, a.get("new_content"))
     pid = uuid.uuid4().hex[:8]
     staged = selfedit.BACKUPS / "staged"
     staged.mkdir(parents=True, exist_ok=True)
@@ -2199,16 +2254,21 @@ def t_mac_undo(st, emit, a):
 
 def run_review(st, emit, source, focus):
     cfg = st.cfg() if not getattr(st, "home", False) else APP.home.cfg()
+    folder = Path(os.path.expanduser(cfg["data_folder"])) / "reviews"
     job = codereview.Review(
         source, focus,
-        ask=lambda messages, think=False, stream=False: ai_simple(cfg, messages, think, None, False, emit),
+        ask=lambda messages, think=False, stream=False, max_words=None: ai_simple(
+            cfg, messages, think, None, False, emit, max_words=max_words),
         status=lambda t: emit({"type": "status", "text": t}), stop=check_stop,
-        note=lambda t: emit({"type": "note", "text": t}))
+        note=lambda t: emit({"type": "note", "text": t}), progress=codereview.progress_file(folder, source.name))
     try:
         report = job.run()
-    except codereview.ReviewError as e:
-        raise ToolError(str(e))
-    path = codereview.save(Path(os.path.expanduser(cfg["data_folder"])) / "reviews", source.name, report)
+    except (codereview.ReviewError, ToolError) as e:
+        emit({"type": "note", "text": "**The review couldn't finish.** %s" % e})
+        raise ToolError("%s\nThe review stopped and is saved so far. Tell the user this plainly in two sentences, "
+                        "and that asking for the same review again carries on where it stopped. Do NOT read the "
+                        "files one by one instead, and don't call any other tool now." % e)
+    path = codereview.save(folder, source.name, report)
     emit({"type": "note", "text": report + "\n\n*Saved to %s*" % path})
     return ("The full review is now shown to the user (saved to %s). Don't repeat it: reply in two or three plain "
             "sentences with the overall verdict, and offer to help with the first fixes. The review, for follow-up "
@@ -2944,14 +3004,90 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
 
 
-def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None):
-    """One answer from the mode's model without tools (for deep research). Streams to the page if asked."""
+def ollama_log_hint(cfg):
+    """The last error lines from Ollama's own log on this Mac (it often says why: out of memory, crashed...)."""
+    if core.ai_where(cfg) != "this Mac":
+        return ""
+    log = Path.home() / ".ollama" / "logs" / "server.log"
+    try:
+        with open(log, "rb") as f:
+            f.seek(max(0, log.stat().st_size - 60000))
+            rows = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    bad = [r.strip()[:220] for r in rows if re.search(r"(?i)level=error|out of memory|panic|signal: killed|"
+                                                     r"insufficient memory|failed to load|terminated", r)]
+    return ("\nOllama's log says: " + " | ".join(bad[-2:])) if bad else ""
+
+
+def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None, max_words=None, tries=3):
+    """One answer from the mode's model without tools (deep research, reviews). Words arrive as they're written, so
+    a long answer or a slow model load isn't mistaken for a dead Ollama; with stream they're also shown on the page.
+    max_words caps the answer (so a model stuck repeating itself can't run for ever). A dropped connection or a
+    timeout is retried (Ollama may be reloading the model)."""
     url = ollama_url(cfg)
-    model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+    last = None
+    for attempt in range(tries):
+        check_stop()
+        if attempt:
+            wait = (10, 30, 60)[min(attempt - 1, 2)]
+            try:
+                unload_models(cfg)        # a clean reload: drops a stuck request and its memory
+            except (OSError, ValueError):
+                pass
+            if emit:
+                emit({"type": "status", "text": "Ollama didn't answer (%s). Trying again in %d s (%d of %d)..."
+                                                % (last, wait, attempt + 1, tries)})
+            for _ in range(wait * 5):
+                check_stop()
+                time.sleep(0.2)
+        try:
+            return _ai_simple_once(cfg, url, messages, think, fmt, stream, emit, max_words)
+        except AiDropped as e:
+            last = str(e)
+    raise ToolError("Ollama stopped answering (%s), even after %d tries. %s%s" % (
+        last, tries, ai_down(cfg), ollama_log_hint(cfg)))
+
+
+def loaded_models(cfg):
+    """What Ollama has in memory now: [{"name", "gb", "until"}] (Ollama's /api/ps)."""
+    with urllib.request.urlopen(ollama_url(cfg) + "/api/ps", timeout=8) as r:
+        rows = json.loads(r.read()).get("models") or []
+    return [{"name": m.get("name") or m.get("model"), "gb": round((m.get("size") or 0) / 1e9, 1),
+             "until": m.get("expires_at") or ""} for m in rows]
+
+
+def unload_models(cfg, names=None):
+    """Take models out of memory (they load again by themselves when next needed). Returns the names unloaded."""
+    gone = []
+    for m in (loaded_models(cfg) if names is None else [{"name": n} for n in names]):
+        body = json.dumps({"model": m["name"], "messages": [], "keep_alive": 0}).encode()
+        req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                r.read()
+            gone.append(m["name"])
+        except (OSError, ValueError):
+            pass
+    return gone
+
+
+class AiDropped(Exception):
+    pass
+
+
+def _ai_simple_once(cfg, url, messages, think, fmt, stream, emit, max_words):
+    try:
+        model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+    except OSError as e:
+        raise AiDropped(str(e))
     if not model:
         raise ToolError("Ollama has no models yet. Download one in 🩺 Setup → AI.")
-    body = {"model": model, "stream": bool(stream), "messages": messages, "keep_alive": -1,
+    body = {"model": model, "stream": True, "messages": messages, "keep_alive": -1,
             "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
+    if max_words:
+        body["options"]["num_predict"] = int(max_words * 1.6) + (4000 if think else 0)
     if fmt:
         body["format"] = fmt
         body["options"]["temperature"] = 0
@@ -2961,33 +3097,41 @@ def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None):
         body["think"] = False
     req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
+    content, tf, done = "", ThinkFilter(), False
     try:
-        with stopper.urlopen(req, timeout=900) as r:
-            if not stream:
-                return clean_answer(json.loads(r.read()).get("message", {}).get("content"))
-            content, tf = "", ThinkFilter()
+        # The timeout is per wait between pieces: up to 10 minutes for loading the model and reading the input.
+        with stopper.urlopen(req, timeout=600) as r:
             for line in r:
                 check_stop()
                 if not line.strip():
                     continue
                 chunk = json.loads(line)
                 if chunk.get("error"):
-                    raise ToolError("Ollama said: %s" % chunk["error"])
+                    err = str(chunk["error"])
+                    if re.search(r"(?i)memory|terminated|exit status|EOF|connection", err):
+                        raise AiDropped(err[:200])
+                    raise ToolError("Ollama said: %s" % err[:300])
                 piece = (chunk.get("message") or {}).get("content") or ""
                 content += piece
                 shown = tf.feed(piece)
-                if shown and emit:
+                if shown and emit and stream:
                     emit({"type": "delta", "text": shown})
                 if chunk.get("done"):
+                    done = True
                     break
-            check_stop()
-            return clean_answer(content)
+        check_stop()
     except urllib.error.HTTPError as e:
         check_stop()
-        raise ToolError("Ollama said: %s" % e.read().decode("utf-8", "replace")[:300])
+        detail = e.read().decode("utf-8", "replace")[:300]
+        if e.code >= 500:
+            raise AiDropped(detail or "error %d" % e.code)
+        raise ToolError("Ollama said: %s" % detail)
     except (OSError, http.client.HTTPException, ValueError) as e:
         check_stop()
-        raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
+        raise AiDropped(str(e) or type(e).__name__)
+    if not done and not content:
+        raise AiDropped("the answer stopped half way")
+    return clean_answer(content)
 
 
 def deep_research(st, question, emit):
@@ -3049,15 +3193,167 @@ def second_opinion(cfg, messages, emit):
 def clean_answer(text):
     return re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
 
+# ----------------------------------------------------------------- only the tools a question needs
+# Every tool's description is sent with every message, and they used to take about a third of the AI's memory. Now a
+# question gets the always-useful tools plus the groups its words point to (and any group already used in this
+# chat). The AI can switch on another group itself with use_tools.
+
+DEVICE_GROUPS = {
+    "device": ("checking and repairing the device: scans, damage, good copies, backups, change history, .nro name "
+               "and icon, firmware, commands on the device",
+               ["scan_device", "last_report", "find_good_copies", "search_snapshot", "change_history",
+                "set_scan_folders", "backup", "propose_nro_info_change", "propose_nro_icon", "propose_device_command",
+                "device_firmware", "identify_firmware", "save_firmware_name", "platform_notes"],
+               r"scan|damag|corrupt|crash|broke|backup|back up|restor|good cop|\.nro|icon|histor|undo|snapshot|"
+               r"firmware|command|restart|log|ssh|disk|space|check"),
+    "code": ("source code and homebrew: projects, project map, reading and editing code, builds, installing builds, "
+             "build tools, GitHub repositories and releases, reviews, homebrew updates",
+             ["set_project", "list_projects", "project_map", "project_files", "project_read", "project_search",
+              "propose_project_edit", "propose_build", "propose_install", "project_packages", "check_build_tools",
+              "propose_get_source", "propose_command", "propose_install_packages", "find_homebrew",
+              "prepare_homebrew_update", "platform_notes", "save_platform_notes", "setup_firmware_helper",
+              "latest_release", "find_github_repo", "read_repo_file", "review_github_repo", "device_firmware"],
+             r"build|compil|source|code|project|updat|upgrad|homebrew|\bapps?\b|program|github|repo|install|"
+             r"\bmake\b|cmake|libnx|devkit|release|version|review|critique|function|bug"),
+    "settings": ("settings and connections: show or change settings, addresses and ports, add a device",
+                 ["show_settings", "propose_settings", "check_address", "add_device", "set_scan_folders"],
+                 r"setting|address|\bport\b|\bip\b|host|connect|password|\bmodel\b|writing|add .*device|\d+\.\d+\.\d+"),
+    "mac": ("files on this Mac and Apple Calendar",
+            ["mac_list", "mac_find", "mac_read", "propose_mac_write", "propose_mac_move", "propose_mac_delete",
+             "mac_changes", "propose_mac_undo", "review_mac_folder", "calendar_list", "calendar_events",
+             "propose_calendar_add", "propose_calendar_edit", "propose_calendar_delete"],
+            PRIVATE_WORDS.pattern + r"|folder on|on this mac|\bmac\b"),
+}
+HOME_GROUPS = {
+    "network": ("devices on the network: find devices, security checks, check an address, add a device, firmware",
+                ["scan_network", "security_check", "check_address", "add_device", "identify_firmware",
+                 "save_firmware_name", "test_connection"],
+                r"network|scan|find|secur|safe|address|\bport\b|\bip\b|connect|add .*device|firmware|\d+\.\d+\.\d+|tv|roku|"
+                r"console|printer|devices?"),
+    "patchbay": ("changing PatchBay itself: its files, map, search, changes and restart",
+                 ["patchbay_files", "patchbay_map", "patchbay_read", "patchbay_search", "propose_patchbay_change",
+                  "propose_patchbay_restart"],
+                 r"patchbay|button|screen|page|\btab\b|feature|add .*option|change .*app|make it|setup|the app"),
+    "code": ("GitHub repositories, releases, build tools and code reviews",
+             ["check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "review_github_repo"],
+             r"github|repo|release|version|build|devkit|review|critique|code"),
+    "settings": ("settings: show or change them", ["show_settings", "propose_settings"],
+                 r"setting|\bmodel\b|password|writing|change"),
+    "mac": DEVICE_GROUPS["mac"],
+}
+CORE_DEVICE = ["list_folder", "read_file", "read_attachment", "propose_edit", "propose_restore", "propose_undo",
+               "test_connection", "web_search", "read_web_page", "ask_claude", "propose_plan", "show_settings"]
+CORE_HOME = ["list_devices", "open_device", "web_search", "read_web_page"]
+
+
+def _group_of(groups):
+    out = {}
+    for g, (_, names, _) in groups.items():
+        for n in names:
+            out.setdefault(n, set()).add(g)
+    return out
+
+
+def pick_groups(st, groups, text):
+    """Groups for this question: from its words, from steps already taken in this chat, and any switched on."""
+    if st.plan:
+        return set(groups)
+    on = set(getattr(st, "tool_groups", set())) & set(groups)
+    low = (text or "").lower()
+    for g, (_, _, words) in groups.items():
+        if re.search(words, low):
+            on.add(g)
+    owner = _group_of(groups)
+    for m in st.messages[-40:]:
+        for g in owner.get(m.get("tool_name") or "", ()):
+            on.add(g)
+    return on
+
+
+def keep_bullet(bullet, all_names, active):
+    """A system prompt bullet stays if it names no tool from a group that's off."""
+    named = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", bullet)) & all_names
+    return not named or bool(named & active)
+
+
+def trim_system(system, all_names, active):
+    parts = re.split(r"\n(?=- )", system)
+    return "\n".join(p for p in parts if keep_bullet(p, all_names, active))
+
+
+def choose_tools(st, all_tools, groups, core, text):
+    """(tools for this question, names now on, system-trim function)."""
+    on = pick_groups(st, groups, text)
+    names = set(core) | {"use_tools"} | {n for g in on for n in groups[g][1]}
+    picked = [t for t in all_tools if t["function"]["name"] in names]
+    st.tool_groups = on
+    return picked, names
+
+
+def use_tools_spec(groups, on):
+    off = [g for g in groups if g not in on]
+    return {"type": "function", "function": {
+        "name": "use_tools",
+        "description": "Switch on more tools for this chat. Off right now: " + "; ".join(
+            "%s (%s)" % (g, groups[g][0]) for g in off) if off else "All tools are already on.",
+        "parameters": {"type": "object", "properties": {"group": {"type": "string", "enum": off or list(groups)}},
+                       "required": ["group"]}}}
+
+
+def last_question(st):
+    return next((str(m.get("content")) for m in reversed(st.messages) if m.get("role") == "user"
+                 and not str(m.get("content") or "").startswith("[")), "")
+
+
+def compact_history(messages, keep=8, short=500):
+    """What the AI is sent: older long step results are shortened (the chat itself keeps them whole)."""
+    tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    old = set(tool_idx[:-keep]) if len(tool_idx) > keep else set()
+    out = []
+    for i, m in enumerate(messages):
+        c = m.get("content")
+        if i in old and isinstance(c, str) and len(c) > short * 2:
+            m = dict(m, content=c[:short] + "\n[... older result shortened. Run the step again if you need all "
+                                            "of it.]")
+        out.append(m)
+    return out
+
 
 def chat_turn(st, user_text, emit, user_msg=None):
     cfg = st.cfg()
+    question = user_text or last_question(st)
     if getattr(st, "home", False):
-        return chat_loop(st, user_text, emit, cfg, home_system(), claude_tools(HOME_TOOLS), HOME_HANDLERS, user_msg)
-    system = SYSTEM % {"device": cfg["device_name"], "host": cfg["host"], "about": devices.about_text(cfg),
-                       "folders": ", ".join(cfg["remote_folders"]),
-                       "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"}
-    return chat_loop(st, user_text, emit, cfg, claude_system(system), claude_tools(TOOLS), HANDLERS, user_msg)
+        all_tools, groups, core = HOME_TOOLS, HOME_GROUPS, CORE_HOME
+        system = home_system()
+        handlers = HOME_HANDLERS
+    else:
+        all_tools, groups, core = TOOLS, DEVICE_GROUPS, CORE_DEVICE
+        system = claude_system(SYSTEM % {
+            "device": cfg["device_name"], "host": cfg["host"], "about": devices.about_text(cfg),
+            "folders": ", ".join(cfg["remote_folders"]),
+            "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"})
+        handlers = HANDLERS
+    tools, names = choose_tools(st, all_tools, groups, core, question)
+    all_names = {t["function"]["name"] for t in all_tools}
+    system = trim_system(system, all_names, names)
+    tools = claude_tools(tools) + [use_tools_spec(groups, st.tool_groups)]
+    st.tool_ctx = {"all": all_tools, "groups": groups, "list": tools, "system": SYSTEM if not getattr(st, "home", False)
+                   else home_system(), "all_names": all_names}
+
+    def use_tools(st_, emit_, a):
+        g = a.get("group")
+        if g not in groups:
+            raise ToolError("Groups: %s." % ", ".join(groups))
+        st.tool_groups = set(st.tool_groups) | {g}
+        added = [t for t in claude_tools([t for t in all_tools if t["function"]["name"] in groups[g][1]])
+                 if t not in tools]
+        tools[:-1] = tools[:-1] + added          # the list chat_loop is using; use_tools stays last
+        new_names = {t["function"]["name"] for t in added}
+        how = [b for b in re.split(r"\n(?=- )", st.tool_ctx["system"])
+               if set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", b)) & new_names]
+        return ("Switched on: %s.%s" % (", ".join(sorted(new_names)) or "(already on)",
+                                        ("\nHow to use them:\n" + "\n".join(how)) if how else ""))
+    return chat_loop(st, user_text, emit, cfg, system, tools, dict(handlers, use_tools=use_tools), user_msg)
 
 
 def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
@@ -3085,7 +3381,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 st.messages.append({"role": "user", "content": "[A second AI model looked at what has gone wrong so "
                                                                "far. Its advice, to weigh and use if it helps:\n%s]"
                                                                % advice})
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, tools, emit)
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + compact_history(st.messages), tools, emit)
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
                            if calls else {"role": "assistant", "content": msg.get("content") or ""})
@@ -3414,7 +3710,7 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
     short, detail = run_mac_step(st, cfg, p, emit)
     emit({"type": "answer", "text": short})
     st.messages.append({"role": "user", "content": "[I confirmed the %s. %s]" % (p["kind"].replace("_", " "), detail)})
-    if p["kind"] != "project_edit":
+    if p["kind"] != "project_edit" or "\nCheck after saving" in detail or "\nBuilt right after" in detail:
         # Let the AI read the output and say what's next (fix errors, or offer to install).
         chat_turn(st, None, emit)
 
@@ -3477,7 +3773,20 @@ def _run_mac_step(st, cfg, p, emit):
             raise ToolError("Couldn't save %s: %s" % (p["remote"], e))
         result = "Saved %s in project %s.%s" % (p["remote"], pr["name"],
                                                 " The old version was backed up to %s." % bk if bk else " (new file)")
-        return result, "Result: " + result
+        detail = "Result: " + result
+        _, f = projects.inside(pr, p["remote"])
+        problem = codetools.quick_check(p["remote"], f.read_text("utf-8", "replace"))
+        if problem:
+            detail += "\nCheck after saving: %s. Fix it next." % problem
+        elif p.get("build_after") and pr.get("build"):
+            if runs_by_itself(cfg, "build", {"project": pr["name"]}) or (
+                    st.plan and in_plan(st.plan, "build", {"project": pr["name"]})):
+                b_short, b_detail = run_mac_step(st, cfg, {"kind": "build", "project": pr["name"], "remote": pr["name"],
+                                                           "source": "", "note": ""}, emit)
+                detail += "\nBuilt right after saving: " + b_detail
+            else:
+                detail += "\nWhen the change is complete, build it with propose_build to check it."
+        return result, detail
     pr = checked_build(st, cfg, pr, emit, save=True)
     emit({"type": "status", "text": "Building %s..." % pr["name"]})
     try:
@@ -3496,7 +3805,15 @@ def _run_mac_step(st, cfg, p, emit):
                       % pr["output"]
     else:
         result = "The build of %s failed (exit code %d)." % (pr["name"], code)
-    return show_output(emit, result, code, out, pr["build"])
+    short, detail = show_output(emit, result, code, out, pr["build"])
+    if code != 0:
+        try:
+            ctx = codetools.error_context(projects.folder_of(pr), out)
+        except (OSError, projects.ProjectError):
+            ctx = ""
+        if ctx:
+            detail += "\n\n" + ctx + "\nFix these with propose_project_edit (edits on those lines)."
+    return short, detail
 
 
 ERROR_LINE = re.compile(r"(?i)(\berror\b|command not found|not found|no such file|fatal|cannot|could not|failed|"
@@ -3904,6 +4221,13 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                                    "auto": model_labels.layer_models([m["name"] for m in installed if m["tools"]]).get(k)}
                                   for k, n, w in model_labels.LAYERS],
                        "auto": model_labels.AUTO_LABEL[1]})
+        elif path == "/api/models/memory":
+            cfg = APP.home.cfg()
+            try:
+                rows = loaded_models(cfg)
+                self.json({"loaded": rows, "gb": round(sum(m["gb"] for m in rows), 1), "memory_gb": mac_memory_gb()})
+            except (OSError, ValueError) as e:
+                self.json({"loaded": [], "gb": 0, "error": "Couldn't ask Ollama: %s" % e})
         elif path == "/api/mac":
             cfg = APP.home.cfg()
             self.json({"folders": [str(f) for f in macaccess.folders(cfg)], "calendar": bool(cfg.get("calendar_access")),
@@ -4279,6 +4603,14 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except OSError as e:
                 raise ToolError(str(e))
             self.json(mac_app.status())
+        elif path == "/api/models/unload":
+            if APP.chat_job and not APP.chat_job.done:
+                raise ToolError("The chat is still working. Press Stop first.")
+            try:
+                gone = unload_models(APP.home.cfg())
+            except (OSError, ValueError) as e:
+                raise ToolError("Couldn't ask Ollama: %s" % e)
+            self.json({"unloaded": gone})
         elif path in ("/api/mac/folder", "/api/mac/calendar"):
             if not self.from_this_mac():
                 raise ToolError("What PatchBay may use on this Mac can only be changed on the Mac itself.")

@@ -37,8 +37,15 @@ def _ollama(app):
         if not fast:
             return warn("ollama", "Ollama (the AI)", "Running, but no models that can use PatchBay's tools are "
                         "downloaded.", "Download one in Setup → AI.")
-        return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s."
-                  % (core.ai_where(cfg), fast, strong))
+        try:
+            rows = server.loaded_models(cfg)
+            mem = ("; %s GB in memory now (%s)" % (round(sum(m["gb"] for m in rows), 1),
+                                                    ", ".join(m["name"] for m in rows))) if rows else \
+                "; nothing loaded in memory right now"
+        except Exception:
+            mem = ""
+        return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s%s."
+                  % (core.ai_where(cfg), fast, strong, mem))
     if models and want and want not in models:
         return warn("ollama", "Ollama (the AI)", "Running, but the chosen model %s isn't downloaded. You have: %s"
                     % (want, ", ".join(models[:6]) or "none"),

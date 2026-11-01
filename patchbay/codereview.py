@@ -11,6 +11,7 @@ Like deep research, the software does the legwork and the local AI only does the
 Nothing is sent anywhere except the requests that fetch the files. The report is saved under reviews/.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -198,10 +199,13 @@ class FolderSource:
 
 
 class Review:
-    """ask(messages, think, stream) -> text; status(text); stop() raises if Stop was pressed; note(text)."""
+    """ask(messages, think, stream, max_words) -> text; status(text); stop() raises if Stop was pressed; note(text).
+    progress: a file where the notes are saved after every piece, so a review that was stopped or lost the AI
+    carries on where it left off next time."""
 
-    def __init__(self, source, focus, ask, status, stop, note):
+    def __init__(self, source, focus, ask, status, stop, note, progress=None):
         self.src, self.focus, self.ask, self.status, self.stop, self.note = source, focus, ask, status, stop, note
+        self.progress = Path(progress) if progress else None
         self.notes = []        # [(group, text)]
         self.read_files = []
         self.skipped = []
@@ -264,7 +268,7 @@ class Review:
             if len(groups) == 1 and len(texts) == 1:
                 groups = [texts[0][:NOTES_GROUP]]
             texts = [self.ask([{"role": "user", "content": SQUEEZE_PROMPT % (self.src.name, label, words, g)}],
-                              think=False) for g in groups]
+                              think=False, max_words=words + 300) for g in groups]
             if len(groups) == 1:
                 break
         return texts[0] if texts else ""
@@ -284,12 +288,30 @@ class Review:
         about = ("What the README says (it may be out of date):\n" + self.readme[:2500]) if self.readme else ""
         if self.focus:
             about += "\nThe owner especially wants to know about: %s" % self.focus
+        saved = self._load()
+        if saved:
+            self.note("Carrying on from the last time: %d of %d parts were already reviewed."
+                      % (sum(1 for _, _, b in pieces if _key(b) in saved), len(pieces)))
         for i, (label, group, body) in enumerate(pieces, 1):
             self.stop()
+            key = _key(body)
+            if key in saved:
+                self.notes.append((group, saved[key]))
+                continue
             self.status("Reviewing %d of %d: %s" % (i, len(pieces), label[:90]))
-            text = self.ask([{"role": "user", "content": NOTES_PROMPT % (self.src.name, about, label, body)}],
-                            think=False)
-            self.notes.append((group, "[%s]\n%s" % (label, (text or "").strip())))
+            try:
+                text = self.ask([{"role": "user", "content": NOTES_PROMPT % (self.src.name, about, label, body)}],
+                                think=False, max_words=700)
+            except Exception as e:
+                if type(e).__name__ == "Stopped":
+                    raise
+                done = len(saved)
+                raise ReviewError("%s\nThe review stopped at part %d of %d. The notes on the %d parts done so far are "
+                                  "saved: run the same review again and it carries on from there." % (
+                                      e, i, len(pieces), done))
+            saved[key] = "[%s]\n%s" % (label, (text or "").strip())
+            self.notes.append((group, saved[key]))
+            self._save(saved)
         # Squeeze the notes per part of the project, then all together if still too long.
         groups = {}
         for g, t in self.notes:
@@ -312,10 +334,44 @@ class Review:
         report = self.ask([{"role": "user", "content": REPORT_PROMPT % (
             self.src.name, ("The owner especially wants to know about: %s" % self.focus) if self.focus else "",
             "%d files" % len(self.read_files), allnotes + "\n\nNot reviewed:\n" + (skipped or "(nothing)"),
-            self.src.name)}], think=True, stream=False)
+            self.src.name)}], think=True, stream=False, max_words=2500)
         report = (report or "").strip()
+        if self.progress:
+            try:
+                self.progress.unlink()
+            except OSError:
+                pass
         report += "\n\n---\n*Reviewed %d files in %d min.*\n" % (len(self.read_files), (time.time() - started) // 60)
         return report
+
+
+    def _load(self):
+        if not self.progress:
+            return {}
+        try:
+            data = json.loads(self.progress.read_text())
+            return data.get("notes") or {} if data.get("name") == self.src.name else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, saved):
+        if not self.progress:
+            return
+        try:
+            self.progress.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.progress.with_name(self.progress.name + ".tmp")
+            tmp.write_text(json.dumps({"name": self.src.name, "time": time.time(), "notes": saved}))
+            tmp.replace(self.progress)
+        except OSError:
+            pass
+
+
+def _key(body):
+    return hashlib.sha1(body.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def progress_file(folder, name):
+    return Path(folder) / ".unfinished" / (re.sub(r"[^\w.-]", "-", name)[:80] + ".json")
 
 
 def _group(path):
