@@ -212,6 +212,20 @@ PatchBay works on an app's source code on your Mac, in `~/Patchbay-projects/`, a
 The same works for other systems (3DS, Wii U, Vita, PSP, PS4, Linux handhelds and your own devices). For anything
 new, the AI researches it and saves what it learned, so next time it already knows.
 
+### Console view, plans and project rules
+
+- **▮ Console** (top of the chat) switches the chat to a dark, terminal-style view: one line per step, with a timer
+  while a step runs. Click a step to see what it found. Click again to go back to the normal view.
+- **Accept edits** (next to it): when ticked, code changes on your Mac and their builds happen without a card. The
+  old file is still backed up first, and the change shows right in the chat. Changes to devices always need a card.
+- The bar next to it shows how full the AI's memory of this chat is (for example `10.4k / 32k`).
+- For a bigger change, the AI first writes a short **Plan** checklist. It does one step at a time and only ticks a
+  step after the project builds.
+- **Project rules:** put a file called `PATCHBAY.md` in a project's folder. Write the build command, the style, and
+  what must not be touched. The AI reads it before every question about that project. PatchBay has its own
+  `PATCHBAY.md` too.
+- Searching code is fast: the AI can search with patterns, only some file types, and lines around each match.
+
 ## AI models and Claude
 
 **Everyday / Building.** Only one big model fits in your Mac's memory at a time, so instead of picking models you

@@ -396,3 +396,101 @@ def project_map(root, sub="", per_file=40, limit=14000):
                 rows.append("... (map cut short: ask for a sub-folder to see more)")
                 return "\n".join(rows)
     return "\n".join(rows) or "No code files found."
+
+
+# ---------------------------------------------------------------- fast code search
+
+def _rg():
+    return shutil.which("rg") or next((p for p in ("/opt/homebrew/bin/rg", "/usr/local/bin/rg") if os.path.exists(p)),
+                                      None)
+
+
+def search(root, pattern, regex=False, glob="", context=0, limit=60, skip=(), skip_files=()):
+    """Search every text file under root. regex: a regular expression instead of plain text (case-insensitive
+    either way). glob: only files like *.c or src/**. context: lines shown around each match. Uses ripgrep when
+    it's installed (very fast), else Python."""
+    root = Path(root)
+    if not pattern:
+        raise EditError("Give some text to search for.")
+    context = max(0, min(int(context or 0), 5))
+    rg = _rg()
+    if rg:
+        cmd = [rg, "--line-number", "--no-heading", "--color", "never", "-i", "--max-columns", "220",
+               "--max-columns-preview", "-m", "15"]
+        if not regex:
+            cmd.append("-F")
+        if context:
+            cmd += ["-C", str(context)]
+        if glob:
+            cmd += ["-g", glob]
+        for d in SKIP_DIRS | set(skip):
+            cmd += ["-g", "!%s/" % d]
+        for f in skip_files:
+            cmd += ["-g", "!%s" % f]
+        cmd += ["-e", pattern, "."]
+        try:
+            r = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, timeout=30,
+                               stdin=subprocess.DEVNULL)
+            rows = [l[2:] if l.startswith("./") else l for l in r.stdout.splitlines()]
+            if r.returncode in (0, 1):
+                return _cut(rows, limit, pattern)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        rx = re.compile(pattern if regex else re.escape(pattern), re.I)
+    except re.error as e:
+        raise EditError("That pattern isn't a valid regular expression: %s" % e)
+    import fnmatch
+    rows, hits = [], 0
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and d not in skip and not d.startswith("."))
+        for fn in sorted(files):
+            p = Path(dirpath) / fn
+            rel = p.relative_to(root).as_posix()
+            if fn in skip_files:
+                continue
+            if glob and not (fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch(fn, glob)):
+                continue
+            try:
+                if p.stat().st_size > 2_000_000:
+                    continue
+                data = p.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in data[:4000]:
+                continue
+            lines = data.decode("utf-8", "replace").splitlines()
+            for i, line in enumerate(lines):
+                if rx.search(line):
+                    hits += 1
+                    for j in range(max(0, i - context), min(len(lines), i + context + 1)):
+                        rows.append("%s%s%d%s%s" % (rel, ":" if j == i else "-", j + 1, ":" if j == i else "-",
+                                                    lines[j].strip()[:220]))
+                    if context:
+                        rows.append("--")
+                    if hits >= limit:
+                        return _cut(rows, 10 ** 6, pattern) + "\n(stopped at %d matches: search for something more " \
+                                                              "exact)" % limit
+    return _cut(rows, 10 ** 6, pattern)
+
+
+def _cut(rows, limit, pattern):
+    if not rows:
+        return "No matches for %r." % pattern
+    more = len(rows) - limit
+    return "\n".join(rows[:limit]) + ("\n(%d more lines: search for something more exact)" % more if more > 0 else "")
+
+
+# ---------------------------------------------------------------- project rules
+
+RULES_NAME = "PATCHBAY.md"
+
+
+def rules(root, limit=2000):
+    """The project's own rules file (PATCHBAY.md in its folder), cut to fit, or ''."""
+    p = Path(root) / RULES_NAME
+    try:
+        text = p.read_text("utf-8", "replace").strip()
+    except OSError:
+        return ""
+    return text if len(text) <= limit else text[:limit] + "\n(... the rest of %s is cut; read it if needed)" % RULES_NAME

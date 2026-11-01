@@ -368,6 +368,7 @@ def tool(name, description, params=None, required=()):
 
 S = {"type": "string"}
 I = {"type": "integer"}
+B = {"type": "boolean"}
 
 
 @tool("test_connection", "Check that this Mac can reach the device over FTP and list the folders being scanned.")
@@ -682,7 +683,10 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
     if on_mac and kind != "plan" and st.plan and in_plan(st.plan, kind, extra_fields):
         # The user approved the whole plan with one button: Mac steps in it run without their own card.
         p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
-        emit({"type": "note", "text": "Plan step on %s: %s" % (APP.computer if APP else "the Mac", summary)})
+        if diff and kind == "project_edit":      # the change itself, shown in the chat
+            emit({"type": "diff", "title": summary, "diff": diff})
+        else:
+            emit({"type": "note", "text": "Plan step on %s: %s" % (APP.computer if APP else "the Mac", summary)})
         short, detail = run_mac_step(st, cfg, p, emit)
         if kind not in ("command", "build"):
             emit({"type": "note", "text": short})
@@ -690,7 +694,10 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
     if on_mac and runs_by_itself(cfg, kind, extra_fields):
         # Automatic Mac step (setting auto_mac_steps): project files are backed up first, downloads go to a new folder.
         p = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
-        emit({"type": "note", "text": "On %s: %s" % (APP.computer if APP else "the Mac", summary)})
+        if diff and kind == "project_edit":      # the change itself, shown in the chat
+            emit({"type": "diff", "title": summary, "diff": diff})
+        else:
+            emit({"type": "note", "text": "On %s: %s" % (APP.computer if APP else "the Mac", summary)})
         short, detail = run_mac_step(st, cfg, p, emit)
         if kind not in ("command", "build"):     # those already show their output box
             emit({"type": "note", "text": short})
@@ -991,12 +998,24 @@ def t_project_read(st, emit, a):
               min(int(a.get("max_lines") or 300), 1000))
 
 
-@tool("project_search", "Search every source file in a project for a word or phrase (read-only).",
-      {"project": S, "text": S}, ["project", "text"])
+SEARCH_ARGS = {"text": dict(S, description="Word, phrase or (with regex) pattern; not case-sensitive"),
+               "regex": dict(B, description="true: text is a regular expression"),
+               "glob": dict(S, description="Optional: only files like *.c or source/**"),
+               "context": dict(I, description="Optional: lines shown around each match (0-5)")}
+
+
+def code_search(root, a, **kw):
+    try:
+        return codetools.search(root, a.get("text"), bool(a.get("regex")), (a.get("glob") or "").strip(),
+                                a.get("context") or 0, **kw)
+    except codetools.EditError as e:
+        raise ToolError(str(e))
+
+
+@tool("project_search", "Fast search of every file in a project (read-only): file:line: text for each match. Use it "
+      "to find where something is before reading.", dict(SEARCH_ARGS, project=S), ["project", "text"])
 def t_project_search(st, emit, a):
-    if not a.get("text"):
-        raise ToolError("Give some text to search for.")
-    return pe(projects.search, project(st, a.get("project")), a["text"])
+    return code_search(pe(projects.folder_of, project(st, a.get("project"))), a)
 
 
 EDITS = {"type": "array", "description": "Small changes, applied in order. Each is {find, replace} (find: a few "
@@ -2074,10 +2093,10 @@ def h_self_read(st, emit, a):
     return se(selfedit.read, a.get("path"), a.get("start_line") or 1, a.get("max_lines") or 300)
 
 
-@home_tool("patchbay_search", "Search all of PatchBay's own files for a word or phrase (read-only). Good for finding "
-           "where a button, message or function is.", {"text": S}, ["text"])
+@home_tool("patchbay_search", "Fast search of all PatchBay's own files (read-only): file:line: text for each match. "
+           "Good for finding where a button, message or function is.", SEARCH_ARGS, ["text"])
 def h_self_search(st, emit, a):
-    return se(selfedit.search, a.get("text"))
+    return code_search(selfedit.HERE, a, skip=tuple(selfedit.BLOCKED_DIRS), skip_files=tuple(selfedit.BLOCKED_NAMES))
 
 
 @home_tool("patchbay_map", "A short map of PatchBay's own code: each file with what it defines (name@line) and which "
@@ -2200,6 +2219,74 @@ def private_tool(name, description, params=None, required=()):
         PRIVATE_TOOLS.add(name)
         return fn
     return deco
+
+
+def both_tool(name, description, params=None, required=()):
+    """A tool for both the device chat and the home chat."""
+    def deco(fn):
+        spec = {"type": "function", "function": {
+            "name": name, "description": description,
+            "parameters": {"type": "object", "properties": params or {}, "required": list(required)}}}
+        TOOLS.append(spec)
+        HANDLERS[name] = fn
+        HOME_TOOLS.append(spec)
+        HOME_HANDLERS[name] = fn
+        return fn
+    return deco
+
+
+# ---- plan, then code: a short checklist the user sees, each step checked before the next
+
+def show_steps(st, emit):
+    emit({"type": "todo", "steps": [{"text": x["text"], "state": x["state"], "note": x.get("note", "")}
+                                    for x in st.steps]})
+
+
+@both_tool("set_steps", "Before a code change with more than one part: write the plan as a short list of steps "
+           "(2-8, a few words each). The user sees it as a checklist. Then do the steps in order and call step_done "
+           "after checking each one. Call again only if the plan has to change.",
+           {"steps": {"type": "array", "items": S, "description": "The steps, in order"}}, ["steps"])
+def t_set_steps(st, emit, a):
+    steps = [str(x).strip()[:120] for x in (a.get("steps") or []) if str(x).strip()][:12]
+    if not steps:
+        raise ToolError("Give the steps as a list of short sentences.")
+    done = {x["text"] for x in getattr(st, "steps", []) if x["state"] == "done"}
+    st.steps = [{"text": x, "state": "done" if x in done else "todo"} for x in steps]
+    nxt = next((x for x in st.steps if x["state"] == "todo"), None)
+    if nxt:
+        nxt["state"] = "doing"
+    show_steps(st, emit)
+    return "Plan shown to the user. Now do step %d: %s" % (st.steps.index(nxt) + 1, nxt["text"]) if nxt else \
+        "Every step is already done."
+
+
+@both_tool("step_done", "Mark a step of the plan done, after you have checked it worked (a build that worked, or "
+           "a read of the changed lines). Refused while project edits since the last build haven't been built.",
+           {"step": dict(I, description="The step's number, from 1"),
+            "note": dict(S, description="A few words on how you checked it")}, ["step"])
+def t_step_done(st, emit, a):
+    steps = getattr(st, "steps", [])
+    if not steps:
+        raise ToolError("There's no plan yet. Use set_steps first.")
+    try:
+        n = int(a.get("step"))
+    except (TypeError, ValueError):
+        raise ToolError("Give the step's number, from 1 to %d." % len(steps))
+    if not 1 <= n <= len(steps):
+        raise ToolError("Give the step's number, from 1 to %d." % len(steps))
+    if getattr(st, "unbuilt", False) and not getattr(st, "home", False):
+        raise ToolError("Not yet: files were changed since the last build that worked. Build first (propose_build, "
+                        "or it builds by itself after an edit), fix any errors, then mark the step done.")
+    steps[n - 1].update(state="done", note=(a.get("note") or "").strip()[:100])
+    nxt = next((x for x in steps if x["state"] != "done"), None)
+    for x in steps:
+        if x["state"] == "doing":
+            x["state"] = "todo"
+    if nxt:
+        nxt["state"] = "doing"
+    show_steps(st, emit)
+    return ("Step %d done. Next, step %d: %s" % (n, steps.index(nxt) + 1, nxt["text"]) if nxt else
+            "Step %d done. Every step is done: give the user a short summary of what changed." % n)
 
 
 def ma(fn, *args):
@@ -2489,6 +2576,8 @@ existing style. web/app.html is the page (HTML, CSS and JavaScript); server.py i
 Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
 to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
 changes, offer propose_patchbay_restart; page changes only need a page reload.
+- For a PatchBay change with more than one part, call set_steps first (a short plan shown as a checklist), then do \
+one step at a time and call step_done after checking it before starting the next.
 - Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
 scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
 places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
@@ -2554,6 +2643,8 @@ and builds, and when it builds cleanly offer propose_install to put the new file
 usually built with devkitPro and libnx; firmware updates usually mean building with the newest libnx and fixing code \
 where its functions changed. read_web_page can fetch public release notes; never put the user's code or device \
 details into an address.
+- For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
+do one step at a time and call step_done after checking it (a build that worked) before starting the next.
 - The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
 Use show_settings, then propose_settings with exactly what they asked. For a new address: check_address first. If \
 it's a different device than this one, offer add_device; if they mean this device moved, propose_settings for \
@@ -3073,6 +3164,10 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                         emit({"type": "delta", "text": shown})
                 calls.extend(m.get("tool_calls") or [])
                 if chunk.get("done"):
+                    if emit and chunk.get("prompt_eval_count") is not None:
+                        # How full the AI's memory for this chat is (the page's context meter).
+                        emit({"type": "context", "used": int(chunk.get("prompt_eval_count") or 0) +
+                              int(chunk.get("eval_count") or 0), "max": int(cfg.get("chat_context", 32768))})
                     break
             check_stop()       # the connection was cut by Stop
             return {"content": content, "tool_calls": calls}
@@ -3308,7 +3403,8 @@ DEVICE_GROUPS = {
               "propose_project_edit", "propose_build", "propose_install", "project_packages", "check_build_tools",
               "propose_get_source", "propose_command", "propose_install_packages", "find_homebrew",
               "prepare_homebrew_update", "platform_notes", "save_platform_notes", "setup_firmware_helper",
-              "latest_release", "find_github_repo", "read_repo_file", "review_github_repo", "device_firmware"],
+              "latest_release", "find_github_repo", "read_repo_file", "review_github_repo", "device_firmware",
+              "set_steps", "step_done"],
              r"build|compil|source|code|project|updat|upgrad|homebrew|\bapps?\b|program|github|repo|install|"
              r"\bmake\b|cmake|libnx|devkit|release|version|review|critique|function|bug"),
     "settings": ("settings and connections: show or change settings, addresses and ports, add a device",
@@ -3328,7 +3424,7 @@ HOME_GROUPS = {
                 r"console|printer|devices?"),
     "patchbay": ("changing PatchBay itself: its files, map, search, changes and restart",
                  ["patchbay_files", "patchbay_map", "patchbay_read", "patchbay_search", "propose_patchbay_change",
-                  "propose_patchbay_restart"],
+                  "propose_patchbay_restart", "set_steps", "step_done"],
                  r"patchbay|button|screen|page|\btab\b|feature|add .*option|change .*app|make it|setup|the app"),
     "code": ("GitHub repositories, releases, build tools and code reviews",
              ["check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "review_github_repo"],
@@ -3416,6 +3512,28 @@ def compact_history(messages, keep=8, short=500):
     return out
 
 
+def project_rules(st, names):
+    """The rules file (PATCHBAY.md) of the project being worked on, read fresh for every question."""
+    root, label = None, ""
+    if getattr(st, "home", False):
+        if "patchbay_read" in names:
+            root, label = selfedit.HERE, "PatchBay itself"
+    elif "project_read" in names:
+        known = projects.all_projects(st.cfg())
+        name = getattr(st, "last_project", None) or (known[0]["name"] if len(known) == 1 else None)
+        pr = next((p for p in known if p["name"] == name), None)
+        if pr:
+            try:
+                root, label = projects.folder_of(pr), "project " + pr["name"]
+            except projects.ProjectError:
+                root = None
+    text = codetools.rules(root) if root else ""
+    if not text:
+        return ""
+    return "\n\nRules for %s (from its %s file; follow them unless the user says otherwise):\n%s" % (
+        label, codetools.RULES_NAME, text)
+
+
 def chat_turn(st, user_text, emit, user_msg=None):
     cfg = st.cfg()
     question = user_text or last_question(st)
@@ -3433,6 +3551,7 @@ def chat_turn(st, user_text, emit, user_msg=None):
     tools, names = choose_tools(st, all_tools, groups, core, question)
     all_names = {t["function"]["name"] for t in all_tools}
     system = trim_system(system, all_names, names)
+    system += project_rules(st, names)
     # At the end, so the unchanging start of the prompt can be reused by Ollama from one question to the next.
     system += "\n\nRight now it is %s (%s, this Mac's time zone)." % (
         time.strftime("%A %Y-%m-%d %H:%M"), time.strftime("%Z") or "local time")
@@ -3624,7 +3743,7 @@ STEP_WORDS = {
     "project_search": "Searching {project} for {text}", "propose_project_edit": "Changing {path} in {project}",
     "patchbay_files": "Listing PatchBay's own files", "patchbay_read": "Reading PatchBay's {path}",
     "patchbay_search": "Searching PatchBay for {text}", "propose_patchbay_change": "Preparing a change to PatchBay's {path}",
-    "propose_patchbay_restart": "Preparing a restart",
+    "propose_patchbay_restart": "Preparing a restart", "set_steps": "Writing the plan", "step_done": "Step {step} checked",
     "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
     "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
@@ -3896,6 +4015,7 @@ def _run_mac_step(st, cfg, p, emit):
             bk = projects.write_file(cfg, pr, p["remote"], Path(p["source"]).read_text("utf-8"))
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't save %s: %s" % (p["remote"], e))
+        st.unbuilt = True       # step_done waits for a build that works
         result = "Saved %s in project %s.%s" % (p["remote"], pr["name"],
                                                 " The old version was backed up to %s." % bk if bk else " (new file)")
         detail = "Result: " + result
@@ -3919,6 +4039,7 @@ def _run_mac_step(st, cfg, p, emit):
     except (OSError, projects.ProjectError) as e:
         raise ToolError("Couldn't start the build: %s" % e)
     if code == 0:
+        st.unbuilt = False
         result = "The build of %s worked." % pr["name"]
         if built and built.is_file():
             probs = [x["text"] for x in core.check_bytes(built.name, built.read_bytes()) if x["level"] == "error"]
@@ -4346,6 +4467,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                                    "auto": model_labels.layer_models([m["name"] for m in installed if m["tools"]]).get(k)}
                                   for k, n, w in model_labels.LAYERS],
                        "auto": model_labels.AUTO_LABEL[1]})
+        elif path == "/api/accept-edits":
+            self.json({"on": bool(APP.home.cfg().get("auto_mac_steps", True))})
         elif path == "/api/models/memory":
             cfg = APP.home.cfg()
             try:
@@ -4768,6 +4891,18 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                     self.json({"folders": new})
             except macaccess.AccessError as e:
                 raise ToolError(str(e))
+        elif path == "/api/accept-edits":
+            # The chat bar's "Accept edits" switch: project edits and builds on the Mac run without a card
+            # (setting auto_mac_steps). Device writes always need their card.
+            on = bool(data.get("on"))
+            if on and not self.from_this_mac():
+                raise ToolError("Accept edits can only be turned on at the Mac itself.")
+            cfg = APP.home.cfg()
+            main = str(APP.registry.main)
+            old = json.loads(Path(main).read_text()).get("auto_mac_steps", True)
+            if bool(old) != on:
+                devices.apply_changes(cfg, [(main, "auto_mac_steps", old, on)])
+            self.json({"on": on})
         elif path == "/api/mac/undo":
             try:
                 self.json({"text": macaccess.undo(data.get("id")), "recent": macaccess.recent(15)})

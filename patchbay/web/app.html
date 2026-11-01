@@ -172,7 +172,7 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 #t-count{font-size:11.5px;color:var(--mute);text-align:right;padding:0 16px;max-width:900px;margin:-8px auto 6px;width:100%}
 
 .chatbar{display:flex;gap:8px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;
-  max-width:900px;width:100%;margin:0 auto}
+  max-width:1100px;width:100%;margin:0 auto}
 .chatbar .ttl{flex:1;min-width:0;color:var(--mute);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chatbar select{font:13px inherit;padding:4px 6px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:220px}
 .chatbar button{font-size:13px;padding:3px 10px}
@@ -191,6 +191,50 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 #chat.dropping #log{outline:3px dashed var(--drop);outline-offset:-6px}
 .msg .files{font-size:12.5px;opacity:.85;margin-top:4px}
 .stream{white-space:pre-wrap}
+/* running step rows, plan checklist, inline diffs, context meter (shown in both views; the console styles them) */
+.step.run{display:none}
+.todo{align-self:stretch;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--card);font-size:13.5px}
+.todo b{font-size:12.5px;color:var(--mute);font-weight:600}.todo ol{margin:4px 0 0;padding-left:0;list-style:none}
+.todo li{display:flex;gap:8px;padding:1px 0}.todo li i{font-style:normal;width:1.2em;flex:none;text-align:center}
+.todo li.done{color:var(--mute)}.todo li.done span{text-decoration:line-through}.todo li.doing{font-weight:600}
+.todo li small{color:var(--mute);font-weight:400}
+.diffrow{align-self:stretch}.diffrow summary{cursor:pointer}
+.ctxm{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums}
+.ctxm i{width:54px;height:5px;border-radius:3px;background:var(--line);overflow:hidden;display:inline-block}
+.ctxm i b{display:block;height:100%;background:var(--ok)}.ctxm.hi i b{background:var(--warn)}.ctxm.full i b{background:var(--bad)}
+.acc{display:inline-flex;gap:4px;align-items:center;font-size:13px;color:var(--mute);cursor:pointer;margin:0}
+.acc input{width:auto;margin:0}
+#console-btn.on{background:var(--me);color:var(--meink);border-color:var(--me)}
+
+/* ---- Console view: PatchBay's own terminal-style look for the chat (dark, monospace, one line per step). */
+#chat.console{--bg:#0e1116;--card:#151a21;--ink:#cfd6df;--mute:#7d8794;--line:#252c36;--me:#e8b04b;--meink:#0e1116;
+  --code:#11161c;--ok:#6cc58a;--warn:#e8b04b;--bad:#f07167;--sel:#1f2833;color-scheme:dark;
+  background:var(--bg);color:var(--ink);font:13.5px/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+#chat.console .chatbar,#chat.console #f,#chat.console .quick{font-family:system-ui,sans-serif}
+#chat.console #log{gap:6px;max-width:1100px}
+#chat.console .msg{max-width:100%;border:0;border-radius:0;background:none;padding:2px 0 2px 22px;align-self:stretch}
+#chat.console .msg::before{position:absolute;left:4px;top:2px}
+#chat.console .msg.me{color:var(--ink);margin-top:12px;font-weight:600}
+#chat.console .msg.me::before{content:"›";color:var(--me);font-weight:700}
+#chat.console .msg.ai::before{content:"▪";color:var(--ok);font-size:11px;top:4px}
+#chat.console .msg.err{color:var(--bad)}#chat.console .msg.err::before{content:"✗"}
+#chat.console .msg.ai a{color:var(--me)}
+#chat.console .step{padding-left:22px;font-size:12.5px;align-self:stretch;position:relative}
+#chat.console .step summary{list-style:none;color:var(--ink)}#chat.console .step summary::-webkit-details-marker{display:none}
+#chat.console .step>details>summary::before{content:"▸ ";color:var(--mute)}
+#chat.console .step>details[open]>summary::before{content:"▾ "}
+#chat.console .step pre{border-left:2px solid var(--line);border-radius:0;margin:2px 0 4px 6px;background:none;max-height:240px}
+#chat.console .step.run{display:flex;gap:8px;color:var(--ink)}
+#chat.console .step.run .spin{display:inline-block;width:1em;color:var(--me);animation:pb-spin 1s steps(4) infinite}
+#chat.console .step.run .el{color:var(--mute)}
+@keyframes pb-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){#chat.console .step.run .spin{animation:none}}
+#chat.console .card{border-width:1px;border-radius:6px;font-family:system-ui,sans-serif}
+#chat.console .todo{border-radius:6px;background:var(--code)}
+#chat.console .think{max-width:none;padding-left:22px}#chat.console .tk-bar{display:none}
+#chat.console .tk-dot{border-radius:1px;width:7px;height:12px}
+#chat.console textarea{font:13.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace;border-radius:6px}
+#chat.console code{background:none;color:var(--me)}
 
 /* files */
 #files{flex-direction:column;padding:10px 16px 0;gap:10px}
@@ -356,6 +400,9 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
     <span style="font-size:13px;color:var(--mute);display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Mode <span class="mode-sw" id="mode-sw"><button type="button" data-mode="everyday">Everyday</button><button type="button" data-mode="building">Building</button></span> <span id="ai-where" class="ai-where" hidden></span> <span id="model-why" style="font-size:12px"></span></span>
+    <span class="ctxm" id="ctx-meter" hidden title="How full the AI's memory of this chat is. When it fills up, older steps are shortened."><i><b></b></i><span></span></span>
+    <label class="acc" title="On: changes to code projects on this Mac, and their builds, happen without a card (files are backed up first, with Undo). Changes to devices always need a card."><input type="checkbox" id="acc-edits"> Accept edits</label>
+    <button id="console-btn" type="button" title="Console view: a dark, terminal-style chat with one line per step">▮ Console</button>
     <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent"><span id="cl-label">☁ Claude</span> <span id="cl-dot" class="cl-dot checking">checking</span></button></div>
   <div id="chatlist"></div>
   <div id="log"></div>
@@ -824,9 +871,15 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
   else if(ev.type==='status'){if(ctx)ctx.status.textContent=ev.text}
   else if(ev.type==='progress'){if(ctx){if(!ctx.live)ctx.live=add('live','');ctx.live.textContent=ev.text;keep()}}
   else if(ev.type==='tool'){endStream();if(ctx){if(ctx.live){ctx.live.remove();ctx.live=null}
-    ctx.status.step();ctx.status.textContent=(ev.text||('Using '+ev.name))+'…'}}
+    ctx.status.step();ctx.status.textContent=(ev.text||('Using '+ev.name))+'…';
+    if(ctx.run)ctx.run.stop();ctx.run=runRow(ev);keep()}}
   else if(ev.type==='tool_result'){if(ctx&&ctx.live){ctx.live.remove();ctx.live=null}
-    add('step','<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':'✓ ')+esc(ev.summary||ev.name)+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+    let took='';if(ctx&&ctx.run&&ev.name!=='output'){took=ctx.run.took();ctx.run.stop();ctx.run.remove();ctx.run=null}
+    const bad=/^(Error|Not yet|Couldn't|Can't)\b/.test(ev.text||'');
+    add('step'+(bad?' bad':''),'<details'+(ev.open?' open':'')+'><summary>'+(ev.name==='output'?'▤ ':bad?'✗ ':'✓ ')+esc(ev.summary||ev.name)+(took?' <small style="color:var(--mute)">'+took+'</small>':'')+'</summary><pre>'+esc(ev.text)+'</pre></details>');keep()}
+  else if(ev.type==='todo'){endStream();drawTodo(ev.steps||[]);keep()}
+  else if(ev.type==='diff'){endStream();add('step diffrow','<details open><summary>✎ '+esc(ev.title||'Change')+'</summary>'+diffView(ev.diff||'')+'</details>');keep()}
+  else if(ev.type==='context'){showContext(ev)}
   else if(ev.type==='note'){endStream();add('msg ai',md(ev.text),ev.text);keep()}
   else if(ev.type==='answer'){endStream();add('msg ai',md(ev.text||'(no answer)'),ev.text||'')}
   else if(ev.type==='error'){const d=add('msg err',esc(ev.text)+' <button class="rep" style="margin-left:6px;font-size:12px">Copy error report</button>',ev.text);
@@ -844,6 +897,27 @@ function show(ev,ctx,pending){ // draws one event; ctx is the live status line w
     c.querySelectorAll('button[data-i]').forEach(b=>b.onclick=async()=>{if(busy)return;const o=ev.options[+b.dataset.i];
       c.querySelector('.row').innerHTML='<i>'+esc(o.label)+'</i>';add('msg me',esc(o.label),o.label);await chatStream('/api/chat',{text:o.send})});keep()}
 }
+// A step that's running: its name and a timer (seen in the Console view). Replaced by the result when it finishes.
+function runRow(ev){const el=add('step run','<span class="spin">◐</span><span>'+esc(ev.text||ev.name)+'</span><span class="el"></span>');
+  const t0=Date.now(),el2=el.querySelector('.el'),tick=()=>{el2.textContent=((Date.now()-t0)/1000).toFixed(0)+'s'};
+  tick();const timer=setInterval(tick,1000);el.stop=()=>clearInterval(timer);
+  el.took=()=>{const s=(Date.now()-t0)/1000;return s<1?'':s.toFixed(s<10?1:0)+'s'};return el}
+// The plan checklist (set_steps / step_done): one per chat, updated in place.
+function drawTodo(steps){const html='<b>Plan</b><ol>'+steps.map((x,i)=>'<li class="'+x.state+'"><i>'+(x.state==='done'?'✓':x.state==='doing'?'▸':'○')+'</i><span>'+(i+1)+'. '+esc(x.text)+'</span>'+(x.note?' <small>'+esc(x.note)+'</small>':'')+'</li>').join('')+'</ol>';
+  const old=log.querySelector('.todo');if(old){old.innerHTML=html}else add('todo',html)}
+// How full the AI's memory (context) is, from the last answer.
+function showContext(ev){const m=$('ctx-meter');if(!m||!ev.max)return;const f=Math.min(1,ev.used/ev.max);
+  m.hidden=false;m.querySelector('b').style.width=(f*100).toFixed(0)+'%';m.classList.toggle('hi',f>=.7&&f<.9);m.classList.toggle('full',f>=.9);
+  m.querySelector('span').textContent=(ev.used>=1024?(ev.used/1024).toFixed(1)+'k':ev.used)+' / '+Math.round(ev.max/1024)+'k'}
+// Console view on/off (remembered in this browser) and the Accept edits switch (a setting on the Mac).
+function setConsole(on){$('chat').classList.toggle('console',on);$('console-btn').classList.toggle('on',on);
+  try{localStorage.setItem('pb-console',on?'1':'')}catch(e){}}
+async function loadAccept(){try{$('acc-edits').checked=!!(await getJSON('/api/accept-edits')).on}catch(e){}}
+(function(){let on=false;try{on=localStorage.getItem('pb-console')==='1'}catch(e){}
+  setConsole(on);$('console-btn').onclick=()=>setConsole(!$('chat').classList.contains('console'));
+  const box=$('acc-edits');box.onchange=async()=>{const want=box.checked;
+    try{box.checked=!!(await postJSON('/api/accept-edits',{on:want})).on}catch(e){box.checked=!want;alert(e.message)}};
+  loadAccept()})();
 // The "working" line under the chat: a moving bar, what it's doing now, how many steps, and how long so far.
 function thinking(){
   const el=add('think','<div class="tk-bar"><i></i></div><div class="tk-row"><span class="tk-dot"></span><span class="tk-text">Thinking…</span><span class="tk-meta"></span></div>');
@@ -872,7 +946,7 @@ function drawLook(){const box=$('sc-look');if(!box)return;const h=document.docum
 
 async function chatStream(url,body,since){
   // The work runs on the Mac even if this page loses its connection, so on a drop we reconnect and carry on.
-  const dev=cur;busy=true;setSend(true);const ctx={status:thinking(),live:null,stream:null};
+  const dev=cur;busy=true;setSend(true);const ctx={status:thinking(),live:null,stream:null,run:null};
   let n=since||0,finished=false,tries=0;
   const on=ev=>{if(ev.type==='ping')return;if(ev.type==='done'){finished=true;return}n++;
     if(cur===dev&&(view==='chat'||dev===HOMECHAT))show(ev,ctx)};
@@ -882,7 +956,7 @@ async function chatStream(url,body,since){
     await new Promise(r=>setTimeout(r,Math.min(10000,1500*tries)));
     try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
   if(!finished&&!restarting)add('msg err','Can\'t reach PatchBay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
-  ctx.status.stop();ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
+  ctx.status.stop();ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.run){ctx.run.stop();ctx.run.remove()}if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
   if(dev===cur)loadChatBar()}
 function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
