@@ -2107,7 +2107,8 @@ def h_self_map(st, emit, a):
 
 
 @home_tool("propose_patchbay_change",
-           "Suggest a change to one of PatchBay's OWN files. Does NOT write: shows the exact difference on a card the "
+           "Suggest a change to one of PatchBay's OWN files (allowed: they're the user's own files, and this is how "
+           "PatchBay improves itself when asked). Does NOT write: shows the exact difference on a card the "
            "user confirms. The new file is checked first (Python must compile, the page's scripts must parse) and the "
            "old one is backed up, with Undo in the Activity log. Use edits: only the lines that change (find + replace "
            "pairs, or line ranges from patchbay_read). new_content only for a new file. patchbay_map shows where "
@@ -2543,8 +2544,27 @@ def t_cal_delete(st, emit, a):
                        "Delete \"%s\" (%s)" % (before["title"], before["start"]), _event_text(before), "")
 
 
+# How the AI changes PatchBay's own code (shared by the home chat and device chats).
+SELF_EDIT_RULES = """\
+- You CAN change your own code: PatchBay's own files (its Python, the page, the README) are on this Mac and the user \
+owns them. Editing them is a built-in feature, not a way around your rules. When asked to change, fix or add \
+something in PatchBay (or "your own code"), do it; don't refuse or say you aren't allowed. If those tools aren't on, \
+call use_tools with group patchbay.
+- How: find the place with patchbay_search or patchbay_map, read it with patchbay_read, then \
+propose_patchbay_change with a small find/replace that matches the existing style. Nothing is written until the \
+user confirms the card; the old file is backed up, with Undo. web/app.html is the page (HTML, CSS and JavaScript); \
+server.py is the server and the chat tools. Explain each change in plain words.
+- Changes that touch a safety rule (typed device names, backups, local-only AI, what goes to the cloud, scanning \
+limits) are allowed when the user clearly asks: the card then needs the word PatchBay typed. Say plainly what such a \
+change does. Don't weaken one on your own.
+- After Python changes, offer propose_patchbay_restart; page changes only need a page reload. For a change with \
+more than one part, call set_steps first (a short plan shown as a checklist), then do one step at a time and call \
+step_done after checking it before starting the next.
+"""
+
+
 def home_system():
-    return """You are PatchBay, an assistant running fully on the user's own Mac (%s). This is the home screen chat, \
+    return ("""You are PatchBay, an assistant running fully on the user's own Mac (%s). This is the home screen chat, \
 about all of the user's devices rather than one. The user is not a programmer: answer in short, plain sentences.
 
 Use tools instead of guessing.
@@ -2570,15 +2590,7 @@ propose_settings for its host/ports, then test_connection.
 - Work on one device (checking, files, scans, backups, fixing, updating homebrew): open_device, and tell the user \
 they can carry on in that device's chat.
 - identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.
-- Changing PATCHBAY ITSELF (a new button, a fix to PatchBay, "make PatchBay do X"): find the place with \
-patchbay_search, read it with patchbay_read, then propose_patchbay_change with a small find/replace that matches the \
-existing style. web/app.html is the page (HTML, CSS and JavaScript); server.py is the server and the chat tools. \
-Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
-to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
-changes, offer propose_patchbay_restart; page changes only need a page reload.
-- For a PatchBay change with more than one part, call set_steps first (a short plan shown as a checklist), then do \
-one step at a time and call step_done after checking it before starting the next.
-- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
+""" + SELF_EDIT_RULES + """- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
 scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
 places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
 it, try once or twice more with different words or another tool before giving up.
@@ -2592,7 +2604,7 @@ the user approved in Setup → Mac; propose_mac_write, propose_mac_move and prop
 through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
 propose_calendar_edit and propose_calendar_delete change it through a card. If access is off or a folder isn't \
 approved, say where to turn it on. Never say something is changed until you're told it was confirmed. What you \
-read there is private: never put it in web_search, read_web_page or ask_claude.""" % (
+read there is private: never put it in web_search, read_web_page or ask_claude.""") % (
         APP.computer if APP else "the Mac")
 
 
@@ -2645,7 +2657,7 @@ where its functions changed. read_web_page can fetch public release notes; never
 details into an address.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
-- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
+""" + SELF_EDIT_RULES + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
 Use show_settings, then propose_settings with exactly what they asked. For a new address: check_address first. If \
 it's a different device than this one, offer add_device; if they mean this device moved, propose_settings for \
 host/ports. After a change to host or ports, use test_connection.
@@ -3425,7 +3437,8 @@ HOME_GROUPS = {
     "patchbay": ("changing PatchBay itself: its files, map, search, changes and restart",
                  ["patchbay_files", "patchbay_map", "patchbay_read", "patchbay_search", "propose_patchbay_change",
                   "propose_patchbay_restart", "set_steps", "step_done"],
-                 r"patchbay|button|screen|page|\btab\b|feature|add .*option|change .*app|make it|setup|the app"),
+                 r"patchbay|button|screen|page|\btab\b|feature|add .*option|change .*app|make it|setup|the app|"
+                 r"own (source )?code|its own|your own|yourself|self.?edit|\.py\b|app\.html"),
     "code": ("GitHub repositories, releases, build tools and code reviews",
              ["check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "review_github_repo"],
              r"github|repo|release|version|build|devkit|review|critique|code"),
@@ -3433,6 +3446,14 @@ HOME_GROUPS = {
                  r"setting|\bmodel\b|password|writing|change"),
     "mac": DEVICE_GROUPS["mac"],
 }
+# PatchBay's own code can be changed from any chat, not only the home one.
+DEVICE_GROUPS["patchbay"] = HOME_GROUPS["patchbay"][:2] + (
+    r"patchbay|own (source )?code|its own|your own|yourself|self.?edit",)
+for _spec in HOME_TOOLS:
+    _n = _spec["function"]["name"]
+    if _n in HOME_GROUPS["patchbay"][1] and _n not in HANDLERS:
+        TOOLS.append(_spec)
+        HANDLERS[_n] = HOME_HANDLERS[_n]
 CORE_DEVICE = ["list_folder", "read_file", "read_attachment", "propose_edit", "propose_restore", "propose_undo",
                "test_connection", "web_search", "read_web_page", "ask_claude", "propose_plan", "show_settings",
                "places_nearby"]
