@@ -285,6 +285,9 @@ def layer_models(names, chosen=None):
     return {k: chosen.get(k) if chosen.get(k) in names else default[k] for k in LAYER_KEYS}
 
 
+LOOKUPS = {"web_search", "read_web_page", "read_repo_file", "latest_release", "find_github_repo"}
+
+
 def which_layer(messages):
     """(layer, plain reason) for the next answer, from the chat so far.
     Within one question it only ever climbs (quick, everyday, hard, second), never back down, so a hard job
@@ -292,14 +295,18 @@ def which_layer(messages):
     last_user, tools, plan = "", [], False
     for m in reversed(messages):
         if m.get("role") == "tool":
-            tools.append(str(m.get("content") or ""))
+            text = str(m.get("content") or "")
+            tools.append("(lookup) " + text[:60] if m.get("tool_name") in LOOKUPS else text)
         if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
             plan = True
         if m.get("role") == "user" and not str(m.get("content") or "").startswith("["):
             last_user = str(m.get("content") or "")
             break
     # Every failed step since the question counts, so the layer can't drop once a step has failed.
-    fails = sum(1 for t in tools if re.search(r"(?i)\b(failed|error)\b", t[:400]))
+    # Only real failed steps (they start with "Error:" or say a build/command failed), not web pages or searches
+    # that happen to contain the word "error", and not a web page that couldn't be read.
+    fails = sum(1 for t in tools if not t.startswith("(lookup)") and (
+        t.startswith("Error:") or re.search(r"\b(failed|did not work)\b.*\(exit code [1-9]", t[:600])))
     if fails >= 2:
         return "second", "stuck: a second opinion"
     if plan:

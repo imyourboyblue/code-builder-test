@@ -58,6 +58,7 @@ import backup
 import claude
 import cleardata
 import collections
+import concurrent.futures
 import mac_app
 import netscan
 import securitycheck
@@ -1214,9 +1215,25 @@ def t_save_fw(st, emit, a):
     return "Saved. The device's picture now says: %s" % a.get("name")
 
 
+LOOKUP_CACHE = {}       # recent web searches and pages: (kind, key) -> (time, text)
+
+
+def cached(kind, key, fetch, seconds=600):
+    hit = LOOKUP_CACHE.get((kind, key))
+    if hit and time.time() - hit[0] < seconds:
+        return hit[1]
+    text = fetch()
+    LOOKUP_CACHE[(kind, key)] = (time.time(), text)
+    if len(LOOKUP_CACHE) > 200:
+        for k in sorted(LOOKUP_CACHE, key=lambda k: LOOKUP_CACHE[k][0])[:50]:
+            LOOKUP_CACHE.pop(k, None)
+    return text
+
+
 @tool("web_search",
       "Search the web. ONLY for generic text such as a version string, a server name or an error message; never "
-      "include the user's file contents, code, names or addresses.", {"query": S}, ["query"])
+      "include the user's file contents, code, names or addresses. Each result has a short snippet: for a simple "
+      "fact, answer from the snippets instead of reading pages.", {"query": S}, ["query"])
 def t_search_web(st, emit, a):
     q = (a.get("query") or "").strip()
     if not q:
@@ -1224,9 +1241,54 @@ def t_search_web(st, emit, a):
     if leaks_private(st, q):
         raise ToolError(PRIVATE_REFUSAL)
     try:
-        return clip(firmware.web_search(q[:200]))
+        found = cached("search", q[:200].lower(), lambda: firmware.web_search(q[:200]))
     except (OSError, ValueError) as e:
         raise ToolError("The search didn't work: %s" % tlsfix.explain(e))
+    return clip(found + top_pages(found, q))
+
+
+def excerpt(text, query, limit=1800):
+    """The sentences of a page that share the most words with the question (with the one after each, for
+    context), in page order."""
+    words = {w for w in re.findall(r"\w{3,}", query.lower())} - {"the", "and", "what", "how", "for", "will", "with"}
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+|\n+", text or "") if len(p.strip()) > 8]
+    scores = [len(words & set(re.findall(r"\w{3,}", p.lower()))) for p in parts]
+    keep, size = set(), 0
+    for i in sorted(range(len(parts)), key=lambda i: -scores[i]):
+        if scores[i] == 0 or size > limit:
+            break
+        for j in (i, i + 1):
+            if j < len(parts) and j not in keep and size + len(parts[j]) <= limit:
+                keep.add(j)
+                size += len(parts[j])
+    if not keep:
+        return re.sub(r"\s+", " ", text or "")[:600]
+    out, prev = [], -2
+    for i in sorted(keep):
+        out.append(("" if i == prev + 1 else "... ") + re.sub(r"\s+", " ", parts[i])[:500])
+        prev = i
+    return " ".join(out)
+
+
+def top_pages(found, query, pages=2):
+    """Read the top results' pages at the same time and add the parts that match the question, so the AI can
+    answer in one step instead of reading pages one by one."""
+    urls = [u for u in re.findall(r"(?m)^\s+(https://\S+)", found or "")
+            if not re.search(r"youtube\.|facebook\.|x\.com|twitter\.|reddit\.com/r/\w+/?$", u)][:pages + 1]
+    if not urls:
+        return ""
+
+    def get(u):
+        try:
+            return u, cached("page", u, lambda: page_text(u, timeout=8))
+        except Exception:
+            return u, ""
+    with concurrent.futures.ThreadPoolExecutor(len(urls)) as pool:
+        got = [(u, t) for u, t in pool.map(get, urls) if len(t) > 300][:pages]
+    if not got:
+        return ""
+    return "\n\nFrom the top pages (the parts that match the question):\n" + "\n\n".join(
+        "[%s]\n%s" % (u, excerpt(t, query)) for u, t in got)
 
 
 def clean_items(items):
@@ -1782,16 +1844,17 @@ def t_install_packages(st, emit, a):
 def t_web(st, emit, a):
     if leaks_private(st, a.get("url")):
         raise ToolError(PRIVATE_REFUSAL)
-    return clip(page_text((a.get("url") or "").strip()))
+    url = (a.get("url") or "").strip()
+    return clip(cached("page", url, lambda: page_text(url)), 8000)
 
 
-def page_text(url):
+def page_text(url, timeout=30):
     """A public web page as plain text."""
     if not url.startswith("https://"):
         raise ToolError("Only https:// addresses.")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) patchbay/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read(3 * 1024 * 1024).decode(r.headers.get_content_charset() or "utf-8", "replace")
     except (OSError, ValueError) as e:
         raise ToolError("Couldn't read that page: %s" % tlsfix.explain(e))
@@ -2407,6 +2470,9 @@ existing style. web/app.html is the page (HTML, CSS and JavaScript); server.py i
 Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
 to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
 changes, offer propose_patchbay_restart; page changes only need a page reload.
+- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
+opening hours, scores) call web_search ONCE: it also reads the top pages for you, so answer straight from it in a \
+few sentences. Only search again if it truly didn't say.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
@@ -2428,6 +2494,9 @@ The user is not a programmer. Answer in short, plain sentences. Explain technica
 You have tools. Use them instead of guessing: look before you answer, and never invent file contents or results.
 - Reading tools (list_folder, read_file, scan_device, last_report, find_good_copies, search_snapshot, \
 change_history, test_connection) never change the device. Use them freely.
+- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
+opening hours, scores) call web_search ONCE: it also reads the top pages for you, so answer straight from it in a \
+few sentences. Only search again if it truly didn't say.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
@@ -3356,7 +3425,25 @@ def chat_turn(st, user_text, emit, user_msg=None):
     return chat_loop(st, user_text, emit, cfg, system, tools, dict(handlers, use_tools=use_tools), user_msg)
 
 
+TIMINGS = collections.deque(maxlen=30)     # where the time went in recent answers (for the error report)
+
+
 def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
+    st.timing, started = [], time.time()
+    try:
+        return _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg)
+    finally:
+        ai = [t for n, t in st.timing if n == "AI"]
+        steps = ["%s %.1fs" % (n, t) for n, t in st.timing if n != "AI"]
+        line = "%s %.1fs total: %d AI round%s %.1fs (%s)%s | %s" % (
+            time.strftime("%H:%M:%S"), time.time() - started, len(ai), "" if len(ai) == 1 else "s", sum(ai),
+            ", ".join("%.1f" % t for t in ai), "; steps: " + ", ".join(steps) if steps else "",
+            (last_question(st) or "")[:60])
+        TIMINGS.append(line)
+        print("Timing: " + line)
+
+
+def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
     if user_msg:
         st.messages.append(user_msg)
     elif user_text:
@@ -3381,7 +3468,9 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 st.messages.append({"role": "user", "content": "[A second AI model looked at what has gone wrong so "
                                                                "far. Its advice, to weigh and use if it helps:\n%s]"
                                                                % advice})
+        t0 = time.time()
         msg = ask_model(cfg, [{"role": "system", "content": system}] + compact_history(st.messages), tools, emit)
+        st.timing.append(("AI", time.time() - t0))
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
                            if calls else {"role": "assistant", "content": msg.get("content") or ""})
@@ -3419,7 +3508,11 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             try:
                 if name not in handlers:
                     raise ToolError("There's no tool called %s." % name)
-                result = handlers[name](st, emit, args)
+                t0 = time.time()
+                try:
+                    result = handlers[name](st, emit, args)
+                finally:
+                    st.timing.append((name, time.time() - t0))
             except ToolError as e:
                 result = "Error: %s" % e
             except Stopped:

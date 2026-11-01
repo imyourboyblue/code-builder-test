@@ -339,6 +339,11 @@ def report(app):
     except Exception:
         pass
     lines.append("")
+    times = list(getattr(server, "TIMINGS", []))
+    if times:
+        lines.append("Recent answers, where the time went (newest last):")
+        lines += ["  " + t for t in times[-10:]]
+        lines.append("")
     errs = list(getattr(server, "RECENT_ERRORS", []))
     lines.append("Recent problems (newest last):" if errs else "No recent problems recorded.")
     lines += ["  " + e for e in errs[-25:]]
