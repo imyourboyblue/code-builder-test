@@ -149,6 +149,35 @@ def catalog(names, memory_gb=None):
 
 
 _TAGS = {"at": 0, "names": [], "url": None}
+_CAPS = {}
+
+
+def can_use_tools(ollama_url, name):
+    """Can this model use PatchBay's tools (look at devices, read files, make cards)? True, False, or None when
+    Ollama doesn't say (older Ollama). Asked once per model."""
+    if not name or name == AUTO:
+        return None
+    key = (ollama_url, name)
+    if key not in _CAPS:
+        try:
+            req = urllib.request.Request(ollama_url + "/api/show", data=json.dumps({"model": name}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                caps = json.loads(r.read()).get("capabilities")
+            _CAPS[key] = ("tools" in caps) if isinstance(caps, list) else None
+        except (OSError, ValueError):
+            return None      # try again next time
+    return _CAPS[key]
+
+
+def no_tools(ollama_url, name):
+    """Remember that Ollama refused tools for this model."""
+    _CAPS[(ollama_url, name)] = False
+
+
+def tool_names(ollama_url, names):
+    """The installed models that can use tools (unknown counts as yes)."""
+    return [n for n in names if can_use_tools(ollama_url, n) is not False]
 
 
 def installed(ollama_url):
@@ -234,8 +263,9 @@ def which_layer(messages):
 
 
 def choose(ollama_url, messages, chosen=None):
-    """The model to use with Automatic on, and a short label like "Quick answers: a short question"."""
-    names = installed(ollama_url)
+    """The model to use with Automatic on, and a short label like "Quick answers: a short question".
+    Only models that can use PatchBay's tools are picked."""
+    names = tool_names(ollama_url, installed(ollama_url))
     layers = layer_models(names, chosen)
     layer, why = which_layer(messages)
     model = layers[layer]

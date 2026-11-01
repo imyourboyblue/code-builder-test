@@ -2486,14 +2486,32 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                                               % (str(e).rstrip(".") + ".", APP.computer)})
     messages = [{k: v for k, v in m.items() if k != "claude"} if "claude" in m else m for m in messages]
     model = model or cfg["ollama_model"]
+    if tools is None:
+        tools = TOOLS
     if model == model_labels.AUTO:
         model, why = model_labels.choose(ollama_url(cfg), messages, cfg.get("model_layers"))
         if not model:
-            raise ToolError("Ollama has no models downloaded yet, so Automatic has nothing to pick from.")
+            raise ToolError("Ollama has no models that can use PatchBay's tools yet, so Automatic has nothing to "
+                            "pick from. Download one in 🩺 Setup → AI.")
         if emit:
             emit({"type": "status", "text": "Thinking... (%s)" % why})
-    body = json.dumps({"model": model, "stream": True, "messages": messages, "tools": tools or TOOLS,
-                       "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}).encode()
+    elif tools and model_labels.can_use_tools(ollama_url(cfg), model) is False:
+        # This model can't look at devices or make cards. Let a model that can answer instead.
+        alt, why = model_labels.choose(ollama_url(cfg), messages, cfg.get("model_layers"))
+        if alt and emit and not getattr(ask_model, "warned", None) == model:
+            ask_model.warned = model
+            emit({"type": "note", "text": "%s can't use PatchBay's tools (looking at devices, reading files, cards), "
+                                          "so %s is answering instead. Pick a different model in 🩺 Setup → AI to "
+                                          "stop seeing this." % (model, alt)})
+        if alt:
+            model = alt
+        else:
+            tools = []       # nothing else installed: a plain answer is better than none
+    body = {"model": model, "stream": True, "messages": messages,
+            "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
+    if tools:
+        body["tools"] = tools
+    body = json.dumps(body).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=900) as r:
@@ -2518,8 +2536,11 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
             return {"content": content, "tool_calls": calls}
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
-        if "not found" in detail:
-            raise ToolError("Ollama doesn't have the model %s yet. In Terminal run: ollama pull %s" % (model, model))
+        if "not found" in detail and "tools" not in detail:
+            raise ToolError("Ollama doesn't have the model %s yet. Download it in 🩺 Setup → AI." % model)
+        if "does not support tools" in detail and tools:
+            model_labels.no_tools(ollama_url(cfg), model)
+            return ask_model(cfg, messages, tools, emit, model)     # picks a model that can, or answers plainly
         if any(m.get("images") for m in messages):
             # This model can't look at pictures: try again without them.
             plain = [dict({k: v for k, v in m.items() if k != "images"},
@@ -3339,12 +3360,19 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except (OSError, ValueError, ToolError) as e:
                 err = "Couldn't ask Ollama which models it has (%s). %s" % (e, ai_down(cfg))
             model_labels.label_all(installed)
+            url = ollama_url(cfg)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(6) as pool:
+                caps = list(pool.map(lambda m: model_labels.can_use_tools(url, m["name"]), installed))
+            for m, c in zip(installed, caps):
+                m["tools"] = c is not False
             here = core.ai_where(cfg) == "this Mac"
             mem = mac_memory_gb() if here else None
             self.json({"installed": installed, "current": cfg["ollama_model"], "error": err, "where": core.ai_where(cfg),
                        "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL),
                        "layers": [{"key": k, "name": n, "when": w, "chosen": (cfg.get("model_layers") or {}).get(k) or "",
-                                   "auto": model_labels.layer_models(names).get(k)} for k, n, w in model_labels.LAYERS],
+                                   "auto": model_labels.layer_models([m["name"] for m in installed if m["tools"]]).get(k)}
+                                  for k, n, w in model_labels.LAYERS],
                        "auto": model_labels.AUTO_LABEL[1]})
         elif path == "/api/laptop":
             cfg = APP.home.cfg()
@@ -3374,10 +3402,15 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             if cfg["ollama_model"] not in [m["name"] for m in models] and cfg["ollama_model"] != model_labels.AUTO:
                 models.insert(0, {"name": cfg["ollama_model"], "size": ""})
             model_labels.label_all(models)
-            fast, strong = model_labels.picks([m["name"] for m in models])
+            for m in models:
+                if model_labels.can_use_tools(ollama_url(cfg), m["name"]) is False:
+                    m["label"] += " (chat only)"
+                    m["why"] = "Can't use PatchBay's tools, so another model answers for checks and fixes. " + m["why"]
+            fast, strong = model_labels.picks(model_labels.tool_names(ollama_url(cfg), [m["name"] for m in models]))
             if fast:
                 lab = dict((m["name"], m["label"]) for m in models)
-                lay = model_labels.layer_models([m["name"] for m in models], cfg.get("model_layers"))
+                lay = model_labels.layer_models(model_labels.tool_names(ollama_url(cfg), [m["name"] for m in models]),
+                                                cfg.get("model_layers"))
                 why = "Picks a layer for each answer. " + " ".join(
                     "%s uses %s." % (n.split(". ", 1)[1], lab.get(lay[k], lay[k])) for k, n, _ in model_labels.LAYERS)
                 models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],

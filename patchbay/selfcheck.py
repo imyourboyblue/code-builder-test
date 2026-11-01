@@ -32,7 +32,7 @@ def _ollama(app):
     want = cfg.get("ollama_model")
     if want == "auto":
         import model_labels
-        lay = model_labels.layer_models(models, cfg.get("model_layers"))
+        lay = model_labels.layer_models(model_labels.tool_names(server.ollama_url(cfg), models), cfg.get("model_layers"))
         fast, strong = lay["everyday"], lay["hard"]
         if not fast:
             return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
