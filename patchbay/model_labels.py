@@ -239,19 +239,24 @@ def layer_models(names, chosen=None):
 
 
 def which_layer(messages):
-    """(layer, plain reason) for the next answer, from the chat so far."""
-    last_user, tools = "", []
+    """(layer, plain reason) for the next answer, from the chat so far.
+    Within one question it only ever climbs (quick, everyday, hard, second), never back down, so a hard job
+    doesn't swap big models in and out of memory on every step."""
+    last_user, tools, plan = "", [], False
     for m in reversed(messages):
         if m.get("role") == "tool":
             tools.append(str(m.get("content") or ""))
+        if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
+            plan = True
         if m.get("role") == "user" and not str(m.get("content") or "").startswith("["):
             last_user = str(m.get("content") or "")
             break
-        if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
-            return "hard", "carrying out a plan"
-    fails = sum(1 for t in tools[:6] if re.search(r"(?i)\b(failed|error)\b", t[:400]))
+    # Every failed step since the question counts, so the layer can't drop once a step has failed.
+    fails = sum(1 for t in tools if re.search(r"(?i)\b(failed|error)\b", t[:400]))
     if fails >= 2:
         return "second", "stuck: a second opinion"
+    if plan:
+        return "hard", "carrying out a plan"
     if fails:
         return "hard", "a step failed"
     m = HARD_WORDS.search(last_user)
