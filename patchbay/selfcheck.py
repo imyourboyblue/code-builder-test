@@ -30,15 +30,15 @@ def _ollama(app):
         return bad("ollama", "Ollama (the AI)", "Can't reach Ollama: %s" % tlsfix.explain(e),
                    "The AI runs in the Ollama app. Make sure it's installed (ollama.com) and open.", fix="Start Ollama")
     want = cfg.get("ollama_model")
-    if want == "auto":
+    if True:      # the Everyday / Building mode decides the model
         import model_labels
-        lay = model_labels.layer_models(model_labels.tool_names(server.ollama_url(cfg), models), cfg.get("model_layers"))
-        fast, strong = lay["everyday"], lay["hard"]
+        tool_ok = model_labels.tool_names(server.ollama_url(cfg), models)
+        fast, strong = model_labels.mode_model(tool_ok, "everyday"), model_labels.mode_model(tool_ok, "building")
         if not fast:
-            return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
-                        "In Terminal run: ollama pull qwen3.6:35b-a3b")
-        return ok("ollama", "Ollama (the AI)", "Running on %s. Automatic uses %s for quick things and %s for hard jobs."
-                  % (core.ai_where(cfg), model_labels.local(fast)[0], model_labels.local(strong)[0]))
+            return warn("ollama", "Ollama (the AI)", "Running, but no models that can use PatchBay's tools are "
+                        "downloaded.", "Download one in Setup → AI.")
+        return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s."
+                  % (core.ai_where(cfg), fast, strong))
     if models and want and want not in models:
         return warn("ollama", "Ollama (the AI)", "Running, but the chosen model %s isn't downloaded. You have: %s"
                     % (want, ", ".join(models[:6]) or "none"),
@@ -192,12 +192,8 @@ def _second_opinion(app):
     name = "Second opinion AI model"
     cfg = app.home.cfg()
     names = model_labels.installed(server.ollama_url(cfg))
-    picked = (cfg.get("model_layers") or {}).get("second")
-    if picked and picked in names:
-        return ok("second", name, "%s (picked in Setup → AI). Automatic asks it when the usual models fail the same "
-                                  "step twice." % picked)
     if model_labels.second(names):
-        return ok("second", name, "Installed (%s). Automatic asks it when the usual models fail the same step twice."
+        return ok("second", name, "Installed (%s). It reviews a step when the same step fails twice."
                   % model_labels.second(names))
     if PULL["state"] == "downloading":
         pct = (" %d%%" % (100 * PULL["done"] / PULL["total"])) if PULL["total"] else ""

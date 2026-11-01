@@ -212,26 +212,22 @@ new, the AI researches it and saves what it learned, so next time it already kno
 
 ## AI models and Claude
 
-**🩺 Setup → AI models** lists the models on the computer running the AI, with what each is best for. Press
-**Use** to pick one (or Automatic). Below it, **Free models you can download** shows other free models with a
-description, their download size and whether they fit in your Mac's memory, each with a **Download** button. The
-list is in `model_labels.py` (CATALOG); Setup checks each name with Ollama's library before offering it.
+**Everyday / Building.** Only one big model fits in your Mac's memory at a time, so instead of picking models you
+pick a mode with the switch above the chat:
 
-**Automatic's layers** (also in Setup → AI) are four steps Automatic climbs as a job gets harder: 1. Quick answers,
-2. Everyday help, 3. Hard problems, 4. Second opinion (when a step fails twice). Each has a menu of your installed
-models, or **PatchBay picks**.
+- **Everyday** keeps the fast model loaded (qwen3.6:35b-a3b, or its faster MLX version if you download it). For
+  questions, device checks, research, documents and small fixes. When a job gets hard, it thinks harder on the same
+  model instead of swapping.
+- **Building** keeps the 27B model loaded and always thinks harder. For building apps, homebrew and tricky crashes.
 
-**The AI model menu** (above the chat) shows what each model is for, not its version:
-- **Automatic** (recommended): uses the fast model (Everyday help) for questions and lookups, and switches to the
-  stronger one (Hard problems and building) for builds, fixes, updates, plans, or after a step fails. The progress
-  bar shows which one it picked and why.
-- **Second opinion** (Gemma 4 from Google, about 18 GB): when the usual models fail the same step twice, Automatic
-  asks this one, since a model from a different maker often sees the problem differently. Download it with one
-  button in 🩺 Setup, or in Terminal with `ollama pull gemma4:26b`.
-- Or pick a model yourself, for example **Everyday help** or **Hard problems and building**. A short line under the
-  menu says what it's good for.
+The mode's model stays loaded between questions, so answers start quickly. When the same step fails twice, a second
+model (Gemma 4) reviews what went wrong and gives advice, then lets go of the memory again.
 
-The words are set in `model_labels.py`, if you want to change them.
+**🩺 Setup → AI** shows the mode, the models on your Mac with what uses each one and a **Delete** button, and
+**Get more free models** with descriptions, sizes and a memory check.
+
+Which models each mode uses, and the free-model list, are set in `model_labels.py` (MODES and CATALOG).
+
 
 **☁ Claude** (the button above the chat) lets PatchBay ask Claude when its own AI is stuck:
 - The button shows a badge: green **connected**, red **key rejected**, or grey **not connected**. Checking the key
@@ -249,7 +245,7 @@ shows exactly what will be sent and you press **Send**. **See what was sent** li
 ## Setup, updates and looks
 
 **🩺 Setup** checks that everything works:
-- Ollama (the AI) and which models Automatic uses
+- Ollama (the AI) and which models Everyday and Building use
 - secure connections and the internet
 - the build tools and your devices
 - free space and saved passwords
@@ -357,7 +353,7 @@ the old and new values on a card first.
 | `include` / `exclude` | File patterns to check or skip, e.g. `["*.db", "*.json"]` |
 | `max_file_mb` | Skip files bigger than this when scanning |
 | `allow_writes` | Must be on for any change to the device |
-| `ollama_model` | `auto` for Automatic, or one model's name |
+| `work_mode` | `everyday` or `building` (the switch above the chat) |
 | `about` | One sentence about the device, so the AI knows what it is |
 | `backup_folder` | Where backups go (set on the Backups tab) |
 | `lan_access` | `true` always lets the laptop in |

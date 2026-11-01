@@ -2154,6 +2154,55 @@ def ollama_url(cfg):
         raise ToolError(str(e))
 
 
+def modes_info(cfg):
+    """The two work modes, which model each keeps loaded, and tips (for the switch and Setup → AI)."""
+    err, names, sizes = None, [], {}
+    try:
+        url = ollama_url(cfg)
+        with urllib.request.urlopen(url + "/api/tags", timeout=10) as r:
+            tags = json.loads(r.read()).get("models", [])
+        sizes = {m.get("name"): m.get("size") or 0 for m in tags if m.get("name")}
+        names = model_labels.tool_names(url, list(sizes))
+    except (OSError, ValueError, ToolError) as e:
+        err = "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
+    modes = []
+    for key, name, why, _ in model_labels.MODES:
+        m = model_labels.mode_model(names, key)
+        faster = model_labels.FASTER.get(m or "")
+        modes.append({"key": key, "label": name, "why": why, "model": m,
+                      "size": core.human_size(sizes.get(m) or 0) if m else "",
+                      "faster": faster if faster and faster not in sizes else None})
+    sec = model_labels.second(names)
+    return {"current": work_mode(cfg), "modes": modes, "error": err, "where": core.ai_where(cfg),
+            "second": sec, "second_why": "Reviews a step when it fails twice, then lets go of the memory."}
+
+
+def work_mode(cfg):
+    m = cfg.get("work_mode")
+    return m if m in model_labels.MODE_KEYS else "everyday"
+
+
+def warm_mode(cfg, mode, old=None):
+    """Load the mode's model and let the other big one go, in the background, so the first answer is quick."""
+    def go():
+        try:
+            url = ollama_url(cfg)
+            names = model_labels.tool_names(url, model_labels.installed(url))
+            new = model_labels.mode_model(names, mode)
+            prev = model_labels.mode_model(names, old) if old else None
+            for name, keep in ((prev, 0), (new, -1)):
+                if name and (keep == -1 or name != new):
+                    body = {"model": name, "keep_alive": keep, "messages": [],
+                            "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
+                    req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
+                                                 headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=300) as r:
+                        r.read()
+        except Exception:
+            pass
+    threading.Thread(target=go, daemon=True).start()
+
+
 def mac_memory_gb():
     """This computer's memory in GB (None if it can't tell)."""
     try:
@@ -2485,32 +2534,35 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
                 emit({"type": "note", "text": "I couldn't use Claude (%s) Using the AI on %s for this answer instead."
                                               % (str(e).rstrip(".") + ".", APP.computer)})
     messages = [{k: v for k, v in m.items() if k != "claude"} if "claude" in m else m for m in messages]
-    model = model or cfg["ollama_model"]
     if tools is None:
         tools = TOOLS
-    if model == model_labels.AUTO:
-        model, why = model_labels.choose(ollama_url(cfg), messages, cfg.get("model_layers"))
+    url = ollama_url(cfg)
+    think = None
+    keep = -1           # the mode's model stays loaded: no reloading between questions
+    if not model:
+        mode = work_mode(cfg)
+        names = model_labels.tool_names(url, model_labels.installed(url))
+        model = model_labels.mode_model(names, mode)
         if not model:
-            raise ToolError("Ollama has no models that can use PatchBay's tools yet, so Automatic has nothing to "
-                            "pick from. Download one in 🩺 Setup → AI.")
+            raise ToolError("Ollama has no models that can use PatchBay's tools yet. Download one in 🩺 Setup → AI.")
+        layer, why = model_labels.which_layer(messages)
+        # Everyday thinks harder on the same model when a job gets hard (no swapping); Building always does.
+        think = mode == "building" or layer in ("hard", "second")
         if emit:
-            emit({"type": "status", "text": "Thinking... (%s)" % why})
-    elif tools and model_labels.can_use_tools(ollama_url(cfg), model) is False:
-        # This model can't look at devices or make cards. Let a model that can answer instead.
-        alt, why = model_labels.choose(ollama_url(cfg), messages, cfg.get("model_layers"))
-        if alt and emit and not getattr(ask_model, "warned", None) == model:
-            ask_model.warned = model
-            emit({"type": "note", "text": "%s can't use PatchBay's tools (looking at devices, reading files, cards), "
-                                          "so %s is answering instead. Pick a different model in 🩺 Setup → AI to "
-                                          "stop seeing this." % (model, alt)})
-        if alt:
-            model = alt
-        else:
-            tools = []       # nothing else installed: a plain answer is better than none
-    body = {"model": model, "stream": True, "messages": messages,
+            emit({"type": "status", "text": "Thinking harder..." if think else "Thinking..."})
+    else:
+        keep = 0 if model != model_labels.mode_model(model_labels.installed(url), work_mode(cfg)) else -1
+        if tools and model_labels.can_use_tools(url, model) is False:
+            tools = []
+    if think and model_labels.can_think(url, model) is False:
+        think = None
+    # The same context size every time, or Ollama reloads the model.
+    body = {"model": model, "stream": True, "messages": messages, "keep_alive": keep,
             "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
     if tools:
         body["tools"] = tools
+    if think is not None:
+        body["think"] = bool(think)
     body = json.dumps(body).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
@@ -2539,8 +2591,11 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         if "not found" in detail and "tools" not in detail:
             raise ToolError("Ollama doesn't have the model %s yet. Download it in 🩺 Setup → AI." % model)
         if "does not support tools" in detail and tools:
-            model_labels.no_tools(ollama_url(cfg), model)
-            return ask_model(cfg, messages, tools, emit, model)     # picks a model that can, or answers plainly
+            model_labels.no_tools(url, model)
+            return ask_model(cfg, messages, tools, emit)     # picks a model that can, or answers plainly
+        if "does not support thinking" in detail and think:
+            model_labels.no_think(url, model)
+            return ask_model(cfg, messages, tools, emit)
         if any(m.get("images") for m in messages):
             # This model can't look at pictures: try again without them.
             plain = [dict({k: v for k, v in m.items() if k != "images"},
@@ -2551,6 +2606,43 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         raise ToolError("Ollama said: %s" % detail)
     except OSError as e:
         raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
+
+
+def second_opinion(cfg, messages, emit):
+    """The same step failed twice: a different model reviews it and suggests what to try. It only advises (no tools),
+    then lets go of the memory again, so the mode's model stays the one doing the work."""
+    try:
+        url = ollama_url(cfg)
+        names = model_labels.tool_names(url, model_labels.installed(url))
+        main = model_labels.mode_model(names, work_mode(cfg))
+        other = model_labels.second(names)
+        if not other or other == main:
+            return None
+        question, steps = "", []
+        for m in reversed(messages):
+            text = str(m.get("content") or "")
+            if m.get("role") == "user" and not text.startswith("["):
+                question = text
+                break
+            if m.get("role") == "tool" and len(steps) < 6:
+                steps.append("Tool result: " + text[:700])
+            elif m.get("role") == "assistant" and text and len(steps) < 6:
+                steps.append("The AI said: " + clean_answer(text)[:500])
+        prompt = ("Another AI is helping someone and keeps failing. Review it and say briefly (at most 8 lines) what "
+                  "is most likely wrong and what to try next. Don't redo the whole job.\n\nThe request: %s\n\n"
+                  "What happened, newest first:\n%s" % (question[:1500], "\n".join(steps)))
+        emit({"type": "status", "text": "Asking a second model for its view (%s)..." % model_labels.local(other)[0]})
+        body = {"model": other, "stream": False, "keep_alive": 0, "messages": [{"role": "user", "content": prompt}],
+                "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
+        req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as r:
+            advice = clean_answer(json.loads(r.read()).get("message", {}).get("content"))
+        if advice:
+            emit({"type": "note", "text": "**Second opinion (%s):**\n\n%s" % (model_labels.local(other)[0], advice)})
+        return advice or None
+    except Exception:
+        return None
 
 
 def clean_answer(text):
@@ -2581,6 +2673,14 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
     for _ in range(PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS):
         check_stop()
         emit({"type": "status", "text": "Thinking..."})
+        asked = sum(1 for m in st.messages if m.get("role") == "user" and not str(m.get("content") or "").startswith("["))
+        if model_labels.which_layer(st.messages)[0] == "second" and getattr(st, "reviewed", None) != asked:
+            st.reviewed = asked        # once per question
+            advice = second_opinion(cfg, st.messages, emit)
+            if advice:
+                st.messages.append({"role": "user", "content": "[A second AI model looked at what has gone wrong so "
+                                                               "far. Its advice, to weigh and use if it helps:\n%s]"
+                                                               % advice})
         msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, tools, emit)
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
@@ -3389,33 +3489,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         elif path == "/api/claude/sent":
             self.json({"items": APP.claude.sent_list()})
         elif path == "/api/models":
-            cfg = APP.home.cfg()
-            try:
-                req = urllib.request.Request(ollama_url(cfg) + "/api/tags")
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    tags = json.loads(r.read()).get("models", [])
-                models = [{"name": m.get("name"), "bytes": m.get("size") or 0,
-                           "size": core.human_size(m.get("size") or 0)} for m in tags]
-                err = None
-            except (OSError, ValueError, ToolError) as e:
-                models, err = [], "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
-            if cfg["ollama_model"] not in [m["name"] for m in models] and cfg["ollama_model"] != model_labels.AUTO:
-                models.insert(0, {"name": cfg["ollama_model"], "size": ""})
-            model_labels.label_all(models)
-            for m in models:
-                if model_labels.can_use_tools(ollama_url(cfg), m["name"]) is False:
-                    m["label"] += " (chat only)"
-                    m["why"] = "Can't use PatchBay's tools, so another model answers for checks and fixes. " + m["why"]
-            fast, strong = model_labels.picks(model_labels.tool_names(ollama_url(cfg), [m["name"] for m in models]))
-            if fast:
-                lab = dict((m["name"], m["label"]) for m in models)
-                lay = model_labels.layer_models(model_labels.tool_names(ollama_url(cfg), [m["name"] for m in models]),
-                                                cfg.get("model_layers"))
-                why = "Picks a layer for each answer. " + " ".join(
-                    "%s uses %s." % (n.split(". ", 1)[1], lab.get(lay[k], lay[k])) for k, n, _ in model_labels.LAYERS)
-                models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],
-                                  "why": why})
-            self.json({"current": cfg["ollama_model"], "models": models, "error": err, "where": core.ai_where(cfg)})
+            self.json(modes_info(APP.home.cfg()))
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()
             f = APP.registry.portrait_file(cfg)
@@ -3825,6 +3899,22 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             if (old or {}) != layers:
                 devices.apply_changes(cfg, [(main, "model_layers", old, layers)])
             self.json({"layers": layers})
+        elif path == "/api/models/delete":
+            name = (data.get("model") or "").strip()
+            cfg = APP.home.cfg()
+            url = ollama_url(cfg)
+            model_labels._TAGS["at"] = 0           # ask Ollama for the current list
+            if name not in model_labels.installed(url):
+                raise ToolError("%s isn't installed." % name)
+            req = urllib.request.Request(url + "/api/delete", data=json.dumps({"model": name}).encode(), method="DELETE",
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    r.read()
+            except urllib.error.HTTPError as e:
+                raise ToolError("Ollama couldn't delete it: %s" % e.read().decode("utf-8", "replace")[:200])
+            model_labels._TAGS["at"] = 0
+            self.json({"deleted": name})
         elif path == "/api/models/pull":
             name = (data.get("model") or "").strip()
             if name not in [c[0] for c in model_labels.CATALOG]:
@@ -3832,6 +3922,23 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             if not selfcheck.start_pull(ollama_url(APP.home.cfg()), name):
                 raise ToolError("%s is still downloading. Wait for it to finish first." % selfcheck.PULL["model"])
             self.json({"pull": dict(selfcheck.PULL)})
+        elif path == "/api/mode":
+            mode = data.get("mode")
+            if mode not in model_labels.MODE_KEYS:
+                raise ToolError("Pick Everyday or Building.")
+            cfg = APP.home.cfg()
+            old = work_mode(cfg)
+            main = str(APP.registry.main)
+            raw = json.loads(Path(main).read_text())
+            planned = [(main, "work_mode", raw.get("work_mode"), mode)]
+            if raw.get("ollama_model") != model_labels.AUTO:
+                planned.append((main, "ollama_model", raw.get("ollama_model"), model_labels.AUTO))   # the mode decides now
+            if raw.get("work_mode") != mode or len(planned) > 1:
+                devices.apply_changes(cfg, planned)
+            cfg = APP.home.cfg()
+            if old != mode or data.get("warm"):
+                warm_mode(cfg, mode, old if old != mode else None)
+            self.json(modes_info(cfg))
         elif path == "/api/model":
             name = (data.get("model") or "").strip()
             if not re.match(r"^[\w.:/-]{1,100}$", name):

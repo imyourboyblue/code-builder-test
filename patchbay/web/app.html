@@ -281,6 +281,9 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
+.mode-sw{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.mode-sw button{border:0;border-radius:0;background:none;padding:4px 12px;font-size:13px;color:var(--mute);font-weight:600}
+.mode-sw button.on{background:var(--ink);color:var(--bg)}
 .sw-row{display:flex!important;align-items:center;gap:12px;justify-content:space-between;color:var(--ink)!important;font-size:13.5px!important;margin:0!important;cursor:pointer}
 .switch{position:relative;flex:none;width:42px;height:24px}.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
 .switch span{position:absolute;inset:0;border-radius:12px;background:var(--line);transition:background .15s}
@@ -299,7 +302,7 @@ border:2px solid var(--line)}
 .md-row.dl{cursor:default;padding:7px 0;align-items:center}
 .md-why{font-size:12.5px;color:var(--mute)}.md-id{font-family:ui-monospace,monospace;font-size:11px;opacity:.75}
 .md-chip{display:inline-block;font-size:11px;padding:0 6px;border-radius:8px;background:var(--line);color:var(--mute);margin-left:2px}
-.md-chip.warn{background:rgba(232,163,61,.18);color:var(--warn)}.md-chip.bad{background:rgba(255,59,48,.16);color:var(--bad)}
+.md-chip.ok{background:rgba(52,199,89,.16);color:var(--ok)}.md-chip.warn{background:rgba(232,163,61,.18);color:var(--warn)}.md-chip.bad{background:rgba(255,59,48,.16);color:var(--bad)}
 .md-note{margin:6px 0;font-weight:600}
 .md-more{margin-top:10px}.md-more>summary{cursor:pointer;font-weight:600}
 .ai-where{font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;background:rgba(10,132,255,.16);color:var(--accent,var(--ink))}
@@ -349,7 +352,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
 <main class="view" id="chat" style="position:relative">
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
-    <label style="font-size:13px;color:var(--mute)">AI model <span id="ai-where" class="ai-where" hidden></span> <select id="model" title="Which AI model answers"></select> <span id="model-why" style="font-size:12px"></span></label>
+    <span style="font-size:13px;color:var(--mute);display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Mode <span class="mode-sw" id="mode-sw"><button type="button" data-mode="everyday">Everyday</button><button type="button" data-mode="building">Building</button></span> <span id="ai-where" class="ai-where" hidden></span> <span id="model-why" style="font-size:12px"></span></span>
     <button id="claude-btn" type="button" title="Ask Claude (cloud AI) for help: settings, cost, and what was sent"><span id="cl-label">☁ Claude</span> <span id="cl-dot" class="cl-dot checking">checking</span></button></div>
   <div id="chatlist"></div>
   <div id="log"></div>
@@ -791,7 +794,7 @@ function diffHtml(d){return d.split('\n').map(l=>{const e=esc(l);
   if(l.startsWith('-')&&!l.startsWith('---'))return '<span class="del">'+e+'</span>';return e}).join('\n')}
 async function loadInfo(){try{info=await getJSON('/api/info?device='+enc(cur));
   $('crumb').innerHTML='› <b>'+esc(info.device)+'</b>';$('logout').hidden=!info.remote;
-  $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${modelLabel(info.model)} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
+  $('info').textContent=`${info.host}${info.firmware?' · '+info.firmware:''} · AI: ${modelLabel()} on ${info.computer} · writing: ${info.writes_on?'ON':'OFF'}`}
   catch(e){$('info').textContent=e.message}}
 async function loadChat(){log.innerHTML='';drawQuick();loadChatBar();loadModels();loadClaude();
   try{const h=await getJSON('/api/history?device='+enc(cur));
@@ -1060,25 +1063,24 @@ $('setup-btn').onclick=()=>openSetup();
 
 // ---- AI models: what's installed, which one answers, and free ones to download
 let MODEL_POLL=null;
-async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
-  try{j=await getJSON('/api/models/catalog')}catch(e){box.textContent=e.message;return}
-  const where=j.where==='this Mac'?'this Mac':j.where;const p=j.pull||{};const busy=p.state==='downloading';
+async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md;
+  try{[j,md]=await Promise.all([getJSON('/api/models/catalog'),getJSON('/api/models')])}catch(e){box.textContent=e.message;return}
+  MODES=md;const where=j.where==='this Mac'?'this Mac':j.where;const p=j.pull||{};const busy=p.state==='downloading';
   const chip=(t,cls)=>'<span class="md-chip'+(cls?' '+cls:'')+'">'+t+'</span>';
   let h=(note?'<div class="md-note">'+esc(note)+'</div>':'')+(j.error?'<div style="color:var(--bad)">'+esc(j.error)+'</div>':'');
-  // Which one answers: one radio list
-  const opts=j.installed.length?[{name:'auto',label:'Automatic',why:j.auto,size:''}].concat(j.installed):[];
-  h+='<div class="md-head">Which model answers <span>on '+esc(where)+(j.memory_gb?' · '+j.memory_gb+' GB memory':'')+'</span></div>';
-  h+=opts.length?'<div class="md-list">'+opts.map(m=>'<label class="md-row'+(j.current===m.name?' on':'')+'"><input type="radio" name="md-use" value="'+esc(m.name)+'" data-l="'+esc(m.label)+'"'+(j.current===m.name?' checked':'')+'>'+
-      '<div><b>'+esc(m.label)+'</b>'+(m.size?' '+chip(esc(m.size)):'')+(m.tools===false?' '+chip('chat only','warn'):'')+'<div class="md-why">'+(m.tools===false?'Can\'t use PatchBay\'s tools (looking at devices, files, cards), so another model steps in for those. ':'')+esc(m.why||'')+(m.name!=='auto'?' <span class="md-id">'+esc(m.name)+'</span>':'')+'</div></div></label>').join('')+'</div>'
+  // The two modes
+  h+='<div class="md-head">Mode <span>only one big model fits in memory, so the mode decides which one stays loaded</span></div>';
+  h+='<div class="md-list">'+md.modes.map(m=>'<label class="md-row'+(md.current===m.key?' on':'')+'"><input type="radio" name="md-mode" value="'+m.key+'"'+(md.current===m.key?' checked':'')+'>'+
+      '<div><b>'+esc(m.label)+'</b>'+(m.model?' '+chip(esc(m.model)+(m.size?' · '+esc(m.size):'')):' '+chip('no model yet','bad'))+'<div class="md-why">'+esc(m.why)+'</div>'+
+      (m.faster?'<div class="md-why" style="margin-top:3px">A faster version for Apple chips is available: <button class="md-get" data-m="'+esc(m.faster)+'"'+(busy?' disabled':'')+'>Download '+esc(m.faster)+'</button></div>':'')+'</div></label>').join('')+'</div>';
+  if(md.second)h+='<div class="md-why" style="margin-top:4px">Second opinion: '+esc(md.second)+'. '+esc(md.second_why)+'</div>';
+  // Models on this computer, with Delete
+  const used={};md.modes.forEach(m=>{if(m.model)used[m.model]=(used[m.model]?used[m.model]+', ':'')+m.label});if(md.second)used[md.second]=(used[md.second]?used[md.second]+', ':'')+'Second opinion';
+  h+='<div class="md-head" style="margin-top:12px">Models on '+esc(where)+' <span>'+(j.memory_gb?j.memory_gb+' GB memory':'')+'</span></div>';
+  h+=j.installed.length?'<div class="md-list">'+j.installed.map(m=>'<div class="md-row dl" style="padding:7px 10px"><div style="flex:1"><b>'+esc(m.name)+'</b> '+chip(esc(m.size))+
+      (used[m.name]?' '+chip('used by '+esc(used[m.name]),'ok'):' '+chip('not used'))+(m.tools===false?' '+chip('chat only','warn'):'')+'</div>'+
+      '<button class="md-del'+(used[m.name]?'':' danger')+'" data-m="'+esc(m.name)+'" data-used="'+esc(used[m.name]||'')+'" data-size="'+esc(m.size)+'">Delete</button></div>').join('')+'</div>'
     :(j.error?'':'<div>No models yet. Get one below.</div>');
-  // Automatic's four layers: which model each one uses
-  if(j.installed.length){const lab=n=>{const m=j.installed.find(x=>x.name===n);return m?m.label:n};
-    h+='<div class="md-head" style="margin-top:12px">Automatic\'s layers <span>'+(j.current==='auto'?'Automatic climbs these as a job gets harder.':'Used when Automatic is picked above.')+'</span></div>'+
-      '<div class="md-list">'+j.layers.map(L=>'<div class="md-row" style="cursor:default;align-items:center"><div><b>'+esc(L.name)+'</b><div class="md-why">'+esc(L.when)+'</div></div>'+
-        '<select class="md-layer" data-k="'+L.key+'" style="max-width:48%">'+
-        '<option value="">PatchBay picks'+(L.auto?' ('+esc(lab(L.auto))+')':'')+'</option>'+
-        j.installed.map(m=>'<option value="'+esc(m.name)+'"'+(L.chosen===m.name?' selected':'')+(m.tools===false?' disabled':'')+'>'+esc(m.label)+' · '+esc(m.name)+(m.tools===false?' (chat only)':'')+'</option>').join('')+
-        '</select></div>').join('')+'</div>'}
   // Free ones to download, tucked away until wanted
   const free=j.catalog.filter(c=>!c.installed),ok=free.filter(c=>c.fits!=='no'),big=free.filter(c=>c.fits==='no');
   const dl=c=>'<div class="md-row dl"><div style="flex:1"><b>'+esc(c.best)+'</b> '+chip((c.exact?'':'~')+c.gb+' GB')+
@@ -1086,7 +1088,7 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
       '<button class="md-get" data-m="'+esc(c.name)+'"'+(busy?' disabled':'')+'>Download</button></div>';
   let prog='';
   if(busy){const pct=p.total?Math.floor(100*p.done/p.total)+'%':'starting';prog='<div class="md-note">⬇ Downloading '+esc(p.model)+'… '+pct+' (keeps going if you close this)</div>'}
-  else if(p.state==='done')prog='<div class="md-note" style="color:var(--ok)">✓ Downloaded '+esc(p.model)+'. Pick it above.</div>';
+  else if(p.state==='done')prog='<div class="md-note" style="color:var(--ok)">Downloaded '+esc(p.model)+'.</div>';
   else if(p.state==='failed')prog='<div class="md-note" style="color:var(--bad)">Downloading '+esc(p.model)+' didn\'t finish: '+esc(p.error)+'</div>';
   h+=prog+'<details class="md-more"'+(busy?' open':'')+'><summary>Get more free models ('+free.length+')</summary>'+
     (ok.length?ok.map(dl).join(''):'<div class="md-why">You have all the ones that fit.</div>')+
@@ -1095,9 +1097,10 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
     (free.some(c=>!c.checked)?' Sizes marked ~ are rough: Ollama\'s library couldn\'t be reached just now.':'')+'</div></details>'+
     '<div id="md-msg" style="font-size:13px"></div>';
   box.innerHTML=h;
-  box.querySelectorAll('input[name=md-use]').forEach(r=>r.onchange=async()=>{try{await postJSON('/api/model',{model:r.value});info.model=r.value;loadModels();drawModels('Now using: '+r.dataset.l)}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
-  box.querySelectorAll('.md-layer').forEach(sel=>sel.onchange=async()=>{const layers={};box.querySelectorAll('.md-layer').forEach(x=>{if(x.value)layers[x.dataset.k]=x.value});
-    try{await postJSON('/api/models/layers',{layers});loadModels();drawModels('Saved Automatic\'s layers.')}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
+  box.querySelectorAll('input[name=md-mode]').forEach(r=>r.onchange=async()=>{await setMode(r.value,true);drawModels('Switched to '+modeOf(r.value).label+' mode.')});
+  box.querySelectorAll('.md-del').forEach(b=>b.onclick=async e=>{e.preventDefault();const u=b.dataset.used;
+    if(!confirm('Delete '+b.dataset.m+' ('+b.dataset.size+') from '+where+'?'+(u?'\n\nIt is used by: '+u+'. That mode will use another model you have, or none.':'')+'\n\nYou can download it again later.'))return;
+    b.disabled=true;b.textContent='Deleting…';try{await postJSON('/api/models/delete',{model:b.dataset.m});loadModels();drawModels('Deleted '+b.dataset.m+'.')}catch(x){b.disabled=false;b.textContent='Delete';$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(x.message)+'</span>'}});
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}
@@ -1291,17 +1294,18 @@ $('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window
     modal('<h3>What was sent to Claude</h3>'+(r.items.length?r.items.map(x=>'<details><summary>'+esc(x.time)+' · '+esc(x.why)+'</summary><pre style="white-space:pre-wrap;font-size:12px">'+esc(x.text)+'</pre></details>').join(''):'<div>Nothing yet.</div>')+
       '<div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');$('box').classList.add('wide')}catch(e){msg(esc(e.message))}}};
 
-let MODELS=[];
-function modelLabel(name){const m=MODELS.find(x=>x.name===name);return m?m.label:name}
-function modelWhy(){const m=MODELS.find(x=>x.name===$('model').value);$('model-why').textContent=m&&m.why?m.why:''}
-async function loadModels(){try{const j=await getJSON('/api/models');const s=$('model');MODELS=j.models;
-  s.innerHTML=j.models.map(m=>`<option value="${esc(m.name)}" title="${esc(m.why||'')}"${m.name===j.current?' selected':''}>${esc(m.label||m.name)}</option>`).join('');
-  s.title=j.error||'Which AI model answers.';modelWhy();
+let MODES=null;
+function modeOf(k){return MODES&&MODES.modes.find(m=>m.key===k)}
+function modelLabel(){const m=MODES&&modeOf(MODES.current);return m?m.label+' mode ('+(m.model||'no model')+')':'the AI'}
+async function loadModels(){try{const j=await getJSON('/api/models');MODES=j;const m=modeOf(j.current);
+  document.querySelectorAll('#mode-sw button').forEach(b=>{b.classList.toggle('on',b.dataset.mode===j.current);const x=modeOf(b.dataset.mode);b.title=x?x.why+(x.model?' Uses '+x.model+'.':''):''});
+  $('model-why').textContent=j.error?j.error:(m&&m.model?'Uses '+m.model:'No model downloaded for this mode yet: get one in 🩺 Setup → AI.');
   const w=$('ai-where');if(w){const away=j.where&&j.where!=='this Mac';w.hidden=!away&&!j.error;
     w.className='ai-where'+(j.error?' down':'');w.textContent=(away?'on '+j.where.replace(/^the computer at /,''):'this Mac')+(j.error?' · not answering':'');
-    w.title=j.error||('The AI runs on '+j.where+'. Change it in 🩺 Setup → Where the AI runs.')}}catch(e){}}
-$('model').onchange=async()=>{modelWhy();try{await postJSON('/api/model',{model:$('model').value});info.model=$('model').value;if(cur!==HOMECHAT)loadInfo();
-  add('msg ai','From now on the "'+esc(modelLabel($('model').value))+'" model answers (for every device).')}catch(e){alert(e.message);loadModels()}};
+    w.title=j.error||('The AI runs on '+j.where+'. Change it in 🩺 Setup → AI.')}}catch(e){}}
+async function setMode(mode,quiet){try{MODES=await postJSON('/api/mode',{mode});loadModels();if(typeof drawModels==='function'&&$('sc-models'))drawModels();
+  const m=modeOf(mode);if(!quiet&&m)add('msg ai','<b>'+esc(m.label)+' mode.</b> '+esc(m.why)+(m.model?' Loading '+esc(m.model)+' now, so the first answer may take a few seconds.':''))}catch(e){alert(e.message);loadModels()}}
+document.querySelectorAll('#mode-sw button').forEach(b=>b.onclick=()=>{if(!b.classList.contains('on'))setMode(b.dataset.mode)});
 
 $('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
   const files=atts;atts=[];drawAtts();

@@ -89,6 +89,9 @@ HARD_WORDS = re.compile(r"(?i)\b(build|compile|rebuild|crash|debug|fix|repair|br
 CATALOG = [
     ("qwen3.6:35b-a3b", "Everyday help", "PatchBay's usual model. Fast for its size because only part of it works "
                                           "on each word. Good for most questions, checks and fixes.", 24),
+    ("qwen3.6:35b-a3b-nvfp4", "Everyday, faster", "The everyday model in Apple's MLX format: about twice as fast on "
+                                                   "M-series Macs. Replaces the normal one in Everyday mode.", 23),
+    ("qwen3.6:27b", "Building", "Thinks harder and slower. Used in Building mode.", 17),
     ("qwen3.8:27b", "Hard problems and building", "Thinks harder and slower. Best for tricky crashes, plans and "
                                                  "building apps from source.", 17),
     ("gemma4:26b", "Second opinion", "Google's model. Automatic asks it when the usual models get stuck twice.", 18),
@@ -152,9 +155,9 @@ _TAGS = {"at": 0, "names": [], "url": None}
 _CAPS = {}
 
 
-def can_use_tools(ollama_url, name):
-    """Can this model use PatchBay's tools (look at devices, read files, make cards)? True, False, or None when
-    Ollama doesn't say (older Ollama). Asked once per model."""
+def capabilities(ollama_url, name):
+    """What Ollama says the model can do, e.g. ["completion", "tools", "thinking", "vision"]. None if it doesn't say
+    (older Ollama) or couldn't be asked. Asked once per model."""
     if not name or name == AUTO:
         return None
     key = (ollama_url, name)
@@ -164,15 +167,33 @@ def can_use_tools(ollama_url, name):
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=8) as r:
                 caps = json.loads(r.read()).get("capabilities")
-            _CAPS[key] = ("tools" in caps) if isinstance(caps, list) else None
+            _CAPS[key] = list(caps) if isinstance(caps, list) else None
         except (OSError, ValueError):
             return None      # try again next time
     return _CAPS[key]
 
 
+def can_use_tools(ollama_url, name):
+    """Can this model use PatchBay's tools (look at devices, read files, make cards)? True, False, or None."""
+    caps = capabilities(ollama_url, name)
+    return None if caps is None else "tools" in caps
+
+
+def can_think(ollama_url, name):
+    caps = capabilities(ollama_url, name)
+    return None if caps is None else "thinking" in caps
+
+
 def no_tools(ollama_url, name):
     """Remember that Ollama refused tools for this model."""
-    _CAPS[(ollama_url, name)] = False
+    caps = _CAPS.get((ollama_url, name)) or ["completion"]
+    _CAPS[(ollama_url, name)] = [c for c in caps if c != "tools"]
+
+
+def no_think(ollama_url, name):
+    """Remember that Ollama refused thinking for this model."""
+    caps = _CAPS.get((ollama_url, name)) or ["completion", "tools"]
+    _CAPS[(ollama_url, name)] = [c for c in caps if c != "thinking"]
 
 
 def tool_names(ollama_url, names):
@@ -217,6 +238,32 @@ def picks(names):
     fast = _first(chat, FAST) or (chat[0] if chat else None)
     strong = _first(chat, STRONG, avoid=(fast,)) or fast
     return fast, strong
+
+
+# ---------------------------------------------------------------- the two work modes
+
+# Only one big model fits in the Mac's memory at a time, so the mode decides which one stays loaded.
+# (key, name, what it's for, models to use in order: an exact name or text in the name; first installed wins)
+MODES = [
+    ("everyday", "Everyday", "Questions, device checks, research, documents and small fixes. Fast.",
+     ["qwen3.6:35b-a3b-nvfp4", "qwen3.6:35b-a3b", "35b-a3b", "30b-a3b", "a3b", "26b-a4b", "14b", "12b", "8b"]),
+    ("building", "Building", "Building apps, rebuilding homebrew and tricky crashes. Slower, thinks harder.",
+     ["qwen3.6:27b-nvfp4", "qwen3.6:27b", "qwen3.8:27b", "27b", "32b", "31b", "coder"]),
+]
+MODE_KEYS = [m[0] for m in MODES]
+FASTER = {"qwen3.6:35b-a3b": "qwen3.6:35b-a3b-nvfp4"}    # the same model in Apple's faster MLX format
+
+
+def mode_model(names, mode):
+    """The model a mode keeps loaded, from the installed models that can use tools."""
+    wants = dict((k, w) for k, _, _, w in MODES).get(mode) or MODES[0][3]
+    chat = [n for n in names if "embed" not in n.lower() and n != second(names)]
+    for w in wants:
+        for n in chat:
+            if n == w or (":" not in w and w in n.lower()):
+                return n
+    fast, strong = picks(chat)
+    return strong if mode == "building" else fast
 
 
 # The four layers Automatic climbs: (key, name in Setup, when it's used)
