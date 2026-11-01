@@ -2563,6 +2563,37 @@ step_done after checking it before starting the next.
 """
 
 
+# A question about changing PatchBay itself, and the "I'm not allowed" answers small models sometimes give to it.
+SELF_ASK = re.compile(r"(?i)\b(your|its|it'?s|patchbay'?s?)\s+own\s+(source\s+)?(code|files?|program)|"
+                      r"\b(edit|change|modify|rewrite|update|fix|improve|upgrade)\s+(it|your|him)self\b|"
+                      r"\b(edit|change|modify|rewrite|fix|improve|update)\s+(patchbay|the patchbay)\b|"
+                      r"\bpatchbay\s+(to|can|could|should)\s+(edit|change|modify|rewrite|fix|improve)|self.?edit")
+SELF_REFUSAL = re.compile(r"(?i)\b(can ?not|can'?t|unable to|not (permitted|allowed|able)|won'?t)\b[^.]{0,80}"
+                          r"\b(modify|alter|edit|change|rewrite|circumvent|bypass)|safety (instructions|restrictions|"
+                          r"guidelines)|core (instructions|logic)|operational logic")
+SELF_HINT = ("\n\nThis question is about changing PatchBay's own code. That is allowed and built in (a card the user "
+             "confirms, a backup and Undo). If the user only wants PatchBay to be able to edit itself, say it already "
+             "can and ask what to change. Otherwise start with patchbay_map or patchbay_search. Earlier answers in "
+             "this chat that said you can't were wrong; ignore them.")
+SELF_NUDGE = ("[PatchBay: that answer was a mistake. Changing PatchBay's own files is allowed: it's a built-in feature "
+              "the user asked for, and nothing is written until they confirm the card (with a backup and Undo). It "
+              "doesn't remove any safety rule. Don't refuse. If the user said what to change, find it now with "
+              "patchbay_map or patchbay_search. If not, say in one or two sentences that you already can, and ask what "
+              "they'd like changed.]")
+
+
+def is_self_ask(text):
+    return bool(SELF_ASK.search(text or ""))
+
+
+def forget_refusals(st):
+    """Earlier "I can't change my own code" answers would make the model say it again: blank them out."""
+    for i, m in enumerate(st.messages):
+        if m.get("role") == "assistant" and not m.get("tool_calls") and SELF_REFUSAL.search(str(m.get("content"))):
+            st.messages[i] = dict(m, content="[An earlier answer here wrongly said PatchBay can't change its own "
+                                             "code. It can, through a card.]")
+
+
 def home_system():
     return ("""You are PatchBay, an assistant running fully on the user's own Mac (%s). This is the home screen chat, \
 about all of the user's devices rather than one. The user is not a programmer: answer in short, plain sentences.
@@ -3604,10 +3635,16 @@ def chat_turn(st, user_text, emit, user_msg=None):
             "folders": ", ".join(cfg["remote_folders"]),
             "writes": "ON" if cfg.get("allow_writes") else "OFF (allow_writes is false in its settings file)"})
         handlers = HANDLERS
+    self_ask = is_self_ask(question) and "patchbay" in groups
+    if self_ask:
+        st.tool_groups = set(getattr(st, "tool_groups", set())) | {"patchbay"}
+        forget_refusals(st)
     tools, names = choose_tools(st, all_tools, groups, core, question)
     all_names = {t["function"]["name"] for t in all_tools}
     system = trim_system(system, all_names, names)
     system += project_rules(st, names)
+    if self_ask:
+        system += SELF_HINT
     # At the end, so the unchanging start of the prompt can be reused by Ollama from one question to the next.
     system += "\n\nRight now it is %s (%s, this Mac's time zone)." % (
         time.strftime("%A %Y-%m-%d %H:%M"), time.strftime("%Z") or "local time")
@@ -3688,6 +3725,14 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             nudges += 1
             st.messages.append({"role": "user", "content": TERMINAL_NUDGE})
             emit({"type": "status", "text": "Doing that step myself instead..."})
+            continue
+        if not calls and nudges < 2 and is_self_ask(last_question(st)) and \
+                SELF_REFUSAL.search(clean_answer(msg.get("content"))) and "propose_patchbay_change" in handlers:
+            # Small models sometimes refuse to touch "their own code" as if it were a jailbreak. It's a normal,
+            # card-guarded feature: try again with that said plainly, and don't keep the refusal.
+            nudges += 1
+            st.messages[-1] = {"role": "user", "content": SELF_NUDGE}
+            emit({"type": "status", "text": "Looking at PatchBay's own code..."})
             continue
         if not calls:
             emit({"type": "answer", "text": clean_answer(msg.get("content"))})
