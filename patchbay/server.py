@@ -64,6 +64,7 @@ import activity
 import health
 import library
 import updater
+import research
 import selfcheck
 import selfedit
 import model_labels
@@ -1714,10 +1715,14 @@ def t_install_packages(st, emit, a):
       "general research: never put the user's file names, code or device details in the address.",
       {"url": dict(S, description="https:// address")}, ["url"])
 def t_web(st, emit, a):
-    url = (a.get("url") or "").strip()
+    return clip(page_text((a.get("url") or "").strip()))
+
+
+def page_text(url):
+    """A public web page as plain text."""
     if not url.startswith("https://"):
         raise ToolError("Only https:// addresses.")
-    req = urllib.request.Request(url, headers={"User-Agent": "patchbay/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh) patchbay/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read(3 * 1024 * 1024).decode(r.headers.get_content_charset() or "utf-8", "replace")
@@ -1729,7 +1734,7 @@ def t_web(st, emit, a):
     text = re.sub(r"&lt;", "<", re.sub(r"&gt;", ">", re.sub(r"&amp;", "&", text)))
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
-    return clip(text)
+    return text
 
 
 # ----------------------------------------------------------------- the home screen's chat
@@ -2606,6 +2611,68 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         raise ToolError("Ollama said: %s" % detail)
     except OSError as e:
         raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
+
+
+def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None):
+    """One answer from the mode's model without tools (for deep research). Streams to the page if asked."""
+    url = ollama_url(cfg)
+    model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+    if not model:
+        raise ToolError("Ollama has no models yet. Download one in 🩺 Setup → AI.")
+    body = {"model": model, "stream": bool(stream), "messages": messages, "keep_alive": -1,
+            "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
+    if fmt:
+        body["format"] = fmt
+        body["options"]["temperature"] = 0
+    if think and model_labels.can_think(url, model) is not False:
+        body["think"] = True
+    elif model_labels.can_think(url, model):
+        body["think"] = False
+    req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=900) as r:
+            if not stream:
+                return clean_answer(json.loads(r.read()).get("message", {}).get("content"))
+            content, tf = "", ThinkFilter()
+            for line in r:
+                check_stop()
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise ToolError("Ollama said: %s" % chunk["error"])
+                piece = (chunk.get("message") or {}).get("content") or ""
+                content += piece
+                shown = tf.feed(piece)
+                if shown and emit:
+                    emit({"type": "delta", "text": shown})
+                if chunk.get("done"):
+                    break
+            return clean_answer(content)
+    except urllib.error.HTTPError as e:
+        raise ToolError("Ollama said: %s" % e.read().decode("utf-8", "replace")[:300])
+    except OSError as e:
+        raise ToolError("Couldn't reach Ollama (%s). %s" % (e, ai_down(cfg)))
+
+
+def deep_research(st, question, emit):
+    """🔎 Deep research: search and read the web, take notes, write a report with sources (see research.py)."""
+    cfg = st.cfg()
+    st.messages.append({"role": "user", "content": question})
+    sc = claude_scrubber()
+    job = research.Research(
+        question,
+        ask=lambda messages, think=False, fmt=None, stream=False: ai_simple(cfg, messages, think, fmt, stream, emit),
+        search=firmware.web_search, page=page_text, scrub=sc.scrub,
+        status=lambda t: emit({"type": "status", "text": t}), stop=check_stop,
+        note=lambda t: emit({"type": "note", "text": t}))
+    title, report, took = job.run()
+    path = research.save(Path(os.path.expanduser(cfg["data_folder"])) / "research", title, question, report)
+    emit({"type": "answer", "text": report + "\n\n*Researched %d pages in %d min. Saved to %s*"
+          % (len(job.sources), max(1, round(took / 60)), str(path).replace(str(Path.home()), "~"))})
+    st.messages.append({"role": "assistant", "content": "[Deep research report, saved to %s]\n\n%s"
+                        % (path, report[:12000])})
 
 
 def second_opinion(cfg, messages, emit):
@@ -4162,7 +4229,9 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                                                       "Past chats."})
                     if text or refs:
                         st.record({"type": "user", "text": text, "files": [attachment_name(r) for r in refs]})
-                    if text == ASK_CLAUDE_CHOICE and not refs:
+                    if data.get("research") and text:
+                        deep_research(st, text, emit)
+                    elif text == ASK_CLAUDE_CHOICE and not refs:
                         ask_claude_choice(st, emit)
                     elif refs:
                         chat_turn(st, text, emit, attachment_message(st, text, refs))

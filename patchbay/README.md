@@ -228,6 +228,12 @@ model (Gemma 4) reviews what went wrong and gives advice, then lets go of the me
 
 Which models each mode uses, and the free-model list, are set in `model_labels.py` (MODES and CATALOG).
 
+**🔎 Deep research.** Press 🔎 next to the message box (it turns dark), type a question and Send. PatchBay splits
+the question into smaller ones, searches the web, reads the pages, takes notes with numbered sources, looks again
+for anything missing, and writes a report with a sources list. It takes a few minutes and runs on your Mac's AI;
+only search words leave the Mac, with personal details (device names, addresses, your name) taken out. Reports are
+saved in `~/PatchBay-data/research/`, and you can keep chatting about the report afterwards.
+
 
 **☁ Claude** (the button above the chat) lets PatchBay ask Claude when its own AI is stuck:
 - The button shows a badge: green **connected**, red **key rejected**, or grey **not connected**. Checking the key

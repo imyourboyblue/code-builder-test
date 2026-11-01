@@ -281,6 +281,7 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
+#research-btn{white-space:nowrap;font-size:13px}#research-btn.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .mode-sw{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .mode-sw button{border:0;border-radius:0;background:none;padding:4px 12px;font-size:13px;color:var(--mute);font-weight:600}
 .mode-sw button.on{background:var(--ink);color:var(--bg)}
@@ -359,6 +360,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
   <div class="quick" id="quick"></div>
   <div id="atts"></div>
   <form id="f"><button type="button" id="attach" title="Add files to your message (or drop them here)">📎</button>
+  <button type="button" id="research-btn" title="Deep research: PatchBay searches the web, reads the pages and writes a report with sources (takes a few minutes)">🔎</button>
   <textarea id="t" rows="1" placeholder="Ask anything, e.g. 'Check it for crash damage'"></textarea>
   <button class="primary" id="send">Send</button></form>
   <div id="t-count" hidden></div>
@@ -1310,7 +1312,12 @@ document.querySelectorAll('#mode-sw button').forEach(b=>b.onclick=()=>{if(!b.cla
 $('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
   const files=atts;atts=[];drawAtts();
   t.value='';grow();add('msg me',meHtml(s)+(files.length?'<div class="files">📎 '+files.map(f=>esc(f.name)).join(', ')+'</div>':''),s);
-  await chatStream('/api/chat',{text:s,attachments:files.map(f=>f.ref)})};
+  const deep=RESEARCH&&!!s;if(deep)setResearch(false);
+  await chatStream('/api/chat',{text:s,attachments:files.map(f=>f.ref),research:deep})};
+let RESEARCH=false;const T_HINT=t.placeholder;
+function setResearch(on){RESEARCH=on;$('research-btn').classList.toggle('on',on);
+  t.placeholder=on?'Deep research: what should I look into?':T_HINT;if(on)t.focus()}
+$('research-btn').onclick=()=>setResearch(!RESEARCH);
 t.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('f').requestSubmit()}});
 // the message box grows with what you type or paste (up to almost half the window), and says how long it is
 function grow(){t.style.height='auto';t.style.height=Math.min(t.scrollHeight+2,window.innerHeight*0.45)+'px';
