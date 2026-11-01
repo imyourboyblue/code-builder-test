@@ -27,6 +27,7 @@ for help when it's stuck, using your own API key.
 - [Apps and homebrew updates](#apps-and-homebrew-updates)
 - [Building apps from source](#building-apps-from-source)
 - [AI models and Claude](#ai-models-and-claude)
+- [Files on your Mac and Apple Calendar](#files-on-your-mac-and-apple-calendar)
 - [Setup, updates and looks](#setup-updates-and-looks)
 - [Clear data](#clear-data)
 - [Using it from your laptop](#using-it-from-your-laptop)
@@ -248,6 +249,24 @@ the list of what it already tried. Before anything is sent, your user name, home
 emails and passwords are swapped for stand-ins like `<device-1>`. Unless you tick **Send automatically**, a card
 shows exactly what will be sent and you press **Send**. **See what was sent** lists everything that left the Mac.
 
+## Files on your Mac and Apple Calendar
+
+Both chats can work with files on this Mac and with Apple Calendar, but only where you allow it, in
+**🩺 Setup → Mac access**:
+
+- **Folders**: click **Add a folder…** and pick one (or type its path). The chat can look inside it and read files
+  (text and PDFs) freely. Saving, renaming, moving and deleting always show a card first; the old version is backed
+  up, and deleting only moves things to the Trash. Whole-disk, home, system and Library folders can't be added, and
+  password and key files are refused even inside an added folder.
+- **Apple Calendar**: turn on the switch. The first time, macOS asks whether PatchBay may use Calendar: choose
+  **OK**. Then you can ask things like "what's on my calendar this week?" or "move the dentist to Friday at 3".
+  Adding, changing and deleting events show a card first.
+- **Recent changes** in the same tab lists what was changed, each with **Undo**.
+
+What the chat reads in your files or calendar stays on the Mac. It's never sent to Claude, and PatchBay refuses web
+searches that repeat it. Even when Claude answers everything (**Always**), questions about your files or calendar
+are answered by the AI on your Mac.
+
 ## Setup, updates and looks
 
 **🩺 Setup** checks that everything works:
@@ -272,6 +291,13 @@ update**, which keeps a copy of your change first.
 card first. It's checked for mistakes, and the old file is backed up, with Undo in 🕘 Activity. If PatchBay can't
 start after a change, it puts the old version back by itself. If the page itself breaks, open
 http://127.0.0.1:8765/fix for a plain repair page.
+
+**Send PatchBay's changes to GitHub** (Updates & data tab): changes PatchBay made to itself stay on this Mac until you
+send them. This lists the changed files and the exact changes; type **PatchBay** and press **Send to GitHub**. They go
+to their own branch, `patchbay-edits`, never `main`, so you can look them over on GitHub and merge them there. Your
+settings, passwords, backups and chats are never sent. It uses your Mac's own GitHub login if `git push` works in
+Terminal; otherwise make a fine-grained token on GitHub (this repository only, **Contents: Read and write**) and save
+it under **GitHub login**. It's kept in the Keychain.
 
 ## Clear data
 
@@ -332,6 +358,8 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
   program's name, a version or an error message. Your files and code stay on the Mac.
 - **Your network only.** Network finding and security checks only look at your own network, only when you ask, and
   never guess passwords or try to break in.
+- **Your Mac and calendar**: only folders you added, and Calendar only when its switch is on. Every change shows
+  a card first and can be undone. None of it goes to Claude or into web searches.
 - **Run by hand.** Nothing runs on a schedule.
 - **🕘 Activity** lists everything PatchBay did, with **Undo** where possible.
 
@@ -360,6 +388,8 @@ the old and new values on a card first.
 | `max_file_mb` | Skip files bigger than this when scanning |
 | `allow_writes` | Must be on for any change to the device |
 | `work_mode` | `everyday` or `building` (the switch above the chat) |
+| `mac_folders` | Folders on this Mac the chat may use (set in Setup → Mac access) |
+| `calendar_access` | `true` lets the chat use Apple Calendar (set in Setup → Mac access) |
 | `about` | One sentence about the device, so the AI knows what it is |
 | `backup_folder` | Where backups go (set on the Backups tab) |
 | `lan_access` | `true` always lets the laptop in |

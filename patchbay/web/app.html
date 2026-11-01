@@ -885,6 +885,7 @@ async function chatStream(url,body,since){
 function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
 function card(ev,closed){
+  if(ev.kind==='mac_access')return accessCard(ev,closed);
   if(ev.self)return selfCard(ev,closed);
   if(ev.on_mac)return macCard(ev,closed);
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
@@ -925,6 +926,16 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
     const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed,understood:!!(und&&und.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
+function accessCard(ev,closed){ // a change to a file on this Mac or to Apple Calendar
+  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+(ev.calendar?'This changes your <b>Apple Calendar</b>. None of your devices are touched. You can undo it in 🩺 Setup → Mac access.':
+      'This changes a file on <b>'+esc(ev.computer||'this Mac')+'</b>, not a device. The old version is backed up first (deleting moves it to the Trash), and you can undo it in 🩺 Setup → Mac access.')+'</div>'+
+    (ev.diff?'<details open><summary>'+(ev.calendar?'The event':'Exact change')+'</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre style="white-space:pre-wrap">'+esc(ev.diff)+'</pre>')+'</details>':'')+
+    '<div class="row"><button class="primary">Confirm</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button');
+  ok.onclick=async()=>{if(busy)return;close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:''})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
 function selfCard(ev,closed){ // a change to PatchBay's own code, or restarting PatchBay
   const rs=ev.kind==='self_restart';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
@@ -1015,7 +1026,7 @@ async function openSetup(msg){
       (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
       (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>';
   const pane=(id,html)=>'<div class="sc-pane" data-pane="'+id+'">'+html+'</div>';
-  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App & laptop'],['look','Look'],['data','Updates & data']];
+  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App & laptop'],['mac','Mac access'],['look','Look'],['data','Updates & data']];
   $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
     '<div class="sc-tabs">'+tabs.map(t=>'<button class="sc-tab" data-tab="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
     pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0">Everything is working.</div>')+
@@ -1033,8 +1044,10 @@ async function openSetup(msg){
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
       '<div id="sc-lap" style="font-size:13.5px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">Checking…</div>')+
+    pane('mac','<div id="sc-mac" style="font-size:13.5px">Checking…</div>')+
     pane('look','<div id="sc-look"></div>')+
     pane('data','<h4 style="margin:0 0 4px">Updates</h4><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
+      '<h4 style="margin:16px 0 4px">Send PatchBay\'s changes to GitHub</h4><div id="sc-gh" style="font-size:13.5px">Checking…</div>'+
       '<h4 style="margin:16px 0 4px">Start over</h4><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
       '<div class="row" style="margin-top:6px"><button id="sc-clearall" class="danger">Clear everything…</button></div>')+
     '<div class="row" style="margin-top:12px"><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
@@ -1054,7 +1067,7 @@ async function openSetup(msg){
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{const r=await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});lg.checked=!!r.login;
     say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more. If it still opens after a restart, untick <b>Reopen windows when logging back in</b> in the Mac\'s Restart or Shut Down box.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
-  drawLook();drawAiComputer();drawLaptop();drawModels();
+  drawLook();drawAiComputer();drawLaptop();drawModels();drawGithub();drawMac();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -1106,6 +1119,55 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}
+
+// ---- Send the changes PatchBay made to itself to GitHub (own branch, confirmed first)
+async function drawGithub(note){const box=$('sc-gh');if(!box)return;let j;
+  try{j=await getJSON('/api/github')}catch(e){box.textContent=e.message;return}
+  let h=(note?'<div class="md-note">'+note+'</div>':'');
+  if(j.error){box.innerHTML=h+'<div class="md-why">'+esc(j.error)+'</div>';return}
+  h+='<div class="md-why">When PatchBay changes its own code, the change stays on this Mac. This sends those changes to '+esc(j.repo||'your GitHub repository')+
+    ' on their own branch, <b>'+esc(j.branch)+'</b>, never main. Your settings, passwords, backups and chats are never sent.</div>';
+  if(!j.changes.length)h+='<div style="margin-top:4px">No changes to send right now.</div>';
+  else{h+='<div class="md-list" style="margin-top:6px">'+j.changes.map(c=>'<div class="md-row dl" style="padding:5px 10px"><div style="flex:1"><code>'+esc(c.rel)+'</code> <span class="md-chip">'+(c.state==='new'?'new file':'+'+c.added+' −'+c.removed)+'</span></div></div>').join('')+'</div>'+
+    '<details style="margin-top:4px"><summary class="md-why" style="cursor:pointer">See the exact changes</summary><pre id="gh-diff" style="white-space:pre-wrap;font-size:11.5px;max-height:300px;overflow:auto">Loading…</pre></details>'+
+    (j.here?'<label>What changed (a short note for GitHub)<input id="gh-note" placeholder="e.g. Bigger buttons on the Files tab"></label>'+
+      '<label>Type <b>PatchBay</b> to send<input id="gh-typed" autocomplete="off"></label><div style="margin-top:6px"><button id="gh-send" class="primary">Send to GitHub</button></div>':'<div class="md-why">Only the Mac can send.</div>')}
+  if(j.here)h+='<details style="margin-top:8px"><summary class="md-why" style="cursor:pointer">GitHub login'+(j.token_saved?' (token saved in Keychain)':'')+'</summary>'+
+    '<div class="md-why" style="margin-top:4px">PatchBay first uses your Mac\'s own GitHub login (if git push works in Terminal). If that\'s not set up, make a token at github.com → Settings → Developer settings → Fine-grained tokens, for this one repository with <b>Contents: Read and write</b>, and paste it here. It\'s kept in the Mac\'s Keychain.</div>'+
+    '<div style="display:flex;gap:6px;margin-top:4px"><input id="gh-token" type="password" autocomplete="off" placeholder="github_pat_…" style="flex:1"><button id="gh-tsave">Save</button>'+(j.token_saved?'<button id="gh-tdel">Remove</button>':'')+'</div></details>';
+  box.innerHTML=h+'<div id="gh-msg" style="font-size:13px;margin-top:4px"></div>';
+  const m=t=>$('gh-msg').innerHTML=t;
+  const det=box.querySelector('details');if(det&&$('gh-diff'))det.ontoggle=async()=>{if(det.open&&$('gh-diff').textContent==='Loading…'){try{const d=await getJSON('/api/github?diff=1');$('gh-diff').textContent=d.diff||'(nothing)'}catch(e){$('gh-diff').textContent=e.message}}};
+  const sb=$('gh-send');if(sb)sb.onclick=async()=>{sb.disabled=true;sb.textContent='Sending…';
+    try{const r=await postJSON('/api/github/push',{note:$('gh-note').value,typed:$('gh-typed').value});
+      drawGithub('Sent '+r.files.length+' file'+(r.files.length===1?'':'s')+' to the <b>'+esc(r.branch)+'</b> branch. <a href="'+esc(r.compare)+'" target="_blank" rel="noopener">Open it on GitHub</a> to look it over and merge it.')}
+    catch(e){sb.disabled=false;sb.textContent='Send to GitHub';m('<span style="color:var(--bad)">'+esc(e.message.replace(/^NEEDS_TOKEN /,''))+'</span>');
+      if(/^NEEDS_TOKEN/.test(e.message)){const d=box.querySelectorAll('details');d[d.length-1].open=true}}};
+  const ts=$('gh-tsave');if(ts)ts.onclick=async()=>{try{await postJSON('/api/github/token',{token:$('gh-token').value});drawGithub('Token saved in the Keychain.')}catch(e){m('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  const td=$('gh-tdel');if(td)td.onclick=async()=>{await postJSON('/api/github/token',{token:''});drawGithub('Token removed.')};}
+
+// ---- Mac access: folders the chat may use, Apple Calendar, and Undo for what it changed
+async function drawMac(note){const box=$('sc-mac');if(!box)return;let j;
+  try{j=await getJSON('/api/mac')}catch(e){box.textContent=e.message;return}
+  let h=(note?'<div class="md-note">'+note+'</div>':'')+
+    '<h4 style="margin:0 0 4px">Folders on this Mac</h4><div class="md-why">The chat can look inside these folders and read files there. Any change (saving, renaming, deleting) shows a card first, the old version is backed up, and deleting only moves things to the Trash. Password and key files are always off limits. Nothing from your files goes to Claude or into web searches.</div>'+
+    (j.folders.length?'<div class="md-list" style="margin-top:6px">'+j.folders.map(f=>'<div class="md-row dl" style="padding:5px 10px"><code style="flex:1;word-break:break-all">'+esc(f)+'</code>'+(j.here?'<button class="mac-rm" data-f="'+esc(f)+'">Remove</button>':'')+'</div>').join('')+'</div>':'<div style="margin-top:4px">No folders yet.</div>')+
+    (j.here?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="mac-pick" class="primary">Add a folder…</button></div>'+
+      '<details style="margin-top:4px"><summary class="md-why" style="cursor:pointer">Or type a folder\'s path</summary><div style="display:flex;gap:6px;margin-top:4px"><input id="mac-path" placeholder="~/Documents/Projects" style="flex:1"><button id="mac-add">Add</button></div></details>':'<div class="md-why">Only the Mac can change this.</div>')+
+    '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><label class="sw-row"><span><b>Apple Calendar</b><span class="md-why" style="display:block">Let the chat read your calendar, and add, change or delete events after you confirm a card. The first time, macOS asks if PatchBay may use Calendar: choose OK.</span></span>'+
+    '<span class="switch"><input type="checkbox" id="mac-cal"'+(j.calendar?' checked':'')+(j.here?'':' disabled')+'><span></span></span></label></div>'+
+    '<h4 style="margin:16px 0 4px">Recent changes</h4>'+
+    (j.recent.length?'<div class="md-list">'+j.recent.map(r=>'<div class="md-row dl" style="padding:5px 10px"><div style="flex:1"><span class="md-chip">'+({write:'saved',move:'moved',delete:'deleted',event_add:'event added',event_edit:'event changed',event_delete:'event deleted'}[r.action]||esc(r.action))+'</span> '+esc(r.path)+
+      '<div class="md-why">#'+r.id+' · '+esc(r.time)+'</div></div>'+(r.undone?'<span class="md-why">undone</span>':'<button class="mac-undo" data-id="'+r.id+'">Undo</button>')+'</div>').join('')+'</div>':'<div class="md-why">Nothing changed yet.</div>');
+  box.innerHTML=h+'<div id="mac-msg" style="font-size:13px;margin-top:4px"></div>';
+  const m=t=>$('mac-msg').innerHTML=t,err=e=>m('<span style="color:var(--bad)">'+esc(e.message)+'</span>');
+  const pick=$('mac-pick');if(pick)pick.onclick=async()=>{pick.disabled=true;m('A folder picker opened on the Mac (it may be behind this window).');
+    try{const r=await postJSON('/api/mac/folder',{action:'choose'});drawMac(r.cancelled?'':'Folder added.')}catch(e){pick.disabled=false;err(e)}};
+  const add=$('mac-add');if(add)add.onclick=async()=>{try{await postJSON('/api/mac/folder',{action:'add',path:$('mac-path').value});drawMac('Folder added.')}catch(e){err(e)}};
+  box.querySelectorAll('.mac-rm').forEach(b=>b.onclick=async()=>{try{await postJSON('/api/mac/folder',{action:'remove',path:b.dataset.f});drawMac('Folder removed. The chat can\'t use it any more.')}catch(e){err(e)}});
+  const cal=$('mac-cal');if(cal)cal.onchange=async()=>{cal.disabled=true;if(cal.checked)m('Asking Calendar… if macOS shows a box, choose OK.');
+    try{const r=await postJSON('/api/mac/calendar',{on:cal.checked});drawMac(r.calendar?'Calendar is on ('+r.calendars.length+' calendar'+(r.calendars.length===1?'':'s')+' found).':'Calendar is off.')}catch(e){cal.checked=!cal.checked;cal.disabled=false;err(e)}};
+  box.querySelectorAll('.mac-undo').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await postJSON('/api/mac/undo',{id:+b.dataset.id});drawMac(esc(r.text))}catch(e){b.disabled=false;err(e)}});}
 
 // ---- Laptop access: open PatchBay from another computer at home
 async function drawLaptop(note){const box=$('sc-lap');if(!box)return;let j;

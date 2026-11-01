@@ -99,7 +99,7 @@ def unique_dir(parent, stamp):
 
 # Settings shared by every device. Files in devices/ take these from config.json.
 GLOBAL_KEYS = ["data_folder", "ollama_url", "ollama_model", "chat_context", "lan_access", "port", "auto_mac_steps",
-               "model_layers", "work_mode"]
+               "model_layers", "work_mode", "mac_folders", "calendar_access"]
 DEVICES_DIR = HERE / "devices"
 
 

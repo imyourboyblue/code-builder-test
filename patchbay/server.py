@@ -64,7 +64,9 @@ import activity
 import health
 import library
 import updater
+import githubpush
 import research
+import macaccess
 import selfcheck
 import selfedit
 import model_labels
@@ -1174,6 +1176,8 @@ def t_search_web(st, emit, a):
     q = (a.get("query") or "").strip()
     if not q:
         raise ToolError("Give something to search for.")
+    if leaks_private(st, q):
+        raise ToolError(PRIVATE_REFUSAL)
     try:
         return clip(firmware.web_search(q[:200]))
     except (OSError, ValueError) as e:
@@ -1715,6 +1719,8 @@ def t_install_packages(st, emit, a):
       "general research: never put the user's file names, code or device details in the address.",
       {"url": dict(S, description="https:// address")}, ["url"])
 def t_web(st, emit, a):
+    if leaks_private(st, a.get("url")):
+        raise ToolError(PRIVATE_REFUSAL)
     return clip(page_text((a.get("url") or "").strip()))
 
 
@@ -2016,6 +2022,246 @@ for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo
     HOME_HANDLERS[_n] = HANDLERS[_n]
 
 
+# ----------------------------------------------------------------- files on this Mac and Apple Calendar
+# Both chats get these. Reading is free; every change shows a card first (backed up, with Undo). What these tools
+# return never goes to Claude or into web searches (PRIVATE_TOOLS).
+
+PRIVATE_TOOLS = set()
+
+
+def private_tool(name, description, params=None, required=()):
+    def deco(fn):
+        spec = {"type": "function", "function": {
+            "name": name, "description": description,
+            "parameters": {"type": "object", "properties": params or {}, "required": list(required)}}}
+        TOOLS.append(spec)
+        HANDLERS[name] = fn
+        HOME_TOOLS.append(spec)
+        HOME_HANDLERS[name] = fn
+        PRIVATE_TOOLS.add(name)
+        return fn
+    return deco
+
+
+def ma(fn, *args):
+    try:
+        return fn(*args)
+    except macaccess.AccessError as e:
+        raise ToolError(str(e))
+    except OSError as e:
+        raise ToolError("The Mac said: %s" % e)
+
+
+def access_cfg():
+    return APP.home.cfg() if APP else {}
+
+
+def access_card(st, emit, change, title, diff, what):
+    """A card for one change on this Mac (a file or a calendar event). Nothing happens until Confirm."""
+    pid = uuid.uuid4().hex[:8]
+    st.pending[pid] = {"kind": "mac_access", "remote": change.get("path") or change.get("title") or "",
+                       "source": "", "note": what, "change": change}
+    emit({"type": "confirm", "id": pid, "kind": "mac_access", "title": title, "diff": clip(diff, 60000),
+          "calendar": change["action"].startswith("event_"), "computer": APP.computer if APP else "the Mac",
+          "remote": st.pending[pid]["remote"], "device": "this Mac"})
+    return ("A card showing exactly this change is on the page. Nothing has changed yet; the user presses Confirm. "
+            "Tell them in one plain sentence what it does.")
+
+
+def used_private(messages):
+    """True once the chat has read the user's Mac files or calendar."""
+    return any(m.get("role") == "tool" and m.get("tool_name") in PRIVATE_TOOLS for m in messages)
+
+
+def leaks_private(st, text):
+    """True if text (going to the web or to Claude) repeats something from the user's files or calendar: any run of
+    4 words from it that also appears in what the Mac tools returned."""
+    words = re.findall(r"[\w@.'-]+", str(text or "").lower())
+    runs = {" ".join(words[i:i + 4]) for i in range(max(0, len(words) - 3))}
+    runs = {r for r in runs if len(r) >= 16} or ({" ".join(words)} if len(" ".join(words)) >= 16 else set())
+    if not runs:
+        return False
+    for m in getattr(st, "messages", []):
+        if m.get("role") == "tool" and m.get("tool_name") in PRIVATE_TOOLS:
+            seen = " ".join(re.findall(r"[\w@.'-]+", str(m.get("content") or "").lower()))
+            if any(r in seen for r in runs):
+                return True
+    return False
+
+
+PRIVATE_REFUSAL = ("That would send something from the user's own files or calendar off this Mac, which PatchBay "
+                   "never does. Use only general words, or answer from what you already have.")
+
+
+def confirm_access(st, p, emit):
+    ch = p["change"]
+    if ch["action"] == "undo":
+        result = ma(macaccess.undo, ch["number"])
+        emit({"type": "answer", "text": result})
+        st.messages.append({"role": "user", "content": "[I confirmed the undo on the card. %s]" % result})
+        return
+    if ch["action"].startswith("event_"):
+        if not access_cfg().get("calendar_access"):
+            raise ToolError("Calendar access was turned off in Setup, so nothing was changed.")
+        result = ma(macaccess.cal_apply, ch, p.get("note") or "")
+    else:
+        result = ma(macaccess.apply, access_cfg(), ch, p.get("note") or "")
+    emit({"type": "answer", "text": result + " Undo is in 🩺 Setup → Mac access."})
+    st.messages.append({"role": "user", "content": "[I confirmed the change on the card. Result: %s]" % result})
+
+
+@private_tool("mac_list", "List a folder on this Mac (only folders the user approved in Setup → Mac access). With no "
+              "path, lists the approved folders.", {"path": S})
+def t_mac_list(st, emit, a):
+    cfg = access_cfg()
+    if not a.get("path"):
+        f = macaccess.folders(cfg)
+        return ("Approved folders on this Mac:\n" + "\n".join(str(x) for x in f)) if f else \
+            "No Mac folders are approved yet. The user can add some in 🩺 Setup → Mac access."
+    return clip(ma(macaccess.listing, cfg, a["path"]))
+
+
+@private_tool("mac_find", "Find files and folders on this Mac whose names contain some text (approved folders only).",
+              {"text": S}, ["text"])
+def t_mac_find(st, emit, a):
+    found = ma(macaccess.find, access_cfg(), a.get("text") or "")
+    return "\n".join(found) if found else "Nothing with %r in its name in the approved folders." % a.get("text")
+
+
+@private_tool("mac_read", "Read a file on this Mac (approved folders only). Text files and PDFs.", {"path": S},
+              ["path"])
+def t_mac_read(st, emit, a):
+    return clip(ma(macaccess.read, access_cfg(), a.get("path")))
+
+
+@private_tool("propose_mac_write", "Save a file on this Mac (new or changed; approved folders only). Does NOT write: "
+              "shows the exact change on a card the user confirms. The old version is backed up, with Undo. Give the "
+              "WHOLE new content. mac_read the file first when changing one.",
+              {"path": S, "content": S, "reason": dict(S, description="One short plain sentence")},
+              ["path", "content"])
+def t_mac_write(st, emit, a):
+    change, diff = ma(macaccess.plan_write, access_cfg(), a.get("path"), a.get("content") or "")
+    name = Path(change["path"]).name
+    return access_card(st, emit, change, "%s %s on this Mac" % ("Change" if diff.startswith("---") else "Create",
+                                                                 name), diff, a.get("reason") or "")
+
+
+@private_tool("propose_mac_move", "Rename or move a file or folder on this Mac (both places inside approved folders). "
+              "Shows a card first; can be undone.", {"path": S, "to": S}, ["path", "to"])
+def t_mac_move(st, emit, a):
+    change, diff = ma(macaccess.plan_move, access_cfg(), a.get("path"), a.get("to"))
+    return access_card(st, emit, change, "Move %s on this Mac" % Path(change["path"]).name, diff, "")
+
+
+@private_tool("propose_mac_delete", "Delete a file or folder on this Mac (approved folders only). It goes to the Trash, "
+              "after a card the user confirms, and can be undone.", {"path": S}, ["path"])
+def t_mac_delete(st, emit, a):
+    change, diff = ma(macaccess.plan_delete, access_cfg(), a.get("path"))
+    return access_card(st, emit, change, "Delete %s on this Mac" % Path(change["path"]).name, diff, "")
+
+
+@private_tool("mac_changes", "The latest changes made on this Mac through PatchBay (files and calendar), with their "
+              "numbers for Undo.")
+def t_mac_changes(st, emit, a):
+    rows = macaccess.recent(15)
+    return "\n".join("#%d %s %s %s%s" % (h["id"], h["time"], h["action"], h["path"], " (undone)" if h.get("undone")
+                                         else "") for h in rows) or "No changes yet."
+
+
+@private_tool("propose_mac_undo", "Undo one change made on this Mac (a file or calendar change), by its number from "
+              "mac_changes. Shows a card first.", {"number": I}, ["number"])
+def t_mac_undo(st, emit, a):
+    e, words = ma(macaccess.undo_plan, a.get("number"))
+    return access_card(st, emit, {"action": "undo", "number": e["id"], "path": e["path"]}, words, words, "")
+
+
+def cal_on():
+    if not access_cfg().get("calendar_access"):
+        raise ToolError("Calendar access is off. The user can turn it on in 🩺 Setup → Mac access.")
+
+
+def _day(text, default):
+    text = (text or "").strip()
+    return text or default
+
+
+@private_tool("calendar_list", "The calendars in Apple Calendar on this Mac.")
+def t_cal_list(st, emit, a):
+    cal_on()
+    return "\n".join(ma(macaccess.cal_calendars)) or "No calendars."
+
+
+@private_tool("calendar_events", "Events in Apple Calendar between two dates (like 2026-11-03 or 2026-11-03 14:30). "
+              "Default: the next 7 days. Each line has the event id used to change it.",
+              {"start": S, "end": S, "calendar": S, "text": dict(S, description="Only events whose title or place "
+                                                                                 "has this text")})
+def t_cal_events(st, emit, a):
+    cal_on()
+    now = time.time()
+    start = _day(a.get("start"), time.strftime("%Y-%m-%d", time.localtime(now)))
+    end = _day(a.get("end"), time.strftime("%Y-%m-%d", time.localtime(now + 8 * 86400)))
+    if len(end) == 10 and end == start:
+        end += " 23:59"
+    evs = ma(macaccess.cal_events, start, end, a.get("calendar") or None, a.get("text") or None)
+    if not evs:
+        return "No events from %s to %s. (Today is %s.)" % (start, end, time.strftime("%A %Y-%m-%d"))
+    return "Today is %s.\n" % time.strftime("%A %Y-%m-%d") + "\n".join(
+        "%s to %s  %s%s  [%s]  id %s" % (e["start"], e["end"][11:] if e["end"][:10] == e["start"][:10] else e["end"],
+                                       e["title"], " at " + e["location"] if e["location"] else "", e["calendar"],
+                                       e["uid"]) + (" (all day)" if e["all_day"] else "") for e in evs)
+
+
+EVENT_PARAMS = {"title": S, "start": dict(S, description="Like 2026-11-03 14:30"), "end": S, "location": S,
+                "notes": S, "calendar": S, "all_day": {"type": "boolean"}}
+
+
+def _event_text(ev):
+    return "\n".join("%s: %s" % (k, ev[k]) for k in ("title", "start", "end", "location", "notes", "calendar",
+                                                      "all_day") if ev.get(k) not in (None, ""))
+
+
+@private_tool("propose_calendar_add", "Add an event to Apple Calendar. Shows a card first; can be undone. Dates like "
+              "2026-11-03 14:30 (calendar_events tells you today's date).", EVENT_PARAMS, ["title", "start"])
+def t_cal_add(st, emit, a):
+    cal_on()
+    ev = {k: a.get(k) for k in EVENT_PARAMS if a.get(k) not in (None, "")}
+    for k in ("start", "end"):
+        if ev.get(k):
+            ma(macaccess._when, ev[k])          # check the date now, not after Confirm
+    if not ev.get("end") and not ev.get("all_day") and len(str(ev["start"]).strip()) > 10:
+        t = time.strptime(str(ev["start"]).strip().replace("T", " ")[:16], "%Y-%m-%d %H:%M")
+        ev["end"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.mktime(t) + 3600))
+    return access_card(st, emit, {"action": "event_add", "event": ev, "title": ev["title"]},
+                       "Add \"%s\" to your calendar" % ev["title"], _event_text(ev), "")
+
+
+@private_tool("propose_calendar_edit", "Change an event in Apple Calendar, by its id from calendar_events. Give only "
+              "what changes. Shows a card first; can be undone.", dict(EVENT_PARAMS, id=S), ["id"])
+def t_cal_edit(st, emit, a):
+    cal_on()
+    before = ma(macaccess.cal_get, a.get("id"))
+    fields = {k: a[k] for k in ("title", "start", "end", "location", "notes", "all_day") if a.get(k) not in (None, "")}
+    if not fields:
+        raise ToolError("Say what to change (title, start, end, location or notes).")
+    for k in ("start", "end"):
+        if fields.get(k):
+            ma(macaccess._when, fields[k])
+    diff = "\n".join("%s: %s  →  %s" % (k, before.get(k, ""), v) for k, v in fields.items())
+    return access_card(st, emit, {"action": "event_edit", "uid": before["uid"], "fields": fields, "before": before,
+                                  "title": before["title"]},
+                       "Change \"%s\" (%s)" % (before["title"], before["start"]), diff, "")
+
+
+@private_tool("propose_calendar_delete", "Delete an event from Apple Calendar, by its id from calendar_events. Shows a "
+              "card first; can be undone (it's added back).", {"id": S}, ["id"])
+def t_cal_delete(st, emit, a):
+    cal_on()
+    before = ma(macaccess.cal_get, a.get("id"))
+    return access_card(st, emit, {"action": "event_delete", "uid": before["uid"], "before": before,
+                                  "title": before["title"]},
+                       "Delete \"%s\" (%s)" % (before["title"], before["start"]), _event_text(before), "")
+
+
 def home_system():
     return """You are PatchBay, an assistant running fully on the user's own Mac (%s). This is the home screen chat, \
 about all of the user's devices rather than one. The user is not a programmer: answer in short, plain sentences.
@@ -2048,7 +2294,13 @@ patchbay_search, read it with patchbay_read, then propose_patchbay_change with a
 existing style. web/app.html is the page (HTML, CSS and JavaScript); server.py is the server and the chat tools. \
 Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
 to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
-changes, offer propose_patchbay_restart; page changes only need a page reload.""" % (
+changes, offer propose_patchbay_restart; page changes only need a page reload.
+- FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
+the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
+through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
+propose_calendar_edit and propose_calendar_delete change it through a card. If access is off or a folder isn't \
+approved, say where to turn it on. Never say something is changed until you're told it was confirmed. What you \
+read there is private: never put it in web_search, read_web_page or ask_claude.""" % (
         APP.computer if APP else "the Mac")
 
 
@@ -2062,6 +2314,12 @@ The user is not a programmer. Answer in short, plain sentences. Explain technica
 You have tools. Use them instead of guessing: look before you answer, and never invent file contents or results.
 - Reading tools (list_folder, read_file, scan_device, last_report, find_good_copies, search_snapshot, \
 change_history, test_connection) never change the device. Use them freely.
+- FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
+the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
+through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
+propose_calendar_edit and propose_calendar_delete change it through a card. If access is off or a folder isn't \
+approved, say where to turn it on. Never say something is changed until you're told it was confirmed. What you \
+read there is private: never put it in web_search, read_web_page or ask_claude.
 - You can NOT write to the device yourself. To change a file, call propose_restore, propose_edit or propose_undo. \
 That only shows the user a card; the user decides. Never say a change is done until a message tells you it was \
 confirmed and succeeded.
@@ -2317,7 +2575,7 @@ def claude_question(st, question, details, purpose):
     parts.append("Question:\n" + (question or "").strip())
     if details:
         parts.append("Details:\n" + str(details)[:12000])
-    recent = [m for m in st.messages if m.get("role") == "tool"
+    recent = [m for m in st.messages if m.get("role") == "tool" and m.get("tool_name") not in PRIVATE_TOOLS
               and str(m.get("content"))[-2000:] not in str(details or "")][-3:]
     if recent:
         parts.append("Recent step results (newest last):\n" + "\n---\n".join(
@@ -2343,6 +2601,8 @@ def offer_question(st, emit, cfg, question, details, purpose):
         APP.claude.check_cap()
     except claude.ClaudeError as e:
         raise ToolError(str(e))
+    if leaks_private(st, "%s\n%s" % (question, details)):
+        raise ToolError(PRIVATE_REFUSAL)
     text, sc = claude_question(st, question, details, purpose)
     if APP.claude.settings().get("auto_send"):
         try:
@@ -2522,14 +2782,22 @@ def failed(result):
     return r.startswith("Error:") or bool(re.search(r"\b(failed|did not work)\b.*\(exit code [1-9]", r[:600]))
 
 
+# A question about the user's own files or calendar is answered on this Mac, even when Claude answers everything else.
+PRIVATE_WORDS = re.compile(r"(?i)\b(calendar|events?|meetings?|appointments?|schedule|my (files?|folders?|documents?|"
+                           r"desktop|downloads)|on my mac|pdf)\b")
+
+
 def ask_model(cfg, messages, tools=None, emit=None, model=None):
     """Ask the AI. Its words are passed to emit as they arrive ("delta" events), so the page shows them live."""
-    if APP and APP.claude.mode() == "always" and not model:
+    if APP and APP.claude.mode() == "always" and not model and not used_private(messages) \
+            and not PRIVATE_WORDS.search(next((str(m.get("content")) for m in reversed(messages)
+                                               if m.get("role") == "user"), "")):
         try:
             emit and emit({"type": "status", "text": "Asking Claude..."})
             sc = claude_scrubber()
             system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
-            msg = APP.claude.chat(system, [m for m in messages if m.get("role") != "system"], tools or TOOLS, sc)
+            msg = APP.claude.chat(system, [m for m in messages if m.get("role") != "system"],
+                                  [t for t in (tools or TOOLS) if t["function"]["name"] not in PRIVATE_TOOLS], sc)
             APP.claude.save_aliases(sc)
             claude_cost(emit)
             return msg
@@ -2902,6 +3170,9 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
     if p.get("risk") and not understood:
         raise ToolError("This command is marked risky (%s). Tick \"I understand\" on the card to run it."
                         % "; ".join(p["risk"]))
+    if p["kind"] == "mac_access":
+        del st.pending[pid]
+        return confirm_access(st, p, emit)
     if p["kind"] in ("self_edit", "self_restart"):
         if p.get("word") and typed.strip().lower() != p["word"].lower():
             raise ToolError("This change touches one of PatchBay's safety rules, so type %s to confirm it." % p["word"])
@@ -3541,6 +3812,20 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                                    "auto": model_labels.layer_models([m["name"] for m in installed if m["tools"]]).get(k)}
                                   for k, n, w in model_labels.LAYERS],
                        "auto": model_labels.AUTO_LABEL[1]})
+        elif path == "/api/mac":
+            cfg = APP.home.cfg()
+            self.json({"folders": [str(f) for f in macaccess.folders(cfg)], "calendar": bool(cfg.get("calendar_access")),
+                       "recent": macaccess.recent(15), "here": self.from_this_mac()})
+        elif path == "/api/github":
+            try:
+                ch = githubpush.changes()
+                d = githubpush.diff() if q.get("diff") == "1" else ""
+                err = None
+            except githubpush.PushError as e:
+                ch, d, err = [], "", str(e)
+            name, web = githubpush.repo()
+            self.json({"changes": ch, "diff": d, "error": err, "repo": name, "branch": githubpush.BRANCH,
+                       "token_saved": githubpush.has_token(), "here": self.from_this_mac()})
         elif path == "/api/laptop":
             cfg = APP.home.cfg()
             self.json({"on": APP.lan, "saved": bool(cfg.get("lan_access")), "has_password": APP.access.has_password(),
@@ -3901,6 +4186,59 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except OSError as e:
                 raise ToolError(str(e))
             self.json(mac_app.status())
+        elif path in ("/api/mac/folder", "/api/mac/calendar"):
+            if not self.from_this_mac():
+                raise ToolError("What PatchBay may use on this Mac can only be changed on the Mac itself.")
+            cfg = APP.home.cfg()
+            main = str(APP.registry.main)
+            saved = json.loads(Path(main).read_text())
+            try:
+                if path == "/api/mac/calendar":
+                    on, old, cals = bool(data.get("on")), saved.get("calendar_access"), []
+                    if on:
+                        cals = macaccess.cal_calendars()     # macOS asks for permission the first time
+                    if bool(old) != on:
+                        devices.apply_changes(cfg, [(main, "calendar_access", old, on)])
+                    self.json({"calendar": on, "calendars": cals})
+                else:
+                    old = list(saved.get("mac_folders") or [])
+                    new = list(old)
+                    if data.get("action") == "remove":
+                        new = [f for f in new if f != data.get("path")]
+                    else:
+                        folder = data.get("path") if data.get("action") == "add" else macaccess.choose_folder()
+                        if not folder:
+                            self.json({"folders": old, "cancelled": True})
+                            return
+                        folder = str(macaccess.check_folder(folder))
+                        if folder not in new:
+                            new.append(folder)
+                    if new != old:
+                        devices.apply_changes(cfg, [(main, "mac_folders", old, new)])
+                    self.json({"folders": new})
+            except macaccess.AccessError as e:
+                raise ToolError(str(e))
+        elif path == "/api/mac/undo":
+            try:
+                self.json({"text": macaccess.undo(data.get("id")), "recent": macaccess.recent(15)})
+            except (macaccess.AccessError, OSError, KeyError) as e:
+                raise ToolError("Couldn't undo it: %s" % e)
+        elif path == "/api/github/token":
+            if not self.from_this_mac():
+                raise ToolError("The GitHub token can only be changed on the Mac itself.")
+            try:
+                self.json({"token_saved": githubpush.save_token(data.get("token") or "")})
+            except githubpush.PushError as e:
+                raise ToolError(str(e))
+        elif path == "/api/github/push":
+            if not self.from_this_mac():
+                raise ToolError("Sending changes to GitHub can only be done on the Mac itself.")
+            if (data.get("typed") or "").strip() != "PatchBay":
+                raise ToolError("Type PatchBay to confirm.")
+            try:
+                self.json(githubpush.push(data.get("note") or ""))
+            except githubpush.PushError as e:
+                raise ToolError(str(e))
         elif path == "/api/laptop":
             if not self.from_this_mac():
                 raise ToolError("Laptop access can only be changed on the Mac itself.")
