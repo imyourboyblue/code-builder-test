@@ -162,7 +162,7 @@ class GitHubSource:
                 raise ReviewError("GitHub has no public repository %s (or it's private)." % self.repo)
             if e.code == 403:
                 raise ReviewError("GitHub is limiting requests right now. Try again in an hour, or save a GitHub "
-                                  "token in Setup → Updates & data.")
+                                  "token in Setup → Updates.")
             raise ReviewError("GitHub said no: %s" % e)
         except (OSError, ValueError) as e:
             raise ReviewError("Couldn't reach GitHub: %s" % e)

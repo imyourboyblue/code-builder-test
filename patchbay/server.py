@@ -2183,18 +2183,18 @@ def confirm_access(st, p, emit):
         result = ma(macaccess.cal_apply, ch, p.get("note") or "")
     else:
         result = ma(macaccess.apply, access_cfg(), ch, p.get("note") or "")
-    emit({"type": "answer", "text": result + " Undo is in 🩺 Setup → Mac access."})
+    emit({"type": "answer", "text": result + " Undo is in 🩺 Setup → Mac."})
     st.messages.append({"role": "user", "content": "[I confirmed the change on the card. Result: %s]" % result})
 
 
-@private_tool("mac_list", "List a folder on this Mac (only folders the user approved in Setup → Mac access). With no "
+@private_tool("mac_list", "List a folder on this Mac (only folders the user approved in Setup → Mac). With no "
               "path, lists the approved folders.", {"path": S})
 def t_mac_list(st, emit, a):
     cfg = access_cfg()
     if not a.get("path"):
         f = macaccess.folders(cfg)
         return ("Approved folders on this Mac:\n" + "\n".join(str(x) for x in f)) if f else \
-            "No Mac folders are approved yet. The user can add some in 🩺 Setup → Mac access."
+            "No Mac folders are approved yet. The user can add some in 🩺 Setup → Mac."
     return clip(ma(macaccess.listing, cfg, a["path"]))
 
 
@@ -2289,7 +2289,7 @@ def t_review_folder(st, emit, a):
 
 def cal_on():
     if not access_cfg().get("calendar_access"):
-        raise ToolError("Calendar access is off. The user can turn it on in 🩺 Setup → Mac access.")
+        raise ToolError("Calendar access is off. The user can turn it on in 🩺 Setup → Mac.")
 
 
 def _day(text, default):
@@ -2410,7 +2410,7 @@ changes, offer propose_patchbay_restart; page changes only need a page reload.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
-the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
+the user approved in Setup → Mac; propose_mac_write, propose_mac_move and propose_mac_delete change them \
 through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
 propose_calendar_edit and propose_calendar_delete change it through a card. If access is off or a folder isn't \
 approved, say where to turn it on. Never say something is changed until you're told it was confirmed. What you \
@@ -2431,7 +2431,7 @@ change_history, test_connection) never change the device. Use them freely.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
-the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
+the user approved in Setup → Mac; propose_mac_write, propose_mac_move and propose_mac_delete change them \
 through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
 propose_calendar_edit and propose_calendar_delete change it through a card. If access is off or a folder isn't \
 approved, say where to turn it on. Never say something is changed until you're told it was confirmed. What you \

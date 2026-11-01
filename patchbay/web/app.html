@@ -291,9 +291,11 @@ border:2px solid var(--line)}
 .switch span::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
 .switch input:checked+span{background:var(--ok)}.switch input:checked+span::after{transform:translateX(18px)}
 .switch input:disabled+span{opacity:.5}.switch input:focus-visible+span{outline:2px solid var(--ink);outline-offset:2px}
-.sc-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:10px}
-.sc-tab{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px;color:var(--mute);font-weight:600}
+.sc-tabs{display:flex;gap:2px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--line);margin-bottom:10px}
+.sc-tabs::-webkit-scrollbar{display:none}
+.sc-tab{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 9px;color:var(--mute);font-weight:600;white-space:nowrap;flex:0 0 auto}
 .sc-tab.on{color:var(--ink);border-bottom-color:var(--ink)}
+@media (max-width:460px){.sc-tab{padding:6px 5px;font-size:13.5px}}
 .sc-n{display:inline-block;min-width:16px;padding:0 5px;border-radius:9px;background:var(--bad);color:#fff;font-size:11px;line-height:16px}
 .modal .box.setup{min-height:min(560px,80vh)}
 .md-head{font-weight:600;margin-bottom:4px}.md-head span{font-weight:400;font-size:12.5px;color:var(--mute)}
@@ -927,8 +929,8 @@ function macCard(ev,closed){ // a change on the Mac (project files, builds): no 
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function accessCard(ev,closed){ // a change to a file on this Mac or to Apple Calendar
-  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+(ev.calendar?'This changes your <b>Apple Calendar</b>. None of your devices are touched. You can undo it in 🩺 Setup → Mac access.':
-      'This changes a file on <b>'+esc(ev.computer||'this Mac')+'</b>, not a device. The old version is backed up first (deleting moves it to the Trash), and you can undo it in 🩺 Setup → Mac access.')+'</div>'+
+  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+(ev.calendar?'This changes your <b>Apple Calendar</b>. None of your devices are touched. You can undo it in 🩺 Setup → Mac.':
+      'This changes a file on <b>'+esc(ev.computer||'this Mac')+'</b>, not a device. The old version is backed up first (deleting moves it to the Trash), and you can undo it in 🩺 Setup → Mac.')+'</div>'+
     (ev.diff?'<details open><summary>'+(ev.calendar?'The event':'Exact change')+'</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre style="white-space:pre-wrap">'+esc(ev.diff)+'</pre>')+'</details>':'')+
     '<div class="row"><button class="primary">Confirm</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
@@ -1026,7 +1028,7 @@ async function openSetup(msg){
       (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
       (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>';
   const pane=(id,html)=>'<div class="sc-pane" data-pane="'+id+'">'+html+'</div>';
-  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App & laptop'],['mac','Mac access'],['look','Look'],['data','Updates & data']];
+  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App'],['mac','Mac'],['look','Look'],['data','Updates']];
   $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
     '<div class="sc-tabs">'+tabs.map(t=>'<button class="sc-tab" data-tab="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
     pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0">Everything is working.</div>')+

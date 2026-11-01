@@ -265,12 +265,12 @@ it". PatchBay lists every file, reads the code in pieces, keeps notes, and then 
 how it's built, what's good, problems by priority with the file and line, security, ease of use, and what to fix
 first. It skips pictures, downloaded libraries, generated files and anything that may hold passwords. A big project
 takes 10-20 minutes; Stop works any time. Reviews are saved in `~/PatchBay-data/reviews/`. A folder you approved in
-Setup → Mac access can be reviewed the same way ("review my project in ~/Documents/MyGame").
+Setup → Mac can be reviewed the same way ("review my project in ~/Documents/MyGame").
 
 ## Files on your Mac and Apple Calendar
 
 Both chats can work with files on this Mac and with Apple Calendar, but only where you allow it, in
-**🩺 Setup → Mac access**:
+**🩺 Setup → Mac**:
 
 - **Folders**: click **Add a folder…** and pick one (or type its path). The chat can look inside it and read files
   (text and PDFs) freely. Saving, renaming, moving and deleting always show a card first; the old version is backed
@@ -310,7 +310,7 @@ card first. It's checked for mistakes, and the old file is backed up, with Undo 
 start after a change, it puts the old version back by itself. If the page itself breaks, open
 http://127.0.0.1:8765/fix for a plain repair page.
 
-**Send PatchBay's changes to GitHub** (Updates & data tab): changes PatchBay made to itself stay on this Mac until you
+**Send PatchBay's changes to GitHub** (Updates tab): changes PatchBay made to itself stay on this Mac until you
 send them. This lists the changed files and the exact changes; type **PatchBay** and press **Send to GitHub**. They go
 to their own branch, `patchbay-edits`, never `main`, so you can look them over on GitHub and merge them there. Your
 settings, passwords, backups and chats are never sent. It uses your Mac's own GitHub login if `git push` works in
@@ -406,8 +406,8 @@ the old and new values on a card first.
 | `max_file_mb` | Skip files bigger than this when scanning |
 | `allow_writes` | Must be on for any change to the device |
 | `work_mode` | `everyday` or `building` (the switch above the chat) |
-| `mac_folders` | Folders on this Mac the chat may use (set in Setup → Mac access) |
-| `calendar_access` | `true` lets the chat use Apple Calendar (set in Setup → Mac access) |
+| `mac_folders` | Folders on this Mac the chat may use (set in Setup → Mac) |
+| `calendar_access` | `true` lets the chat use Apple Calendar (set in Setup → Mac) |
 | `about` | One sentence about the device, so the AI knows what it is |
 | `backup_folder` | Where backups go (set on the Backups tab) |
 | `lan_access` | `true` always lets the laptop in |

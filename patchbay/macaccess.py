@@ -1,7 +1,7 @@
 """
 The chat working with files on this Mac and with Apple Calendar, only where you allowed it.
 
-Files: you approve folders in 🩺 Setup → Mac access. The chat may look and read inside them freely. Every change
+Files: you approve folders in 🩺 Setup → Mac. The chat may look and read inside them freely. Every change
 (write, rename/move, delete) shows a card first; the old version is backed up and the change can be undone.
 Deleting moves to the Trash. Secrets are refused even inside an approved folder (Keychains, .ssh, PatchBay's own
 password and key files...), and system folders can't be approved at all.
@@ -62,7 +62,7 @@ def resolve(cfg, path, must_exist=True):
     """The real path, if it's inside an approved folder and isn't a secret. Otherwise AccessError."""
     ok = folders(cfg)
     if not ok:
-        raise AccessError("No Mac folders are approved yet. The user can add some in 🩺 Setup → Mac access.")
+        raise AccessError("No Mac folders are approved yet. The user can add some in 🩺 Setup → Mac.")
     raw = os.path.expanduser(str(path or "").strip())
     p = Path(raw) if os.path.isabs(raw) else ok[0] / raw
     p = p.resolve()
