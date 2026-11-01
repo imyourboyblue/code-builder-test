@@ -281,6 +281,21 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
+.sc-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:10px}
+.sc-tab{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px;color:var(--mute);font-weight:600}
+.sc-tab.on{color:var(--ink);border-bottom-color:var(--ink)}
+.sc-n{display:inline-block;min-width:16px;padding:0 5px;border-radius:9px;background:var(--bad);color:#fff;font-size:11px;line-height:16px}
+.modal .box.setup{min-height:min(560px,80vh)}
+.md-head{font-weight:600;margin-bottom:4px}.md-head span{font-weight:400;font-size:12.5px;color:var(--mute)}
+.md-list{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.modal label.md-row{font-size:13.5px;color:var(--ink)}.md-row{display:flex!important;gap:10px;align-items:flex-start;padding:7px 10px;margin:0;color:inherit;cursor:pointer;border-top:1px solid var(--line)}
+.md-list .md-row:first-child{border-top:0}.md-row.on{background:rgba(52,199,89,.10)}.md-row input{width:auto;margin-top:3px;flex:none}.md-row>div{flex:1}
+.md-row.dl{cursor:default;padding:7px 0;align-items:center}
+.md-why{font-size:12.5px;color:var(--mute)}.md-id{font-family:ui-monospace,monospace;font-size:11px;opacity:.75}
+.md-chip{display:inline-block;font-size:11px;padding:0 6px;border-radius:8px;background:var(--line);color:var(--mute);margin-left:2px}
+.md-chip.warn{background:rgba(232,163,61,.18);color:var(--warn)}.md-chip.bad{background:rgba(255,59,48,.16);color:var(--bad)}
+.md-note{margin:6px 0;font-weight:600}
+.md-more{margin-top:10px}.md-more>summary{cursor:pointer;font-weight:600}
 .ai-where{font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;background:rgba(10,132,255,.16);color:var(--accent,var(--ink))}
 .ai-where.down{background:rgba(255,59,48,.16);color:var(--bad)}
 .cl-dot.connected{background:rgba(52,199,89,.18);color:var(--ok)}.cl-dot.rejected,.cl-dot.none{background:rgba(255,59,48,.16);color:var(--bad)}.cl-dot.unknown,.cl-dot.checking{background:rgba(232,163,61,.18);color:var(--warn)}
@@ -980,30 +995,42 @@ document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('ch
 // ---- Setup: self-check with Fix buttons, the app icon / start at login, and the error report
 const LV={ok:['✅','var(--ok,#2a7)'],warn:['⚠️','var(--warn,#b80)'],bad:['❌','var(--bad)']};
 async function openSetup(msg){
-  modal('<h3>🩺 Setup check</h3><div id="sc-body">Checking…</div>');
+  modal('<h3>🩺 Setup</h3><div id="sc-body">Checking…</div>');$('box').classList.add('setup');
   let j;try{j=await getJSON('/api/selfcheck')}catch(e){$('sc-body').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>';return}
   const a=j.app;
-  $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
-    j.checks.map(c=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line,#ddd)">'+
+  const bad=j.checks.filter(c=>c.level!=='ok'),good=j.checks.filter(c=>c.level==='ok');
+  const chk=c=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line,#ddd)">'+
       '<span>'+LV[c.level][0]+'</span><div style="flex:1"><b>'+esc(c.name)+'</b><div style="font-size:13.5px">'+esc(c.detail)+'</div>'+
       (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
-      (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>').join('')+
-    (a.mac?'<h3 style="margin-top:14px">Starting PatchBay</h3>'+
+      (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>';
+  const pane=(id,html)=>'<div class="sc-pane" data-pane="'+id+'">'+html+'</div>';
+  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App & laptop'],['look','Look'],['data','Updates & data']];
+  $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
+    '<div class="sc-tabs">'+tabs.map(t=>'<button class="sc-tab" data-tab="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
+    pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0;color:var(--ok)">✅ Everything is working.</div>')+
+      (good.length?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">'+good.length+' thing'+(good.length===1?'':'s')+' working fine</summary>'+good.map(chk).join('')+'</details>':'')+
+      '<h4 style="margin:14px 0 4px">Something not working?</h4><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
+      '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button></div>')+
+    pane('ai','<div id="sc-models" style="font-size:13.5px">Looking for models…</div>'+
+      '<h4 style="margin:16px 0 4px">Where the AI runs</h4><div id="sc-ai" style="font-size:13.5px">Checking…</div>')+
+    pane('app',(a.mac?'<h4 style="margin:0 0 4px">Starting PatchBay</h4>'+
       '<div style="font-size:13.5px">'+(a.app?(a.native?'✅ The PatchBay app (with its own window) is in your Applications folder. Drag it onto the Dock to start PatchBay with one click.':'✅ The PatchBay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a PatchBay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the PatchBay app')+'</button>'+
       (a.no_tools?'<button id="sc-tools" class="primary">Install Apple\'s free tools</button>':'')+(a.build_error?'<button id="sc-berr">Copy the build error</button>':'')+
       '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start PatchBay by itself when I log in to the Mac</label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
-    '<h3 style="margin-top:14px">AI models</h3><div id="sc-models" style="font-size:13.5px">Looking for models…</div>'+
-    '<h3 style="margin-top:14px">Laptop access</h3><div id="sc-lap" style="font-size:13.5px">Checking…</div>'+
-    '<h3 style="margin-top:14px">Where the AI runs</h3><div id="sc-ai" style="font-size:13.5px">Checking…</div>'+
-    '<h3 style="margin-top:14px">Look</h3><div id="sc-look"></div>'+
-    '<h3 style="margin-top:14px">Updates</h3><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
-    '<h3 style="margin-top:14px">Start over</h3><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
-    '<div class="row" style="margin-top:6px"><button id="sc-clearall" class="danger">Clear everything…</button></div>'+
-    '<h3 style="margin-top:14px">Something not working?</h3><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
-    '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
+      '<h4 style="margin:16px 0 4px">Laptop access</h4><div id="sc-lap" style="font-size:13.5px">Checking…</div>')+
+    pane('look','<div id="sc-look"></div>')+
+    pane('data','<h4 style="margin:0 0 4px">Updates</h4><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
+      '<h4 style="margin:16px 0 4px">Start over</h4><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
+      '<div class="row" style="margin-top:6px"><button id="sc-clearall" class="danger">Clear everything…</button></div>')+
+    '<div class="row" style="margin-top:12px"><button onclick="closeModal()">Close</button></div><div id="sc-msg" style="font-size:13px;margin-top:6px"></div>';
+  const show=t=>{document.querySelectorAll('.sc-tab').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
+    document.querySelectorAll('.sc-pane').forEach(p=>p.hidden=p.dataset.pane!==t);try{localStorage.setItem('setupTab',t)}catch(e){}};
+  document.querySelectorAll('.sc-tab').forEach(b=>b.onclick=()=>show(b.dataset.tab));
+  let first='health';try{first=localStorage.getItem('setupTab')||'health'}catch(e){}
+  show(bad.length&&!msg?'health':(tabs.some(t=>t[0]===first)?first:'health'));
   const say=t=>$('sc-msg').innerHTML=t;
   $('sc-clearall').onclick=()=>{closeModal();clearData(true)};
   document.querySelectorAll('.sc-fix').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='Working…';
@@ -1028,25 +1055,32 @@ $('setup-btn').onclick=()=>openSetup();
 let MODEL_POLL=null;
 async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
   try{j=await getJSON('/api/models/catalog')}catch(e){box.textContent=e.message;return}
-  const where=j.where==='this Mac'?'this computer':j.where;const p=j.pull||{};const busy=p.state==='downloading';
-  const row=(title,sub,why,btn)=>'<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--line)"><div style="flex:1"><b>'+title+'</b> <span style="font-size:12px;color:var(--mute)">'+sub+'</span><div style="font-size:12.5px;color:var(--mute)">'+why+'</div></div>'+btn+'</div>';
-  const use=(name,label)=>j.current===name?'<span style="font-size:12.5px;color:var(--ok);white-space:nowrap">✓ In use</span>':'<button class="md-use" data-m="'+esc(name)+'" data-l="'+esc(label)+'">Use</button>';
-  let h=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'')+(j.error?'<div style="color:var(--bad)">'+esc(j.error)+'</div>':'');
-  h+='<div style="font-size:12.5px;color:var(--mute)">On '+esc(where)+(j.memory_gb?' ('+j.memory_gb+' GB memory)':'')+'. Pick which one answers. This is the same as the AI model menu at the top.</div>';
-  if(j.installed.length){h+=row('Automatic','',esc(j.auto),use('auto','Automatic'));
-    h+=j.installed.map(m=>row(esc(m.label),esc(m.name)+' · '+esc(m.size),esc(m.why),use(m.name,m.label))).join('')}
-  else if(!j.error)h+='<div>No models yet. Download one below.</div>';
-  const fitTxt={yes:'',tight:' <span style="color:var(--warn)">Tight fit: other apps may slow down while it runs.</span>',no:' <span style="color:var(--bad)">Too big for '+(j.memory_gb||'')+' GB of memory: it would be very slow.</span>'};
-  const free=j.catalog.filter(c=>!c.installed);
-  h+='<div style="margin-top:10px"><b>Free models you can download</b></div>';
-  if(busy){const pct=p.total?Math.floor(100*p.done/p.total)+'%':'starting';h+='<div style="margin:4px 0;color:var(--warn)">Downloading '+esc(p.model)+'… '+pct+'. It keeps going if you close this.</div>'}
-  else if(p.state==='done')h+='<div style="margin:4px 0;color:var(--ok)">Downloaded '+esc(p.model)+'. It\'s in the list above.</div>';
-  else if(p.state==='failed')h+='<div style="margin:4px 0;color:var(--bad)">Downloading '+esc(p.model)+' didn\'t finish: '+esc(p.error)+'</div>';
-  h+=free.length?free.map(c=>row(esc(c.best),esc(c.name)+' · '+(c.exact?'':'about ')+c.gb+' GB',esc(c.why)+(c.fits?fitTxt[c.fits]:'')+(c.checked?'':' <i>(couldn\'t check Ollama\'s library just now)</i>'),
-      '<button class="md-get" data-m="'+esc(c.name)+'"'+(busy?' disabled':'')+'>Download</button>')).join(''):'<div style="color:var(--mute)">You have all of them.</div>';
-  h+='<div style="font-size:12px;color:var(--mute);margin-top:4px">All free, made by others and run by Ollama on '+esc(where)+'. Nothing about you is sent; only the model names are looked up.</div><div id="md-msg" style="font-size:13px"></div>';
+  const where=j.where==='this Mac'?'this Mac':j.where;const p=j.pull||{};const busy=p.state==='downloading';
+  const chip=(t,cls)=>'<span class="md-chip'+(cls?' '+cls:'')+'">'+t+'</span>';
+  let h=(note?'<div class="md-note">'+esc(note)+'</div>':'')+(j.error?'<div style="color:var(--bad)">'+esc(j.error)+'</div>':'');
+  // Which one answers: one radio list
+  const opts=j.installed.length?[{name:'auto',label:'Automatic',why:j.auto,size:''}].concat(j.installed):[];
+  h+='<div class="md-head">Which model answers <span>on '+esc(where)+(j.memory_gb?' · '+j.memory_gb+' GB memory':'')+'</span></div>';
+  h+=opts.length?'<div class="md-list">'+opts.map(m=>'<label class="md-row'+(j.current===m.name?' on':'')+'"><input type="radio" name="md-use" value="'+esc(m.name)+'" data-l="'+esc(m.label)+'"'+(j.current===m.name?' checked':'')+'>'+
+      '<div><b>'+esc(m.label)+'</b>'+(m.size?' '+chip(esc(m.size)):'')+'<div class="md-why">'+esc(m.why||'')+(m.name!=='auto'?' <span class="md-id">'+esc(m.name)+'</span>':'')+'</div></div></label>').join('')+'</div>'
+    :(j.error?'':'<div>No models yet. Get one below.</div>');
+  // Free ones to download, tucked away until wanted
+  const free=j.catalog.filter(c=>!c.installed),ok=free.filter(c=>c.fits!=='no'),big=free.filter(c=>c.fits==='no');
+  const dl=c=>'<div class="md-row dl"><div style="flex:1"><b>'+esc(c.best)+'</b> '+chip((c.exact?'':'~')+c.gb+' GB')+
+      (c.fits==='tight'?chip('tight fit','warn'):c.fits==='no'?chip('too big','bad'):'')+'<div class="md-why">'+esc(c.why)+' <span class="md-id">'+esc(c.name)+'</span></div></div>'+
+      '<button class="md-get" data-m="'+esc(c.name)+'"'+(busy?' disabled':'')+'>Download</button></div>';
+  let prog='';
+  if(busy){const pct=p.total?Math.floor(100*p.done/p.total)+'%':'starting';prog='<div class="md-note">⬇ Downloading '+esc(p.model)+'… '+pct+' (keeps going if you close this)</div>'}
+  else if(p.state==='done')prog='<div class="md-note" style="color:var(--ok)">✓ Downloaded '+esc(p.model)+'. Pick it above.</div>';
+  else if(p.state==='failed')prog='<div class="md-note" style="color:var(--bad)">Downloading '+esc(p.model)+' didn\'t finish: '+esc(p.error)+'</div>';
+  h+=prog+'<details class="md-more"'+(busy?' open':'')+'><summary>Get more free models ('+free.length+')</summary>'+
+    (ok.length?ok.map(dl).join(''):'<div class="md-why">You have all the ones that fit.</div>')+
+    (big.length?'<details style="margin-top:4px"><summary class="md-why">Too big for this Mac ('+big.length+')</summary>'+big.map(dl).join('')+'</details>':'')+
+    '<div class="md-why" style="margin-top:6px">Free, run by Ollama on '+esc(where)+'. Only model names are looked up online.'+
+    (free.some(c=>!c.checked)?' Sizes marked ~ are rough: Ollama\'s library couldn\'t be reached just now.':'')+'</div></details>'+
+    '<div id="md-msg" style="font-size:13px"></div>';
   box.innerHTML=h;
-  box.querySelectorAll('.md-use').forEach(b=>b.onclick=async()=>{try{await postJSON('/api/model',{model:b.dataset.m});info.model=b.dataset.m;loadModels();drawModels('From now on the "'+b.dataset.l+'" model answers.')}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
+  box.querySelectorAll('input[name=md-use]').forEach(r=>r.onchange=async()=>{try{await postJSON('/api/model',{model:r.value});info.model=r.value;loadModels();drawModels('Now using: '+r.dataset.l)}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}
@@ -1082,6 +1116,7 @@ async function drawAiComputer(note){const box=$('sc-ai');if(!box)return;let j;
   box.innerHTML=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'')+
     '<div>'+(j.here?'The AI runs on <b>this computer</b>.':'The AI runs on <b>'+esc(j.where)+'</b> ('+esc(j.url)+').')+' '+
     (j.error?'<span style="color:var(--bad)">'+esc(j.error)+'</span>':'<span style="color:var(--ok)">Answering, '+j.models+' model'+(j.models===1?'':'s')+'.</span>')+'</div>'+
+    (j.here?'<details class="md-more" style="margin-top:6px"><summary>Use another computer at home for the AI</summary>':'')+
     '<div style="color:var(--mute);font-size:12.5px;margin-top:4px">To use a more powerful computer at home for the AI (for example your desktop while you work on a laptop), type its address. It must be on your home network; internet addresses are refused.</div>'+
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input id="ai-url" style="flex:1;min-width:200px" placeholder="e.g. 192.168.50.10 or Desktop.local" value="'+(j.here?'':esc(j.url))+'">'+
     '<button id="ai-use" class="primary">Test and use</button>'+(j.here?'':'<button id="ai-local">Use this computer</button>')+'</div>'+
@@ -1091,7 +1126,7 @@ async function drawAiComputer(note){const box=$('sc-ai');if(!box)return;let j;
     '<li>Find the desktop\'s address in System Settings → Wi-Fi (or Network) → Details → IP address, and type it above.</li>'+
     '<li>Keep the desktop awake (System Settings → Energy → Prevent automatic sleeping).</li></ol>'+
     '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">Ollama has no password, so anyone on your Wi-Fi could use it. That\'s fine at home; never forward port 11434 on your router.</div></details>'+
-    '<div id="ai-msg" style="font-size:13px;margin-top:4px"></div>';
+    (j.here?'</details>':'')+'<div id="ai-msg" style="font-size:13px;margin-top:4px"></div>';
   const go=async url=>{const m=$('ai-msg');m.textContent='Testing…';
     try{const r=await postJSON('/api/ai-computer',{url});loadModels();drawAiComputer(r.here?'Using this computer for the AI.'+(r.error?' (Ollama isn\'t open here yet.)':''):'Using '+r.where+' for the AI ('+r.models+' models).')}
     catch(e){m.innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span> Nothing was changed.'}};
