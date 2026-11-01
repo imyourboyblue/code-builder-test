@@ -27,6 +27,7 @@ for help when it's stuck, using your own API key.
 - [Apps and homebrew updates](#apps-and-homebrew-updates)
 - [Building apps from source](#building-apps-from-source)
 - [AI models and Claude](#ai-models-and-claude)
+- [Reviewing code projects](#reviewing-code-projects)
 - [Files on your Mac and Apple Calendar](#files-on-your-mac-and-apple-calendar)
 - [Setup, updates and looks](#setup-updates-and-looks)
 - [Clear data](#clear-data)
@@ -248,6 +249,15 @@ PatchBay only asks Claude after its own AI has done at least 3 lookups online an
 the list of what it already tried. Before anything is sent, your user name, home folder, IP addresses, device names,
 emails and passwords are swapped for stand-ins like `<device-1>`. Unless you tick **Send automatically**, a card
 shows exactly what will be sent and you press **Send**. **See what was sent** lists everything that left the Mac.
+
+## Reviewing code projects
+
+Paste a GitHub link (yours or anyone's public one) and ask for a review, for example "look through this and critique
+it". PatchBay lists every file, reads the code in pieces, keeps notes, and then writes a review: what the project is,
+how it's built, what's good, problems by priority with the file and line, security, ease of use, and what to fix
+first. It skips pictures, downloaded libraries, generated files and anything that may hold passwords. A big project
+takes 10-20 minutes; Stop works any time. Reviews are saved in `~/PatchBay-data/reviews/`. A folder you approved in
+Setup → Mac access can be reviewed the same way ("review my project in ~/Documents/MyGame").
 
 ## Files on your Mac and Apple Calendar
 

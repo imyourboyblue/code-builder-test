@@ -69,6 +69,8 @@ import githubpush
 import research
 import macaccess
 import stopper
+import codereview
+import keychain
 import selfcheck
 import selfedit
 import model_labels
@@ -84,6 +86,7 @@ import webauth
 TOOL_RESULT_LIMIT = 12000   # characters of tool output the AI sees at once
 MAX_TOOL_ROUNDS = 25        # stop runaway tool loops
 PLAN_TOOL_ROUNDS = 80       # an approved plan may take many steps
+READ_TOOL_ROUNDS = 60       # reading new things (files, pages) counts as progress, up to this many steps
 ATTACH_TEXT_LIMIT = 15000   # characters of a dropped-in text file the AI sees straight away
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 NRO_LIMIT = 512 * 1024 * 1024   # .nro programs with built-in files can be big
@@ -1528,9 +1531,9 @@ def t_find_repo(st, emit, a):
 
 
 @tool("read_repo_file",
-      "Read a file from a public GitHub repository without downloading it: README.md, Makefile, CMakeLists.txt, a "
-      "CI workflow, or a folder listing (path ending in /, e.g. .github/workflows/). Use it to check build steps and "
-      "needed libraries before planning. General research only.",
+      "Read one file from a public GitHub repository without downloading it, or list a folder (path ending in /; "
+      "start with / for the top). List the folder first and only read files that are in the listing: never guess "
+      "file names. To review or critique a whole repository, use review_github_repo instead. General research only.",
       {"repo": dict(S, description="owner/name, e.g. joel16/NX-Shell"),
        "path": dict(S, description="File or folder in the repository, e.g. README.md or .github/workflows/")},
       ["repo", "path"])
@@ -1559,6 +1562,22 @@ def t_read_repo_file(st, emit, a):
         raise ToolError("GitHub said no: %s" % e)
     except (OSError, ValueError) as e:
         raise ToolError("Couldn't reach GitHub: %s" % tlsfix.explain(e))
+
+
+@tool("review_github_repo",
+      "Review, critique or explain a whole GitHub repository (any public one, or the user's own): PatchBay lists "
+      "every file, reads the code in pieces, takes notes and shows a written review (what it is, how it's built, "
+      "what's good, problems by priority with file and line, security, ease of use, fixes to do first). Use this "
+      "instead of reading files one by one. Takes a while; call it once.",
+      {"repo": dict(S, description="GitHub link or owner/name"),
+       "focus": dict(S, description="What the user especially wants checked, if they said")}, ["repo"])
+def t_review_repo(st, emit, a):
+    try:
+        src = codereview.GitHubSource(a.get("repo"), keychain.get(githubpush.TOKEN_ACCOUNT) if keychain.available()
+                                      else None)
+    except codereview.ReviewError as e:
+        raise ToolError(str(e))
+    return run_review(st, emit, src, a.get("focus") or "")
 
 
 @tool("project_packages",
@@ -2019,7 +2038,7 @@ def confirm_self(st, p, emit):
 
 
 for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
-           "read_web_page"):
+           "read_web_page", "review_github_repo"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
     HOME_HANDLERS[_n] = HANDLERS[_n]
@@ -2178,6 +2197,36 @@ def t_mac_undo(st, emit, a):
     return access_card(st, emit, {"action": "undo", "number": e["id"], "path": e["path"]}, words, words, "")
 
 
+def run_review(st, emit, source, focus):
+    cfg = st.cfg() if not getattr(st, "home", False) else APP.home.cfg()
+    job = codereview.Review(
+        source, focus,
+        ask=lambda messages, think=False, stream=False: ai_simple(cfg, messages, think, None, False, emit),
+        status=lambda t: emit({"type": "status", "text": t}), stop=check_stop,
+        note=lambda t: emit({"type": "note", "text": t}))
+    try:
+        report = job.run()
+    except codereview.ReviewError as e:
+        raise ToolError(str(e))
+    path = codereview.save(Path(os.path.expanduser(cfg["data_folder"])) / "reviews", source.name, report)
+    emit({"type": "note", "text": report + "\n\n*Saved to %s*" % path})
+    return ("The full review is now shown to the user (saved to %s). Don't repeat it: reply in two or three plain "
+            "sentences with the overall verdict, and offer to help with the first fixes. The review, for follow-up "
+            "questions:\n\n%s" % (path, clip(report, 20000)))
+
+
+@private_tool("review_mac_folder", "Review or critique a whole code project in a folder on this Mac (approved folders "
+              "only): reads every code file, takes notes and shows a written review (how it's built, problems by "
+              "priority with file and line, security, fixes to do first). Takes a while; call it once.",
+              {"path": S, "focus": dict(S, description="What the user especially wants checked, if they said")},
+              ["path"])
+def t_review_folder(st, emit, a):
+    folder = ma(macaccess.resolve, access_cfg(), a.get("path"))
+    if not folder.is_dir():
+        raise ToolError("That's a file, not a folder. Read it with mac_read.")
+    return run_review(st, emit, codereview.FolderSource(folder), a.get("focus") or "")
+
+
 def cal_on():
     if not access_cfg().get("calendar_access"):
         raise ToolError("Calendar access is off. The user can turn it on in 🩺 Setup → Mac access.")
@@ -2298,6 +2347,8 @@ existing style. web/app.html is the page (HTML, CSS and JavaScript); server.py i
 Explain each change in plain words. Never weaken a safety rule (typed device names, backups, local-only AI, what goes \
 to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
 changes, offer propose_patchbay_restart; page changes only need a page reload.
+- To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
+a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
 the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
 through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
@@ -2317,6 +2368,8 @@ The user is not a programmer. Answer in short, plain sentences. Explain technica
 You have tools. Use them instead of guessing: look before you answer, and never invent file contents or results.
 - Reading tools (list_folder, read_file, scan_device, last_report, find_good_copies, search_snapshot, \
 change_history, test_connection) never change the device. Use them freely.
+- To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
+a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
 the user approved in Setup → Mac access; propose_mac_write, propose_mac_move and propose_mac_delete change them \
 through a card. calendar_events reads Apple Calendar (it also says today's date); propose_calendar_add, \
@@ -3018,7 +3071,10 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                        "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
     fails, nudges, tried, idle = {}, 0, [], 0
     idle_limit = 15 if st.plan else 8
-    for _ in range(PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS):
+    base = PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS
+    seen, new_reads, rounds = set(), 0, 0
+    while rounds < min(max(base, READ_TOOL_ROUNDS if new_reads else base), base + new_reads):
+        rounds += 1
         check_stop()
         emit({"type": "status", "text": "Thinking..."})
         asked = sum(1 for m in st.messages if m.get("role") == "user" and not str(m.get("content") or "").startswith("["))
@@ -3084,7 +3140,14 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                 card = summary
                 continue
             bad = failed(result)
-            idle = 0 if (not bad and name in PROGRESS_TOOLS) else idle + 1
+            sig = name + json.dumps(args, sort_keys=True, default=str)
+            if not bad and name in PROGRESS_TOOLS:
+                idle = 0
+            elif not bad and sig not in seen:
+                new_reads += 1          # reading something new (a file, a page, a folder) is progress too
+            else:
+                idle += 1               # a failure, or the same step again
+            seen.add(sig)
             if bad and name != "ask_claude":
                 # The same goal (e.g. building this project), even if the command changed in between.
                 key = name + ":" + str(args.get("project") or args.get("path") or args.get("manager") or "")
@@ -3095,7 +3158,10 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
                     lookups = sum(v for k, v in fails.items() if k.split(":")[0] in LOOKUP_TOOLS)
                     if lookups >= 4:
                         return ask_user(st, emit, "I couldn't find where that program's source code lives. If you "
-                                                  "know its GitHub link, paste it here.", tried)
+                                                  "know its GitHub link, paste it here." if any(
+                                                      k.split(":")[0] in ("find_github_repo", "latest_release")
+                                                      for k in fails) else
+                                        "Several lookups didn't find what I was looking for.", tried)
                 elif fails[key] == 2 and claude_ready():
                     if stuck_help(st, emit, cfg, name, args, result):
                         return          # a card is waiting for the user
@@ -3109,8 +3175,20 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             emit({"type": "answer", "text": "Check the card above and press Confirm or Cancel. I'll carry on from "
                                             "there."})
             return
-    emit({"type": "answer", "text": "I stopped after %d steps so I don't loop forever. Tell me how to continue."
-          % (PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS)})
+    # Out of steps: answer with what was found instead of just giving up.
+    check_stop()
+    st.messages.append({"role": "user", "content": "[PatchBay: that's the step limit. Don't use any more tools. "
+                                                   "Answer now with what you found, and say plainly what you didn't "
+                                                   "get to.]"})
+    try:
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, [], emit)
+        text = clean_answer(msg.get("content"))
+    except ToolError:
+        text = ""
+    st.messages.append({"role": "assistant", "content": text})
+    emit({"type": "answer", "text": (text + "\n\n" if text else "") + "*(I stopped after %d steps so I don't "
+                                                                     "loop forever. Tell me if I should carry on.)*"
+                                                                     % rounds})
 
 
 # What each step is doing / did, in plain words for the page. {x} is filled from the step's arguments.
@@ -3134,7 +3212,8 @@ STEP_WORDS = {
     "web_search": "Searching the web for {query}", "device_firmware": "Reading the firmware versions",
     "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "read_repo_file": "Reading {path} in {repo}", "check_build_tools": "Checking the build tools",
     "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
-    "read_web_page": "Reading {url}", "setup_firmware_helper": "Preparing the helper app",
+    "read_web_page": "Reading {url}", "review_github_repo": "Reviewing {repo}",
+    "review_mac_folder": "Reviewing {path}", "setup_firmware_helper": "Preparing the helper app",
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
