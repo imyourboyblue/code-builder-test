@@ -72,6 +72,7 @@ import macaccess
 import stopper
 import codereview
 import codetools
+import places
 import keychain
 import selfcheck
 import selfedit
@@ -1230,6 +1231,21 @@ def cached(kind, key, fetch, seconds=600):
     return text
 
 
+@tool("places_nearby",
+      "Places near a town from OpenStreetMap: restaurants, cafes, fuel, groceries, pharmacies, hotels, banks... with "
+      "their opening hours, and which are open right now. Use it for any 'what's open / where can I eat / how many "
+      "X are in town' question.",
+      {"place": dict(S, description="Town with state or country, e.g. La Verkin, Utah"),
+       "kind": dict(S, description="restaurant (default, includes cafes and fast food), cafe, bar, fuel, grocery, "
+                                   "pharmacy, hotel, bank, hospital, shop or park"),
+       "radius_km": dict(I, description="How far around the town, default 5")}, ["place"])
+def t_places(st, emit, a):
+    try:
+        return clip(places.nearby(a.get("place"), a.get("kind") or "restaurant", a.get("radius_km") or 5))
+    except places.PlaceError as e:
+        raise ToolError(str(e))
+
+
 @tool("web_search",
       "Search the web. ONLY for generic text such as a version string, a server name or an error message; never "
       "include the user's file contents, code, names or addresses. Each result has a short snippet: for a simple "
@@ -2156,7 +2172,7 @@ def confirm_self(st, p, emit):
 
 
 for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
-           "read_web_page", "review_github_repo"):
+           "read_web_page", "review_github_repo", "places_nearby"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
     HOME_HANDLERS[_n] = HANDLERS[_n]
@@ -2471,8 +2487,12 @@ Explain each change in plain words. Never weaken a safety rule (typed device nam
 to the cloud, scanning limits) unless the user clearly asks, and then say plainly what it changes. After Python \
 changes, offer propose_patchbay_restart; page changes only need a page reload.
 - Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
-opening hours, scores) call web_search ONCE: it also reads the top pages for you, so answer straight from it in a \
-few sentences. Only search again if it truly didn't say.
+scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
+places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
+it, try once or twice more with different words or another tool before giving up.
+- Never state a fact you didn't see in a tool result or source this chat (numbers like population, names of shops \
+or places, prices, hours). If you couldn't find something, say plainly what you found and what's missing, in one \
+or two sentences: no generic filler, no guessing, and don't just send the user to search themselves.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
@@ -2495,8 +2515,12 @@ You have tools. Use them instead of guessing: look before you answer, and never 
 - Reading tools (list_folder, read_file, scan_device, last_report, find_good_copies, search_snapshot, \
 change_history, test_connection) never change the device. Use them freely.
 - Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
-opening hours, scores) call web_search ONCE: it also reads the top pages for you, so answer straight from it in a \
-few sentences. Only search again if it truly didn't say.
+scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
+places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
+it, try once or twice more with different words or another tool before giving up.
+- Never state a fact you didn't see in a tool result or source this chat (numbers like population, names of shops \
+or places, prices, hours). If you couldn't find something, say plainly what you found and what's missing, in one \
+or two sentences: no generic filler, no guessing, and don't just send the user to search themselves.
 - To review, critique or explain a whole code project: review_github_repo for a GitHub link, review_mac_folder for \
 a folder on this Mac. Call it once; don't read the files one by one.
 - FILES ON THIS MAC and APPLE CALENDAR (not the device): mac_list, mac_find and mac_read look inside the folders \
@@ -3311,8 +3335,9 @@ HOME_GROUPS = {
     "mac": DEVICE_GROUPS["mac"],
 }
 CORE_DEVICE = ["list_folder", "read_file", "read_attachment", "propose_edit", "propose_restore", "propose_undo",
-               "test_connection", "web_search", "read_web_page", "ask_claude", "propose_plan", "show_settings"]
-CORE_HOME = ["list_devices", "open_device", "web_search", "read_web_page"]
+               "test_connection", "web_search", "read_web_page", "ask_claude", "propose_plan", "show_settings",
+               "places_nearby"]
+CORE_HOME = ["list_devices", "open_device", "web_search", "read_web_page", "places_nearby"]
 
 
 def _group_of(groups):
@@ -3405,6 +3430,9 @@ def chat_turn(st, user_text, emit, user_msg=None):
     tools, names = choose_tools(st, all_tools, groups, core, question)
     all_names = {t["function"]["name"] for t in all_tools}
     system = trim_system(system, all_names, names)
+    # At the end, so the unchanging start of the prompt can be reused by Ollama from one question to the next.
+    system += "\n\nRight now it is %s (%s, this Mac's time zone)." % (
+        time.strftime("%A %Y-%m-%d %H:%M"), time.strftime("%Z") or "local time")
     tools = claude_tools(tools) + [use_tools_spec(groups, st.tool_groups)]
     st.tool_ctx = {"all": all_tools, "groups": groups, "list": tools, "system": SYSTEM if not getattr(st, "home", False)
                    else home_system(), "all_names": all_names}
@@ -3602,6 +3630,7 @@ STEP_WORDS = {
     "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "read_repo_file": "Reading {path} in {repo}", "check_build_tools": "Checking the build tools",
     "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
     "read_web_page": "Reading {url}", "review_github_repo": "Reviewing {repo}",
+    "places_nearby": "Looking up {kind} places near {place}",
     "review_mac_folder": "Reviewing {path}", "setup_firmware_helper": "Preparing the helper app",
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
