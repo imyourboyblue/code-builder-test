@@ -71,8 +71,8 @@ def cloud(model_id, fallback=""):
 # ---------------------------------------------------------------- Automatic: pick the model for the job
 
 AUTO = "auto"
-AUTO_LABEL = ("Automatic", "Uses the fast model for questions and lookups, and the stronger one for builds, fixes "
-                           "and plans.")
+AUTO_LABEL = ("Automatic", "Picks one of four layers for each answer: quick, everyday, hard, and a second opinion "
+                           "when stuck. Choose each layer's model in Setup → AI.")
 # Which local model does which job, by text in its name (first one installed wins). Edit to change the picks.
 FAST = ["35b-a3b", "30b-a3b", "a3b", "14b", "12b", "8b", "7b"]
 STRONG = ["27b", "32b", "70b", "35b", "30b", "coder"]
@@ -190,8 +190,27 @@ def picks(names):
     return fast, strong
 
 
-def needs_strong(messages):
-    """(True/False, plain reason) for the next answer, from the chat so far."""
+# The four layers Automatic climbs: (key, name in Setup, when it's used)
+LAYERS = [
+    ("quick", "1. Quick answers", "Short questions and lookups."),
+    ("everyday", "2. Everyday help", "Most questions, checks and small fixes."),
+    ("hard", "3. Hard problems", "Builds, plans, crashes and anything that failed once."),
+    ("second", "4. Second opinion", "When the step failed twice: a different model takes a fresh look."),
+]
+LAYER_KEYS = [k for k, _, _ in LAYERS]
+
+
+def layer_models(names, chosen=None):
+    """{layer: model} from what's installed. A model picked in Setup wins if it's still installed;
+    otherwise PatchBay picks: quick = everyday = the fast model, hard = the strong one, second = Gemma or hard."""
+    chosen = chosen or {}
+    fast, strong = picks(names)
+    default = {"quick": fast, "everyday": fast, "hard": strong, "second": second(names) or strong}
+    return {k: chosen.get(k) if chosen.get(k) in names else default[k] for k in LAYER_KEYS}
+
+
+def which_layer(messages):
+    """(layer, plain reason) for the next answer, from the chat so far."""
     last_user, tools = "", []
     for m in reversed(messages):
         if m.get("role") == "tool":
@@ -200,28 +219,27 @@ def needs_strong(messages):
             last_user = str(m.get("content") or "")
             break
         if m.get("role") == "user" and "approved the plan" in str(m.get("content") or ""):
-            return True, "carrying out a plan"
+            return "hard", "carrying out a plan"
     fails = sum(1 for t in tools[:6] if re.search(r"(?i)\b(failed|error)\b", t[:400]))
     if fails >= 2:
         return "second", "stuck: a second opinion"
     if fails:
-        return True, "a step failed"
+        return "hard", "a step failed"
     m = HARD_WORDS.search(last_user)
     if m:
-        return True, "%s job" % m.group(1).lower()
-    return False, "a quick question"
+        return "hard", "%s job" % m.group(1).lower()
+    if not tools and len(last_user) <= 80:
+        return "quick", "a short question"
+    return "everyday", "everyday help"
 
 
-def choose(ollama_url, messages):
-    """The model to use with Automatic on, and a short label like "Everyday help: a quick question"."""
+def choose(ollama_url, messages, chosen=None):
+    """The model to use with Automatic on, and a short label like "Quick answers: a short question"."""
     names = installed(ollama_url)
-    fast, strong = picks(names)
-    hard, why = needs_strong(messages)
-    model = strong if hard else fast
-    if hard == "second":
-        model = second(names) or strong
-        if model == strong:
-            why = "a step failed twice"
+    layers = layer_models(names, chosen)
+    layer, why = which_layer(messages)
+    model = layers[layer]
     if not model:
         return None, ""
-    return model, "%s model (%s)" % (local(model)[0], why)
+    name = dict((k, n) for k, n, _ in LAYERS)[layer].split(". ", 1)[1]
+    return model, "%s: %s, %s" % (name, why, local(model)[0])

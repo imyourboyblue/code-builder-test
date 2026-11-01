@@ -217,6 +217,10 @@ new, the AI researches it and saves what it learned, so next time it already kno
 description, their download size and whether they fit in your Mac's memory, each with a **Download** button. The
 list is in `model_labels.py` (CATALOG); Setup checks each name with Ollama's library before offering it.
 
+**Automatic's layers** (also in Setup → AI) are four steps Automatic climbs as a job gets harder: 1. Quick answers,
+2. Everyday help, 3. Hard problems, 4. Second opinion (when a step fails twice). Each has a menu of your installed
+models, or **PatchBay picks**.
+
 **The AI model menu** (above the chat) shows what each model is for, not its version:
 - **Automatic** (recommended): uses the fast model (Everyday help) for questions and lookups, and switches to the
   stronger one (Hard problems and building) for builds, fixes, updates, plans, or after a step fails. The progress

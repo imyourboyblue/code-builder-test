@@ -1064,6 +1064,14 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
   h+=opts.length?'<div class="md-list">'+opts.map(m=>'<label class="md-row'+(j.current===m.name?' on':'')+'"><input type="radio" name="md-use" value="'+esc(m.name)+'" data-l="'+esc(m.label)+'"'+(j.current===m.name?' checked':'')+'>'+
       '<div><b>'+esc(m.label)+'</b>'+(m.size?' '+chip(esc(m.size)):'')+'<div class="md-why">'+esc(m.why||'')+(m.name!=='auto'?' <span class="md-id">'+esc(m.name)+'</span>':'')+'</div></div></label>').join('')+'</div>'
     :(j.error?'':'<div>No models yet. Get one below.</div>');
+  // Automatic's four layers: which model each one uses
+  if(j.installed.length){const lab=n=>{const m=j.installed.find(x=>x.name===n);return m?m.label:n};
+    h+='<div class="md-head" style="margin-top:12px">Automatic\'s layers <span>'+(j.current==='auto'?'Automatic climbs these as a job gets harder.':'Used when Automatic is picked above.')+'</span></div>'+
+      '<div class="md-list">'+j.layers.map(L=>'<div class="md-row" style="cursor:default;align-items:center"><div><b>'+esc(L.name)+'</b><div class="md-why">'+esc(L.when)+'</div></div>'+
+        '<select class="md-layer" data-k="'+L.key+'" style="max-width:48%">'+
+        '<option value="">PatchBay picks'+(L.auto?' ('+esc(lab(L.auto))+')':'')+'</option>'+
+        j.installed.map(m=>'<option value="'+esc(m.name)+'"'+(L.chosen===m.name?' selected':'')+'>'+esc(m.label)+' · '+esc(m.name)+'</option>').join('')+
+        '</select></div>').join('')+'</div>'}
   // Free ones to download, tucked away until wanted
   const free=j.catalog.filter(c=>!c.installed),ok=free.filter(c=>c.fits!=='no'),big=free.filter(c=>c.fits==='no');
   const dl=c=>'<div class="md-row dl"><div style="flex:1"><b>'+esc(c.best)+'</b> '+chip((c.exact?'':'~')+c.gb+' GB')+
@@ -1081,6 +1089,8 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
     '<div id="md-msg" style="font-size:13px"></div>';
   box.innerHTML=h;
   box.querySelectorAll('input[name=md-use]').forEach(r=>r.onchange=async()=>{try{await postJSON('/api/model',{model:r.value});info.model=r.value;loadModels();drawModels('Now using: '+r.dataset.l)}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
+  box.querySelectorAll('.md-layer').forEach(sel=>sel.onchange=async()=>{const layers={};box.querySelectorAll('.md-layer').forEach(x=>{if(x.value)layers[x.dataset.k]=x.value});
+    try{await postJSON('/api/models/layers',{layers});loadModels();drawModels('Saved Automatic\'s layers.')}catch(e){$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}

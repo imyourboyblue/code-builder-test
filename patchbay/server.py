@@ -2487,7 +2487,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
     messages = [{k: v for k, v in m.items() if k != "claude"} if "claude" in m else m for m in messages]
     model = model or cfg["ollama_model"]
     if model == model_labels.AUTO:
-        model, why = model_labels.choose(ollama_url(cfg), messages)
+        model, why = model_labels.choose(ollama_url(cfg), messages, cfg.get("model_layers"))
         if not model:
             raise ToolError("Ollama has no models downloaded yet, so Automatic has nothing to pick from.")
         if emit:
@@ -3343,6 +3343,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             mem = mac_memory_gb() if here else None
             self.json({"installed": installed, "current": cfg["ollama_model"], "error": err, "where": core.ai_where(cfg),
                        "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL),
+                       "layers": [{"key": k, "name": n, "when": w, "chosen": (cfg.get("model_layers") or {}).get(k) or "",
+                                   "auto": model_labels.layer_models(names).get(k)} for k, n, w in model_labels.LAYERS],
                        "auto": model_labels.AUTO_LABEL[1]})
         elif path == "/api/laptop":
             cfg = APP.home.cfg()
@@ -3375,10 +3377,9 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             fast, strong = model_labels.picks([m["name"] for m in models])
             if fast:
                 lab = dict((m["name"], m["label"]) for m in models)
-                sec = model_labels.second([m["name"] for m in models])
-                why = model_labels.AUTO_LABEL[1] + (" Fast: %s. Stronger: %s." % (lab.get(fast), lab.get(strong))
-                                                     if strong != fast else "") + (
-                    " When both are stuck: %s." % lab.get(sec) if sec else "")
+                lay = model_labels.layer_models([m["name"] for m in models], cfg.get("model_layers"))
+                why = "Picks a layer for each answer. " + " ".join(
+                    "%s uses %s." % (n.split(". ", 1)[1], lab.get(lay[k], lay[k])) for k, n, _ in model_labels.LAYERS)
                 models.insert(0, {"name": model_labels.AUTO, "size": "", "label": model_labels.AUTO_LABEL[0],
                                   "why": why})
             self.json({"current": cfg["ollama_model"], "models": models, "error": err, "where": core.ai_where(cfg)})
@@ -3777,6 +3778,20 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except claude.ClaudeError as e:
                 raise ToolError(str(e))
             self.json(dict(APP.claude.public(), answer=answer[:200]))
+        elif path == "/api/models/layers":
+            layers = {}
+            for k in model_labels.LAYER_KEYS:
+                v = str((data.get("layers") or {}).get(k) or "").strip()
+                if v and not re.match(r"^[\w.:/-]{1,100}$", v):
+                    raise ToolError("That isn't a model name.")
+                if v:
+                    layers[k] = v
+            cfg = APP.home.cfg()
+            main = str(APP.registry.main)
+            old = json.loads(Path(main).read_text()).get("model_layers")
+            if (old or {}) != layers:
+                devices.apply_changes(cfg, [(main, "model_layers", old, layers)])
+            self.json({"layers": layers})
         elif path == "/api/models/pull":
             name = (data.get("model") or "").strip()
             if name not in [c[0] for c in model_labels.CATALOG]:

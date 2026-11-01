@@ -98,7 +98,8 @@ def unique_dir(parent, stamp):
 
 
 # Settings shared by every device. Files in devices/ take these from config.json.
-GLOBAL_KEYS = ["data_folder", "ollama_url", "ollama_model", "chat_context", "lan_access", "port", "auto_mac_steps"]
+GLOBAL_KEYS = ["data_folder", "ollama_url", "ollama_model", "chat_context", "lan_access", "port", "auto_mac_steps",
+               "model_layers"]
 DEVICES_DIR = HERE / "devices"
 
 
@@ -1076,7 +1077,7 @@ def cmd_explain(cfg, args):
     model = cfg["ollama_model"]
     if model == "auto":
         import model_labels
-        model = model_labels.picks(model_labels.installed(url))[1] or model
+        model = model_labels.layer_models(model_labels.installed(url), cfg.get("model_layers"))["hard"] or model
     body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "user", "content": prompt}],
                        "options": {"num_ctx": 32768}}).encode()

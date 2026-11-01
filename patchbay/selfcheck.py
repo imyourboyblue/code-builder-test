@@ -32,7 +32,8 @@ def _ollama(app):
     want = cfg.get("ollama_model")
     if want == "auto":
         import model_labels
-        fast, strong = model_labels.picks(models)
+        lay = model_labels.layer_models(models, cfg.get("model_layers"))
+        fast, strong = lay["everyday"], lay["hard"]
         if not fast:
             return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
                         "In Terminal run: ollama pull qwen3.6:35b-a3b")
@@ -191,6 +192,10 @@ def _second_opinion(app):
     name = "Second opinion AI model"
     cfg = app.home.cfg()
     names = model_labels.installed(server.ollama_url(cfg))
+    picked = (cfg.get("model_layers") or {}).get("second")
+    if picked and picked in names:
+        return ok("second", name, "%s (picked in Setup → AI). Automatic asks it when the usual models fail the same "
+                                  "step twice." % picked)
     if model_labels.second(names):
         return ok("second", name, "Installed (%s). Automatic asks it when the usual models fail the same step twice."
                   % model_labels.second(names))
