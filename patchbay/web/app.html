@@ -281,6 +281,12 @@ border:2px solid var(--line)}
 .modal .bad{color:var(--bad)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
+.sw-row{display:flex!important;align-items:center;gap:12px;justify-content:space-between;color:var(--ink)!important;font-size:13.5px!important;margin:0!important;cursor:pointer}
+.switch{position:relative;flex:none;width:42px;height:24px}.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.switch span{position:absolute;inset:0;border-radius:12px;background:var(--line);transition:background .15s}
+.switch span::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
+.switch input:checked+span{background:var(--ok)}.switch input:checked+span::after{transform:translateX(18px)}
+.switch input:disabled+span{opacity:.5}.switch input:focus-visible+span{outline:2px solid var(--ink);outline-offset:2px}
 .sc-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:10px}
 .sc-tab{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px;color:var(--mute);font-weight:600}
 .sc-tab.on{color:var(--ink);border-bottom-color:var(--ink)}
@@ -993,7 +999,7 @@ $('chats-btn').onclick=async e=>{e.stopPropagation();const l=$('chatlist');if(l.
     if(busy)return;try{await postJSON('/api/chats/open',{device:cur,id:it.dataset.id});l.style.display='none';loadChat()}catch(x){alert(x.message)}})};
 document.addEventListener('click',e=>{if(!$('chatlist').contains(e.target))$('chatlist').style.display='none'});
 // ---- Setup: self-check with Fix buttons, the app icon / start at login, and the error report
-const LV={ok:['✅','var(--ok,#2a7)'],warn:['⚠️','var(--warn,#b80)'],bad:['❌','var(--bad)']};
+const LV={ok:['<span style="color:var(--ok)">●</span>','var(--ok,#2a7)'],warn:['⚠️','var(--warn,#b80)'],bad:['❌','var(--bad)']};
 async function openSetup(msg){
   modal('<h3>🩺 Setup</h3><div id="sc-body">Checking…</div>');$('box').classList.add('setup');
   let j;try{j=await getJSON('/api/selfcheck')}catch(e){$('sc-body').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>';return}
@@ -1007,20 +1013,21 @@ async function openSetup(msg){
   const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App & laptop'],['look','Look'],['data','Updates & data']];
   $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
     '<div class="sc-tabs">'+tabs.map(t=>'<button class="sc-tab" data-tab="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
-    pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0;color:var(--ok)">✅ Everything is working.</div>')+
+    pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0">Everything is working.</div>')+
       (good.length?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">'+good.length+' thing'+(good.length===1?'':'s')+' working fine</summary>'+good.map(chk).join('')+'</details>':'')+
       '<h4 style="margin:14px 0 4px">Something not working?</h4><div style="font-size:13.5px">This copies a report (versions, these checks and recent errors, never passwords or keys) that you can paste to me.</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-report" class="primary">Copy error report</button><button id="sc-again">Check again</button></div>')+
     pane('ai','<div id="sc-models" style="font-size:13.5px">Looking for models…</div>'+
       '<h4 style="margin:16px 0 4px">Where the AI runs</h4><div id="sc-ai" style="font-size:13.5px">Checking…</div>')+
     pane('app',(a.mac?'<h4 style="margin:0 0 4px">Starting PatchBay</h4>'+
-      '<div style="font-size:13.5px">'+(a.app?(a.native?'✅ The PatchBay app (with its own window) is in your Applications folder. Drag it onto the Dock to start PatchBay with one click.':'✅ The PatchBay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a PatchBay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
+      '<div style="font-size:13.5px">'+(a.app?(a.native?'The PatchBay app (with its own window) is in your Applications folder. Drag it onto the Dock to start PatchBay with one click.':'The PatchBay app is in your Applications folder, as a simple launcher that opens your browser.'+(a.note?' '+esc(a.note):'')+' Rebuild it to get the version with its own window.'):'Make a PatchBay app with its own window that you can keep in the Dock, so you don\'t need Terminal.')+'</div>'+
       '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sc-app" class="'+(a.app?'':'primary')+'">'+(a.app?'Rebuild the app':'Make the PatchBay app')+'</button>'+
       (a.no_tools?'<button id="sc-tools" class="primary">Install Apple\'s free tools</button>':'')+(a.build_error?'<button id="sc-berr">Copy the build error</button>':'')+
-      '<label style="display:flex;gap:6px;align-items:center;margin:0;color:inherit"><input type="checkbox" id="sc-login" style="width:auto"'+(a.login?' checked':'')+'> Start PatchBay by itself when I log in to the Mac</label></div>'+
+      '</div><div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><label class="sw-row"><span><b>Start at login</b><span class="md-why" style="display:block">Start PatchBay by itself when you log in to the Mac.</span></span>'+
+      '<span class="switch"><input type="checkbox" id="sc-login"'+(a.login?' checked':'')+'><span></span></span></label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
-      '<h4 style="margin:16px 0 4px">Laptop access</h4><div id="sc-lap" style="font-size:13.5px">Checking…</div>')+
+      '<div id="sc-lap" style="font-size:13.5px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">Checking…</div>')+
     pane('look','<div id="sc-look"></div>')+
     pane('data','<h4 style="margin:0 0 4px">Updates</h4><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
       '<h4 style="margin:16px 0 4px">Start over</h4><div style="font-size:13.5px">Delete what PatchBay keeps on this Mac for all devices (backups, scans, history, chats). You pick what goes; nothing on the devices is touched.</div>'+
@@ -1098,27 +1105,30 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j;
 // ---- Laptop access: open PatchBay from another computer at home
 async function drawLaptop(note){const box=$('sc-lap');if(!box)return;let j;
   try{j=await getJSON('/api/laptop')}catch(e){box.textContent=e.message;return}
-  let h=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'');
-  if(j.on){h+='<div style="color:var(--ok)">✅ On. On your laptop (same Wi-Fi), open one of these and sign in with your laptop password:</div>'+
+  let h=(note?'<div style="margin-bottom:4px"><b>'+esc(note)+'</b></div>':'')+
+    '<label class="sw-row"><span><b>Laptop access</b><span class="md-why" style="display:block">Open PatchBay from your laptop\'s web browser. The Mac does all the work.</span></span>'+
+    '<span class="switch"><input type="checkbox" id="lap-sw"'+(j.on?' checked':'')+(j.here?'':' disabled')+'><span></span></span></label>';
+  if(!j.here)h+='<div class="md-why">Only the Mac can change this.</div>';
+  h+='<div id="lap-pwbox" hidden><label>Laptop password (at least 8 characters)<input id="lap-pw" type="password" autocomplete="new-password"></label><label>Type it again<input id="lap-pw2" type="password" autocomplete="new-password"></label>'+
+    '<div style="margin-top:6px;display:flex;gap:6px"><button id="lap-go" class="primary">Turn on</button><button id="lap-cancel">Cancel</button></div></div>';
+  if(j.on){h+='<div style="margin-top:6px">On your laptop (same Wi-Fi), open this and sign in with your laptop password:</div>'+
     (j.addresses.length?j.addresses.map(a=>'<div style="display:flex;gap:6px;align-items:center;margin-top:4px"><code style="font-size:14px;user-select:all">'+esc(a)+'</code><button class="lap-copy" data-a="'+esc(a)+'">Copy</button></div>').join('')
       :'<div>Couldn\'t work out this Mac\'s address. Find it in System Settings → Wi-Fi → Details → IP address, and add :'+j.port+'.</div>')+
-    '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">If the Mac asked whether Python may accept incoming connections, it needs <b>Allow</b>. Keep the Mac awake while you use it.</div>'+
-    (j.here?'<div style="margin-top:6px"><button id="lap-off">Turn off</button></div>':'');}
-  else if(!j.here){h+='<div>Only the Mac can change this.</div>'}
-  else{h+='<div>Off. Turn it on to open PatchBay from your laptop\'s web browser. The Mac does all the work; the laptop needs nothing installed.</div>'+
-    (j.has_password?'':'<label>Laptop password (at least 8 characters)<input id="lap-pw" type="password" autocomplete="new-password"></label><label>Type it again<input id="lap-pw2" type="password" autocomplete="new-password"></label>')+
-    '<div style="margin-top:6px"><button id="lap-on" class="primary">Turn on (PatchBay restarts)</button></div>'}
+    '<div class="md-why" style="margin-top:4px">If the Mac asked whether Python may accept incoming connections, it needs Allow. Keep the Mac awake while you use it.</div>'}
   box.innerHTML=h+'<div id="lap-msg" style="font-size:13px;margin-top:4px"></div>';
-  const m=t=>$('lap-msg').innerHTML=t;
+  const m=t=>$('lap-msg').innerHTML=t,sw=$('lap-sw');
   box.querySelectorAll('.lap-copy').forEach(b=>b.onclick=async()=>{b.textContent=(await copyText(b.dataset.a))?'Copied':'Select it and copy'});
-  const go=async(on)=>{const body={on};if(on&&!j.has_password){const a=$('lap-pw').value,b=$('lap-pw2').value;
-      if(a.length<8)return m('<span style="color:var(--bad)">Use at least 8 characters.</span>');if(a!==b)return m('<span style="color:var(--bad)">The two passwords don\'t match.</span>');body.password=a}
-    m('Restarting PatchBay…');
+  const go=async(on,password)=>{const body={on};if(password)body.password=password;
+    sw.disabled=true;m('Restarting PatchBay…');
     try{const r=await postJSON('/api/laptop',body);if(!r.restarting)return drawLaptop();
       await new Promise(ok=>setTimeout(ok,2500));
       for(let i=0;i<40;i++){try{await getJSON('/api/laptop');return drawLaptop(on?'Laptop access is on.':'Laptop access is off.')}catch(e){await new Promise(ok=>setTimeout(ok,1000))}}
-      m('PatchBay didn\'t come back by itself. Start it again from the Dock.')}catch(e){m('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
-  const on=$('lap-on');if(on)on.onclick=()=>go(true);const off=$('lap-off');if(off)off.onclick=()=>go(false);}
+      m('PatchBay didn\'t come back by itself. Start it again from the Dock.')}catch(e){sw.checked=!on;sw.disabled=false;m('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
+  sw.onchange=()=>{if(sw.checked&&!j.has_password){$('lap-pwbox').hidden=false;$('lap-pw').focus();return}go(sw.checked)};
+  $('lap-cancel').onclick=()=>{sw.checked=false;$('lap-pwbox').hidden=true;m('')};
+  $('lap-go').onclick=()=>{const a=$('lap-pw').value,b=$('lap-pw2').value;
+    if(a.length<8)return m('<span style="color:var(--bad)">Use at least 8 characters.</span>');if(a!==b)return m('<span style="color:var(--bad)">The two passwords don\'t match.</span>');
+    $('lap-pwbox').hidden=true;go(true,a)};}
 
 // ---- Where the AI runs: this Mac, or another computer at home (e.g. a desktop with more power)
 async function drawAiComputer(note){const box=$('sc-ai');if(!box)return;let j;
@@ -1223,7 +1233,7 @@ async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;
   try{u=await getJSON('/api/update')}catch(e){box.textContent=e.message;return}
   if(!$('sc-upd'))return;
   if(u.error){box.innerHTML='<span style="color:var(--bad)">'+esc(u.error)+'</span>';return}
-  if(!u.behind){box.innerHTML='✅ PatchBay is up to date'+(u.current?' <span style="color:var(--mute)">(version '+esc(u.current)+')</span>':'')+'.';setUpdBadge(false);return}
+  if(!u.behind){box.innerHTML='PatchBay is up to date'+(u.current?' <span style="color:var(--mute)">(version '+esc(u.current)+')</span>':'')+'.';setUpdBadge(false);return}
   setUpdBadge(true);
   box.innerHTML='<b>An update is ready</b> ('+u.behind+' change'+(u.behind>1?'s':'')+'):<ul style="margin:4px 0;max-height:140px;overflow:auto">'+u.changes.map(c=>'<li>'+esc(c)+'</li>').join('')+'</ul>'+
     (u.edited.length&&!u.own?'<div class="riskbox" style="border-color:var(--warn)"><b style="color:var(--warn)">Some PatchBay files were changed on this Mac:</b> '+esc(u.edited.map(e=>e.split('/').pop()).join(', '))+'. '+
