@@ -3498,8 +3498,10 @@ def last_question(st):
                  and not str(m.get("content") or "").startswith("[")), "")
 
 
-def compact_history(messages, keep=8, short=500):
-    """What the AI is sent: older long step results are shortened (the chat itself keeps them whole)."""
+def compact_history(messages, keep=8, short=500, budget=None):
+    """What the AI is sent: older long step results are shortened (the chat itself keeps them whole). With budget
+    (characters left for the conversation), results are shortened oldest first until it fits, so a question with
+    several big web pages or files can't overfill the AI's memory."""
     tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     old = set(tool_idx[:-keep]) if len(tool_idx) > keep else set()
     out = []
@@ -3509,7 +3511,40 @@ def compact_history(messages, keep=8, short=500):
             m = dict(m, content=c[:short] + "\n[... older result shortened. Run the step again if you need all "
                                             "of it.]")
         out.append(m)
+    if not budget:
+        return out
+
+    def size():
+        return sum(len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or "")) for m in out)
+
+    def cut(i, n):
+        c = out[i].get("content")
+        if isinstance(c, str) and len(c) > n + 200:
+            out[i] = dict(out[i], content=c[:n] + "\n[... shortened to save the AI's memory. Run the step again "
+                                                "for the rest.]")
+    tools_now = [i for i, m in enumerate(out) if m.get("role") == "tool"]
+    for limit, which in ((short, tools_now[:-2]), (3000, tools_now[-2:]), (300, tools_now)):
+        for i in which:
+            if size() <= budget:
+                return out
+            cut(i, limit)
+    # Still too big (a very long chat): shorten older messages, keeping the newest question whole.
+    last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=len(out))
+    for i in range(len(out)):
+        if size() <= budget:
+            break
+        if i != last_user:
+            cut(i, 200)
     return out
+
+
+def history_budget(cfg, system, tools):
+    """Characters of conversation that fit next to the instructions and tools, leaving room for the answer."""
+    ctx = int(cfg.get("chat_context", 32768))
+    fixed = len(system) + len(json.dumps(tools or []))
+    # About 3 characters per token (code and web pages pack tighter than plain English); 6k tokens kept for the
+    # answer and its thinking.
+    return max(4000, (ctx - 6000) * 3 - fixed)
 
 
 def project_rules(st, names):
@@ -3619,7 +3654,8 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                                                                "far. Its advice, to weigh and use if it helps:\n%s]"
                                                                % advice})
         t0 = time.time()
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + compact_history(st.messages), tools, emit)
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + compact_history(
+            st.messages, budget=history_budget(cfg, system, tools)), tools, emit)
         st.timing.append(("AI", time.time() - t0))
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
