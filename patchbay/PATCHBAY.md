@@ -6,6 +6,7 @@ put a PATCHBAY.md in the project's folder with its build command, style and what
 ## Build and check
 - There is no build step. Python files must compile (the change card checks this).
 - After a change to a .py file, offer propose_patchbay_restart. Changes to web/app.html only need a page reload.
+- Tests: `python3 -m unittest discover -s tests -t .` (run them after changing anything in harness/).
 
 ## Style
 - Python standard library only (no pip installs). Must work on Python 3.9 and newer.
@@ -19,3 +20,5 @@ put a PATCHBAY.md in the project's folder with its build command, style and what
 - The AI address must stay on this Mac or the home network.
 - Network scans: own network only, no password guessing, no attacks.
 - config.json, passwords and anything in data-cache.
+- The private builder (harness/): the privacy check in harness/sanitizer.py, the preview card before sending, and
+  that only the spec goes to Claude (one fresh request: no chat, memory, paths or device details).

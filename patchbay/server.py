@@ -83,6 +83,7 @@ import firmware
 import nro
 import platforms
 import projects
+from harness import coder as harness_coder, compiler as harness_compiler, pipeline as harness_pipeline, sanitizer
 import filemanager as fm
 import webauth
 
@@ -665,7 +666,7 @@ def runs_by_itself(cfg, kind, extra):
 def in_plan(plan, kind, extra):
     """Whether an approved plan covers this Mac step. Risky commands only if the plan listed them and the user
     ticked "I understand" on it."""
-    if kind == "ask_claude":
+    if kind in ("ask_claude", "spec_claude", "spec_files"):
         return False
     cmd = (extra or {}).get("command") or ""
     if kind == "command" and risk.risky(cmd):
@@ -2992,6 +2993,8 @@ def claude_tools(tools):
             seen.add(n)
             uniq.append(t)
     tools = uniq
+    if not (APP and APP.claude.settings().get("spec_pipeline")):
+        tools = [t for t in tools if t["function"]["name"] != "private_build"]
     mode = APP.claude.mode() if APP else "off"
     if mode in ("off", "always"):
         return [t for t in tools if t["function"]["name"] != "ask_claude"]
@@ -3017,7 +3020,7 @@ LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_sea
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
-                  "propose_device_command"}
+                  "propose_device_command", "private_build"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -3078,6 +3081,172 @@ def research_done(st):
             first = next((l.strip() for l in str(m.get("content") or "").splitlines() if l.strip()), "")
             out.append("%s: %s" % (m["tool_name"], first[:160]))
     return list(reversed(out))
+
+
+# ----------------------------------------------------------------- the private builder (harness/)
+# The local AI writes a generic spec of the user's idea; the spec is checked for anything private; the user sees the
+# exact spec and presses Send; only the spec goes to Claude, as one fresh request; the files come back on a second
+# card and are saved with a backup and Undo (Setup → Mac). Off until the user turns it on in the ☁ Claude panel.
+
+PRIVATE_BUILDS = Path(os.path.expanduser(str(projects.PROJECTS_HOME))) / "private-builds"
+
+
+def spec_terms():
+    """Every personal value PatchBay knows, for the check (never sent anywhere)."""
+    extra = claude_known() + [("mac", APP.computer if APP else "")]
+    return harness_pipeline.auto_terms(APP.registry.main if APP else None, extra)
+
+
+def spec_access_cfg():
+    """The approved Mac folders, plus PatchBay's own private-builds folder."""
+    cfg = dict(access_cfg())
+    cfg["mac_folders"] = list(cfg.get("mac_folders") or []) + [str(PRIVATE_BUILDS)]
+    return cfg
+
+
+def spec_block_list():
+    try:
+        return sanitizer.load_list()
+    except ValueError as e:
+        raise ToolError(str(e))
+
+
+@tool("private_build",
+      "Private builder: turn the user's idea into working code written by Claude, without Claude ever seeing who they "
+      "are or what it's for. The AI on this Mac writes a generic spec, PatchBay checks it for anything private, the "
+      "user sees the exact spec on a card and presses Send, then Claude's files are saved after a second card. Use "
+      "it only when the user asks for the private builder (or a private / anonymous spec for Claude). Pass the "
+      "user's idea in their own words, with every detail they gave.",
+      {"idea": dict(S, description="The user's idea, in full"),
+       "name": dict(S, description="A short neutral name for the folder, like csv-merger"),
+       "folder": dict(S, description="Optional: where the files go (an approved Mac folder). Default: "
+                                     "~/Patchbay-projects/private-builds/<name>"),
+       "allow": {"type": "array", "items": S, "description": "Only words the user said are fine to send after the "
+                                                             "double-check flagged them"}}, ["idea"])
+def t_private_build(st, emit, a):
+    s = APP.claude.settings()
+    if not s.get("spec_pipeline"):
+        raise ToolError("The private builder is off. The user can turn it on in the ☁ Claude panel (above the chat).")
+    if not s.get("key"):
+        raise ToolError("There's no Claude API key yet. The user can add one in the ☁ Claude panel.")
+    try:
+        APP.claude.check_cap()
+    except claude.ClaudeError as e:
+        raise ToolError(str(e))
+    idea = (a.get("idea") or "").strip() or next(
+        (str(m.get("content")) for m in reversed(st.messages) if m.get("role") == "user"
+         and not str(m.get("content", "")).startswith("[")), "")
+    name = harness_pipeline.slug(a.get("name") or " ".join(idea.split()[:4]))
+    folder = ma(macaccess.resolve, spec_access_cfg(), a.get("folder") or str(PRIVATE_BUILDS / name), False)
+    blocked = spec_block_list()
+    terms = spec_terms()
+    cfg = st.cfg()
+    try:
+        url, local = harness_pipeline.local_ai(ollama_url(cfg), None, s)
+    except harness_pipeline.PipelineError as e:
+        raise ToolError(str(e))
+
+    def log(text):
+        check_stop()
+        emit({"type": "status", "text": text})
+    try:
+        spec, found, suspects = harness_pipeline.make_spec(idea, url, local, terms, blocked, s.get("spec_leak_check"),
+                                                           a.get("allow") or [], log, urlopen=stopper.urlopen)
+    except harness_compiler.CompileError as e:
+        check_stop()
+        raise ToolError(str(e))
+    rec = harness_pipeline.record_dir(name)
+    (rec / "spec_sanitized.md").write_text(spec, "utf-8")
+    if leaks_private(st, spec):
+        found.append({"kind": "mac", "what": "words from your own Mac files or calendar that this chat read",
+                      "shown": "(hidden)", "line": 1})
+    if found or suspects:
+        why = harness_pipeline.problems_text(found, suspects)
+        emit({"type": "note", "text": "**Private builder: stopped. Nothing was sent to Claude.** The spec still had "
+                                      "private details:\n\n%s\n\nThe spec is kept on this Mac in %s.%s" % (
+                                          why, rec, "" if found else " If those words are fine to send, say so and "
+                                          "I'll try again with them allowed."), "kind": "private_build"})
+        return ("Stopped before sending: the spec still has private details (listed to the user). Nothing was sent. "
+                "Tell the user in one sentence. Only if they say the double-check's words are fine, call "
+                "private_build again with those words in allow. Never put words from the block list there.")
+    model = s.get("spec_model") or claude.DEFAULTS["spec_model"]
+    _, cost = harness_pipeline.estimate(spec, model)
+    label = re.sub(r"\s*\(.*\)$", "", claude.MODELS.get(model, (model,))[0])
+    emit({"type": "note", "text": "The spec passed the privacy check. Rough cost to send it: %s" % cost})
+    return add_pending(st, emit, "spec_claude", cfg, "Claude", rec, name,
+                       "Send this spec to Claude (%s)" % label, spec, on_mac=True,
+                       extra_fields={"spec": spec, "model": model, "folder": str(folder), "name": name,
+                                     "record": str(rec)})
+
+
+HOME_TOOLS.append(TOOLS[-1])
+HOME_HANDLERS["private_build"] = t_private_build
+
+
+def spec_file_changes(root, files):
+    """The planned writes for Claude's files, the card text, and files PatchBay won't write (kept in the record)."""
+    cfg = spec_access_cfg()
+    changes, parts, skipped = [], [], []
+    for rel, content in files:
+        try:
+            p = macaccess.resolve(cfg, str(Path(root) / rel), must_exist=False)
+        except macaccess.AccessError as e:
+            skipped.append(rel)
+            continue
+        if p.exists():
+            old = p.read_text("utf-8", "replace")
+            parts.append("".join(difflib.unified_diff(old.splitlines(True), content.splitlines(True),
+                                                      "before: %s" % rel, "after: %s" % rel, n=3)) or
+                         "%s: no change\n" % rel)
+        else:
+            parts.append("New file: %s (%d lines)\n%s" % (rel, content.count("\n") + 1, content))
+        changes.append({"action": "write", "path": str(p), "content": content})
+    return changes, "\n\n".join(parts), skipped
+
+
+def confirm_spec(st, p, emit):
+    if p["kind"] == "spec_claude":
+        rec = Path(p["record"])
+        emit({"type": "status", "text": "Claude is writing the code from the spec. This can take a few minutes..."})
+        try:
+            files, notes = harness_pipeline.send(APP.claude, p["spec"], p["model"], spec_terms(), spec_block_list())
+        except (claude.ClaudeError, harness_coder.CodeError, harness_pipeline.PipelineError) as e:
+            check_stop()
+            emit({"type": "answer", "text": "The private build didn't work: %s" % e})
+            st.messages.append({"role": "user", "content": "[The private build failed: %s]" % e})
+            return
+        finally:
+            claude_cost(emit)
+        (rec / "claude-files.json").write_text(json.dumps({"notes": notes, "files": dict(files)}, indent=1), "utf-8")
+        changes, text, skipped = spec_file_changes(p["folder"], files)
+        if notes:
+            emit({"type": "note", "text": "**Claude's notes:**\n\n" + notes})
+        if skipped:
+            emit({"type": "note", "text": "These won't be saved (PatchBay never writes files that look like "
+                                          "passwords or keys, or outside the folder): %s. Their text is kept in %s."
+                                          % (", ".join(skipped), rec / "claude-files.json")})
+        if not changes:
+            emit({"type": "answer", "text": "Claude sent files, but none can be saved in %s." % p["folder"]})
+            return
+        add_pending(st, emit, "spec_files", st.cfg(), p["folder"], rec, p["name"],
+                    "Save %d file%s from Claude in %s" % (len(changes), "" if len(changes) == 1 else "s", p["folder"]),
+                    clip(text, 60000), on_mac=True, extra_fields={"changes": changes})
+        st.messages.append({"role": "user", "content": "[I sent the spec to Claude. It wrote: %s. A card to save "
+                                                       "them is showing.]" % ", ".join(f for f, _ in files)})
+        return
+    cfg = spec_access_cfg()
+    done, bad = [], []
+    for ch in p["changes"]:
+        try:
+            done.append(macaccess.apply(cfg, ch, "private build " + p["note"]))
+        except (macaccess.AccessError, OSError) as e:
+            bad.append("%s: %s" % (Path(ch["path"]).name, e))
+    result = "Saved %d file%s in %s. Each one can be undone in 🩺 Setup → Mac." % (
+        len(done), "" if len(done) == 1 else "s", p["remote"])
+    if bad:
+        result += " These failed: " + "; ".join(bad)
+    emit({"type": "answer", "text": result})
+    st.messages.append({"role": "user", "content": "[I confirmed saving Claude's files. %s]" % result})
 
 
 def stuck_help(st, emit, cfg, name, args, result):
@@ -3477,6 +3646,10 @@ HOME_GROUPS = {
                  r"setting|\bmodel\b|password|writing|change"),
     "mac": DEVICE_GROUPS["mac"],
 }
+PRIVATE_BUILD_GROUP = ("the private builder: the user's idea becomes a generic spec on this Mac, then Claude writes "
+                       "the code", ["private_build"], r"private build|spec|privacy|private|anonym|firewall")
+DEVICE_GROUPS["private"] = PRIVATE_BUILD_GROUP
+HOME_GROUPS["private"] = PRIVATE_BUILD_GROUP
 # PatchBay's own code can be changed from any chat, not only the home one.
 DEVICE_GROUPS["patchbay"] = HOME_GROUPS["patchbay"][:2] + (
     r"patchbay|own (source )?code|its own|your own|yourself|self.?edit",)
@@ -3859,7 +4032,7 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "project_packages": "Checking which libraries {project} needs", "ask_claude": "Asking Claude", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "project_packages": "Checking which libraries {project} needs", "ask_claude": "Asking Claude", "private_build": "Writing a private spec on this Mac", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
@@ -3907,6 +4080,9 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
     if p["kind"] == "mac_access":
         del st.pending[pid]
         return confirm_access(st, p, emit)
+    if p["kind"] in ("spec_claude", "spec_files"):
+        del st.pending[pid]
+        return confirm_spec(st, p, emit)
     if p["kind"] in ("self_edit", "self_restart"):
         if p.get("word") and typed.strip().lower() != p["word"].lower():
             raise ToolError("This change touches one of PatchBay's safety rules, so type %s to confirm it." % p["word"])
@@ -4230,6 +4406,14 @@ def do_cancel(st, pid, emit):
                                                        "yourself.]"})
         emit({"type": "answer", "text": "Not sent. Nothing went to Claude."})
         return
+    if p and p["kind"] == "spec_claude":
+        st.messages.append({"role": "user", "content": "[I chose not to send the spec to Claude.]"})
+        emit({"type": "answer", "text": "Not sent. Nothing went to Claude. The spec is kept in %s." % p["record"]})
+        return
+    if p and p["kind"] == "spec_files":
+        st.messages.append({"role": "user", "content": "[I chose not to save Claude's files.]"})
+        emit({"type": "answer", "text": "Nothing was saved. Claude's files are kept in %s." % p["source"]})
+        return
     if p:
         st.messages.append({"role": "user", "content": "[I cancelled the %s of %s. Nothing was written.]"
                                                        % (p["kind"], p["remote"])})
@@ -4523,7 +4707,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         elif path == "/api/report":
             self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
-            self.json(APP.claude.public())
+            self.json(dict(APP.claude.public(), spec_list=str(sanitizer.list_path()),
+                           spec_folder=str(PRIVATE_BUILDS)))
         elif path == "/api/cleardata":
             names = ([cfg["device_name"] for _, cfg in APP.registry.all()] if q.get("all") == "1"
                      else [APP.device(q.get("device")).cfg()["device_name"]])

@@ -42,7 +42,9 @@ MODES = {
     "plan": "Plan + when stuck: Claude plans big jobs and helps when stuck; your Mac does the work",
     "always": "Always: Claude answers everything (sent automatically; costs the most)",
 }
-DEFAULTS = {"mode": "plan", "model": "claude-opus-5-5", "auto_send": False, "monthly_cap": 20.0, "key": ""}
+DEFAULTS = {"mode": "plan", "model": "claude-opus-5-5", "auto_send": False, "monthly_cap": 20.0, "key": "",
+            # The private builder (harness/): off until the user turns it on in the Claude panel.
+            "spec_pipeline": False, "spec_model": "claude-sonnet-5-5", "spec_local_model": "", "spec_leak_check": True}
 SENT_KEEP = 200
 # Platform words that are fine to send as they are, even when a device is named after them.
 GENERIC = {"switch", "psp", "vita", "3ds", "wii", "wiiu", "ps4", "ps3", "ps5", "ds", "gamecube", "xbox", "mac",
@@ -76,6 +78,8 @@ class Claude:
             s["mode"] = DEFAULTS["mode"]
         if s.get("model") not in MODELS:
             s["model"] = DEFAULTS["model"]
+        if s.get("spec_model") not in MODELS:
+            s["spec_model"] = DEFAULTS["spec_model"]
         s["key"] = keychain.reveal(s.get("key") or "")   # kept in the Mac's Keychain when it can be
         return s
 
@@ -90,8 +94,17 @@ class Claude:
                 if v not in MODELS:
                     raise ClaudeError("model must be one of: %s" % ", ".join(MODELS))
                 s[k] = v
-            elif k == "auto_send":
+            elif k in ("auto_send", "spec_pipeline", "spec_leak_check"):
                 s[k] = bool(v)
+            elif k == "spec_model":
+                if v not in MODELS:
+                    raise ClaudeError("The private builder's model must be one of: %s" % ", ".join(MODELS))
+                s[k] = v
+            elif k == "spec_local_model":
+                v = str(v or "").strip()
+                if v and not re.match(r"^[\w.:/-]{1,100}$", v):
+                    raise ClaudeError("That isn't a model name.")
+                s[k] = v
             elif k == "monthly_cap":
                 try:
                     s[k] = max(0.0, round(float(v), 2))
@@ -217,16 +230,18 @@ class Claude:
 
     # ---------------------------------------------------------------- sending
 
-    def send(self, body, why):
-        """Send one Messages API request (already scrubbed). Returns the response JSON. Saves what was sent."""
+    def send(self, body, why, model=None, effort=None):
+        """Send one Messages API request (already scrubbed). Returns the response JSON. Saves what was sent.
+        model: another model than the one in settings (the private builder has its own)."""
         s = self.settings()
         if not s.get("key"):
             raise ClaudeError("There's no Claude API key yet. Add yours in the Claude panel (the ☁ Claude button above "
                               "the chat). Get one at https://platform.claude.com/settings/keys")
         self.check_cap()
-        body = dict(body, model=s["model"])
+        model = model or s["model"]
+        body = dict(body, model=model)
         body.setdefault("max_tokens", 16000)
-        body.setdefault("output_config", {"effort": "high"})
+        body.setdefault("output_config", {"effort": effort or "high"})
         body["cache_control"] = {"type": "ephemeral"}        # reuse the unchanged start of the conversation: cheaper
         body["fallbacks"] = "default"                         # if Claude declines, Anthropic retries on another model
         self._log_sent(body, why)
@@ -267,7 +282,7 @@ class Claude:
                                   "Couldn't reach Claude (%s). Is the internet working?" % e)
         else:
             raise ClaudeError("Claude is busy right now (%s). Try again in a minute." % last)
-        self._add_cost(self.price(resp.get("model") or s["model"], resp.get("usage")))
+        self._add_cost(self.price(resp.get("model") or model, resp.get("usage")))
         if resp.get("stop_reason") == "refusal":
             raise ClaudeError("Claude declined to answer this one.")
         return resp

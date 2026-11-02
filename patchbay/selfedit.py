@@ -31,13 +31,15 @@ RECOVERED = HERE / "data-cache" / "self-recovered.json"
 TEXT_TYPES = {".py", ".html", ".js", ".css", ".md", ".json", ".swift", ".txt", ".svg", ".c", ".h", ".cpp", ".sh",
               ".plist", ".toml", ".cfg", ".ini", ""}
 # Never edited this way: the user's own settings, passwords and data, and git's own files.
-BLOCKED_NAMES = {"config.json", "access.json", "claude.json", "claude-usage.json", "claude-aliases.json"}
+BLOCKED_NAMES = {"config.json", "access.json", "claude.json", "claude-usage.json", "claude-aliases.json",
+                 "redaction_list.json"}
 BLOCKED_DIRS = {"data-cache", "devices", "claude-sent", ".git", "__pycache__"}
 
 SAFETY = re.compile(r"needs_typing|typed|allow_writes|enable_writes|writes_on|device_name\b|ollama_url|localhost|"
                     r"127\.0\.0\.1|LOOPBACK|from_this_mac|same_site|signed_in|session_ok|password|is_private|"
                     r"private_ip|own subnet|brute|default.cred|redact|strip_private|never send|claude_ok|"
-                    r"safe_for_cloud|SAFE_COMMAND|SAFE_PART|runs_by_itself|auto_mac_steps|BLOCKED_|SAFETY",
+                    r"safe_for_cloud|SAFE_COMMAND|SAFE_PART|runs_by_itself|auto_mac_steps|BLOCKED_|SAFETY|sanitizer|"
+                    r"blocked_terms|spec_pipeline|request_body|CODE_SYSTEM|leaks_private",
                     re.I)
 RENAMED = {"gd1chat.py": "server.py", "gd1check.py": "core.py"}   # old file names, for undoing older changes
 CONFIRM_WORD = "PatchBay"
