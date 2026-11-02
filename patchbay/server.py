@@ -3757,24 +3757,29 @@ def compact_history(messages, keep=8, short=500, budget=None):
     if not budget:
         return out
 
-    def size():
-        return sum(len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or "")) for m in out)
+    def msg_size(m):
+        return len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or ""))
+    sizes = [msg_size(m) for m in out]       # kept up to date as messages are cut (adding it all up again was slow)
+    total = [sum(sizes)]
 
     def cut(i, n):
         c = out[i].get("content")
         if isinstance(c, str) and len(c) > n + 200:
             out[i] = dict(out[i], content=c[:n] + "\n[... shortened to save the AI's memory. Run the step again "
                                                 "for the rest.]")
+            new = msg_size(out[i])
+            total[0] += new - sizes[i]
+            sizes[i] = new
     tools_now = [i for i, m in enumerate(out) if m.get("role") == "tool"]
     for limit, which in ((short, tools_now[:-2]), (3000, tools_now[-2:]), (300, tools_now)):
         for i in which:
-            if size() <= budget:
+            if total[0] <= budget:
                 return out
             cut(i, limit)
     # Still too big (a very long chat): shorten older messages, keeping the newest question whole.
     last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=len(out))
     for i in range(len(out)):
-        if size() <= budget:
+        if total[0] <= budget:
             break
         if i != last_user:
             cut(i, 200)
