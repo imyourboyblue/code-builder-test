@@ -470,5 +470,6 @@ the old and new values on a card first.
 | `about` | One sentence about the device, so the AI knows what it is |
 | `backup_folder` | Where backups go (set on the Backups tab) |
 | `lan_access` | `true` always lets the laptop in |
+| `chat_memory` | On unless set to `false`. Long chats keep their older part in notes plus search, so details from early on aren't lost |
 
 The AI model and data folder are shared by all devices and come from `config.json`.
