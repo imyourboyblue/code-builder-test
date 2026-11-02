@@ -28,6 +28,7 @@ import contextlib
 import difflib
 import errno
 import ftplib
+import gzip
 import io
 import ipaddress
 import json
@@ -4479,6 +4480,7 @@ class App:
 APP = None
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 WEB = core.HERE / "web"
+PAGE_CACHE = {}     # the page as last read: (file, its size and time, theme) -> (plain, packed)
 
 
 def computer_name():
@@ -4554,6 +4556,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- replies
 
+    def wants_gzip(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
     def send_body(self, body, ctype, code=200, extra=()):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -4566,7 +4571,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def json(self, obj, code=200, extra=()):
-        self.send_body(json.dumps(obj).encode(), "application/json", code, extra)
+        body = json.dumps(obj).encode()
+        if len(body) > 16384 and not self.from_this_mac() and self.wants_gzip():
+            # Big answers to the laptop go packed (they travel over Wi-Fi); this Mac gets them as they are.
+            body, extra = gzip.compress(body, 5), list(extra) + [("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+        self.send_body(body, "application/json", code, extra)
 
     def fix_page(self, msg):
         """A plain page with no scripts, for when a change to PatchBay broke its own page."""
@@ -4595,16 +4604,29 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         self.send_body(body.encode(), "text/html; charset=utf-8")
 
     def page(self, name):
-        body = (WEB / name).read_bytes()
+        f = WEB / name
         ui = load_ui()   # the chosen theme goes on the page before it's drawn, so it never flashes
         attrs = ""
         if ui.get("theme") in THEMES and ui["theme"] != "auto":
             attrs += ' data-theme="%s"' % ui["theme"]
         if ui.get("density") == "compact":
             attrs += ' data-density="compact"'
-        if attrs:
-            body = body.replace(b'<html lang="en">', ('<html lang="en"%s>' % attrs).encode(), 1)
-        self.send_body(body, "text/html; charset=utf-8")
+        st = f.stat()
+        key = (name, st.st_mtime_ns, st.st_size, st.st_ino, attrs)
+        hit = PAGE_CACHE.get(key)
+        if not hit:      # read and packed once, until the file changes (a change to PatchBay's page, a new theme)
+            body = f.read_bytes()
+            if attrs:
+                body = body.replace(b'<html lang="en">', ('<html lang="en"%s>' % attrs).encode(), 1)
+            hit = (body, gzip.compress(body, 6))
+            if len(PAGE_CACHE) > 8:
+                PAGE_CACHE.clear()
+            PAGE_CACHE[key] = hit
+        if self.wants_gzip():   # about a quarter of the size: much quicker to the laptop
+            self.send_body(hit[1], "text/html; charset=utf-8",
+                           extra=[("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")])
+        else:
+            self.send_body(hit[0], "text/html; charset=utf-8")
 
     def start_stream(self):
         self.send_response(200)
