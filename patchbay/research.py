@@ -2,8 +2,8 @@
 🔎 Deep research: PatchBay researches a question on the web by itself and writes a report with sources.
 
 The software does the legwork (splitting the question up, searching, reading pages, keeping track of sources); the
-local AI only does the thinking (planning, taking notes, writing). Everything runs on this Mac with the Everyday or
-Building model. Only search words leave the Mac, and personal details (device names, addresses, your user name...)
+local AI only does the thinking (planning, taking notes, writing). Everything runs on this Mac with the model you
+loaded in Ollama. Only search words leave the Mac, and personal details (device names, addresses, your user name...)
 are taken out of them first.
 
 Steps: plan (3-5 smaller questions and search words) → search and read pages for each → notes per question, with

@@ -324,9 +324,6 @@ border:2px solid var(--line)}
 .cl-dot{font-size:11px;font-weight:600;margin-left:4px;padding:1px 7px;border-radius:9px;background:var(--line);color:var(--mute)}
 .cl-dot::before{content:"\25CF ";}
 #research-btn{white-space:nowrap;font-size:13px}#research-btn.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-.mode-sw{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.mode-sw button{border:0;border-radius:0;background:none;padding:4px 12px;font-size:13px;color:var(--mute);font-weight:600}
-.mode-sw button.on{background:var(--ink);color:var(--bg)}
 .sw-row{display:flex!important;align-items:center;gap:12px;justify-content:space-between;color:var(--ink)!important;font-size:13.5px!important;margin:0!important;cursor:pointer}
 .switch{position:relative;flex:none;width:42px;height:24px}.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
 .switch span{position:absolute;inset:0;border-radius:12px;background:var(--line);transition:background .15s}
@@ -397,7 +394,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
 <main class="view" id="chat" style="position:relative">
   <div class="chatbar"><button id="chats-btn" type="button" title="Your saved conversations">Past chats ▾</button>
     <span class="ttl" id="chat-title"></span>
-    <span style="font-size:13px;color:var(--mute);display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">Mode <span class="mode-sw" id="mode-sw"><button type="button" data-mode="everyday">Everyday</button><button type="button" data-mode="building">Building</button></span> <span id="ai-where" class="ai-where" hidden></span> <span id="model-why" style="font-size:12px"></span></span>
+    <span style="font-size:13px;color:var(--mute);display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">AI <span id="ai-where" class="ai-where" hidden></span> <span id="model-why" style="font-size:12px"></span></span>
     <span class="ctxm" id="ctx-meter" hidden title="How full the AI's memory of this chat is. When it fills up, older steps are shortened."><i><b></b></i><span></span></span>
     <label class="acc" title="On: changes to code projects on this Mac, and their builds, happen without a card (files are backed up first, with Undo). Changes to devices always need a card."><input type="checkbox" id="acc-edits"> Accept edits</label>
     <button id="console-btn" type="button" title="Console view: a dark, terminal-style chat with one line per step">▮ Console</button>
@@ -955,7 +952,7 @@ async function chatStream(url,body,since){
     try{await stream('/api/follow',{device:dev,since:n},on)}catch(e){}}
   if(!finished&&!restarting)add('msg err','Can\'t reach PatchBay on '+(info.computer||'the Mac')+'. Is python3 patchbay.py still running in Terminal?');
   ctx.status.stop();ctx.status.remove();if(ctx.live)ctx.live.remove();if(ctx.run){ctx.run.stop();ctx.run.remove()}if(ctx.stream)ctx.stream.remove();busy=false;setSend(false);t.focus();
-  if(dev===cur)loadChatBar()}
+  if(dev===cur)loadChatBar();loadModels()}
 function setSend(running){send.textContent=running?'Stop':'Send';send.classList.toggle('primary',!running);send.type=running?'button':'submit';
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
 function card(ev,closed){
@@ -1157,17 +1154,19 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
   MODES=md;const where=j.where==='this Mac'?'this Mac':j.where;const p=j.pull||{};const busy=p.state==='downloading';
   const chip=(t,cls)=>'<span class="md-chip'+(cls?' '+cls:'')+'">'+t+'</span>';
   let h=(note?'<div class="md-note">'+esc(note)+'</div>':'')+(j.error?'<div style="color:var(--bad)">'+esc(j.error)+'</div>':'');
-  // The two modes
-  h+='<div class="md-head">Mode <span>only one big model fits in memory, so the mode decides which one stays loaded</span></div>';
-  h+='<div class="md-list">'+md.modes.map(m=>'<label class="md-row'+(md.current===m.key?' on':'')+'"><input type="radio" name="md-mode" value="'+m.key+'"'+(md.current===m.key?' checked':'')+'>'+
-      '<div><b>'+esc(m.label)+'</b>'+(m.model?' '+chip(esc(m.model)+(m.size?' · '+esc(m.size):'')):' '+chip('no model yet','bad'))+'<div class="md-why">'+esc(m.why)+'</div>'+
-      (m.faster?'<div class="md-why" style="margin-top:3px">A faster version for Apple chips is available: <button class="md-get" data-m="'+esc(m.faster)+'"'+(busy?' disabled':'')+'>Download '+esc(m.faster)+'</button></div>':'')+'</div></label>').join('')+'</div>';
-  if(md.second)h+='<div class="md-why" style="margin-top:4px">Second opinion: '+esc(md.second)+'. '+esc(md.second_why)+'</div>';
+  // The model in use: whatever is loaded in Ollama
+  const cmd=n=>'<code>ollama run '+esc(n)+'</code>';
+  h+='<div class="md-head">Model in use <span>PatchBay uses the model you load in Ollama</span></div><div class="md-why" style="font-size:13.5px">'+
+    (md.error?'':md.loaded===null?'Couldn\'t ask Ollama which model is loaded.':
+     !md.model?'<b>No model loaded.</b> Load one in Ollama, then ask again. In Terminal: '+cmd(md.example)+' (then type /bye).':
+     'Using <b>'+esc(md.model)+'</b>.'+(md.loaded.length>1?' Also loaded: '+esc(md.loaded.filter(x=>x!==md.model).join(', '))+'.':''))+
+    ' PatchBay keeps the model you load in memory until you press <b>Free up memory</b> below, so answers start fast. To switch, free the memory and load another with '+cmd('MODEL-NAME')+'.'+
+    (md.faster?'<div style="margin-top:3px">A faster version for Apple chips is available: <button class="md-get" data-m="'+esc(md.faster)+'"'+(busy?' disabled':'')+'>Download '+esc(md.faster)+'</button></div>':'')+'</div>';
   // Models on this computer, with Delete
-  const used={};md.modes.forEach(m=>{if(m.model)used[m.model]=(used[m.model]?used[m.model]+', ':'')+m.label});if(md.second)used[md.second]=(used[md.second]?used[md.second]+', ':'')+'Second opinion';
+  const used={};if(md.model)used[md.model]='the chat';if(md.second)used[md.second]=(used[md.second]?used[md.second]+', ':'')+'Second opinion';
   h+='<div class="md-head" style="margin-top:12px">Models on '+esc(where)+' <span>'+(j.memory_gb?j.memory_gb+' GB memory':'')+'</span></div>';
   h+=j.installed.length?'<div class="md-list">'+j.installed.map(m=>'<div class="md-row dl" style="padding:7px 10px"><div style="flex:1"><b>'+esc(m.name)+'</b> '+chip(esc(m.size))+
-      (used[m.name]?' '+chip('used by '+esc(used[m.name]),'ok'):' '+chip('not used'))+(m.tools===false?' '+chip('chat only','warn'):'')+'</div>'+
+      (used[m.name]?' '+chip('used by '+esc(used[m.name]),'ok'):' '+chip('not used'))+((md.loaded||[]).includes(m.name)?' '+chip('loaded now','ok'):'')+(m.tools===false?' '+chip('chat only','warn'):'')+'</div>'+
       '<button class="md-del'+(used[m.name]?'':' danger')+'" data-m="'+esc(m.name)+'" data-used="'+esc(used[m.name]||'')+'" data-size="'+esc(m.size)+'">Delete</button></div>').join('')+'</div>'
     :(j.error?'':'<div>No models yet. Get one below.</div>');
   // Free ones to download, tucked away until wanted
@@ -1187,9 +1186,8 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
     '<div class="md-head" style="margin-top:12px">Memory <span>what Ollama has loaded right now</span></div><div id="md-mem" class="md-why">Checking…</div>'+
     '<div id="md-msg" style="font-size:13px"></div>';
   box.innerHTML=h;drawMemory();
-  box.querySelectorAll('input[name=md-mode]').forEach(r=>r.onchange=async()=>{await setMode(r.value,true);drawModels('Switched to '+modeOf(r.value).label+' mode.')});
   box.querySelectorAll('.md-del').forEach(b=>b.onclick=async e=>{e.preventDefault();const u=b.dataset.used;
-    if(!confirm('Delete '+b.dataset.m+' ('+b.dataset.size+') from '+where+'?'+(u?'\n\nIt is used by: '+u+'. That mode will use another model you have, or none.':'')+'\n\nYou can download it again later.'))return;
+    if(!confirm('Delete '+b.dataset.m+' ('+b.dataset.size+') from '+where+'?'+(u?'\n\nIt is used by: '+u+'.':'')+'\n\nYou can download it again later.'))return;
     b.disabled=true;b.textContent='Deleting…';try{await postJSON('/api/models/delete',{model:b.dataset.m});loadModels();drawModels('Deleted '+b.dataset.m+'.')}catch(x){b.disabled=false;b.textContent='Delete';$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(x.message)+'</span>'}});
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
@@ -1199,10 +1197,10 @@ async function drawMemory(note){const box=$('md-mem');if(!box)return;let j;
   try{j=await getJSON('/api/models/memory')}catch(e){box.textContent=e.message;return}
   if(j.error){box.textContent=j.error;return}
   box.innerHTML=(note?'<b>'+esc(note)+'</b> ':'')+(j.loaded.length?j.loaded.map(m=>esc(m.name)+' uses '+m.gb+' GB').join(', ')+(j.memory_gb?' (of '+j.memory_gb+' GB).':'.')+
-    ' The mode\'s model stays loaded on purpose so answers start fast.':'Nothing is loaded. The model loads again by itself with your next question (that takes a few seconds).')+
+    ' The model you loaded stays loaded on purpose so answers start fast.':'Nothing is loaded. Load a model in Ollama to use the chat.')+
     (j.loaded.length?'<div style="margin-top:4px"><button id="md-free">Free up memory</button></div>':'');
   const b=$('md-free');if(b)b.onclick=async()=>{b.disabled=true;b.textContent='Freeing…';
-    try{const r=await postJSON('/api/models/unload',{});drawMemory(r.unloaded.length?'Freed.':'')}catch(e){b.disabled=false;b.textContent='Free up memory';box.insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>')}}}
+    try{const r=await postJSON('/api/models/unload',{});loadModels();if($('sc-models'))drawModels(r.unloaded.length?'Freed the memory.':'');else drawMemory(r.unloaded.length?'Freed.':'')}catch(e){b.disabled=false;b.textContent='Free up memory';box.insertAdjacentHTML('beforeend','<div style="color:var(--bad)">'+esc(e.message)+'</div>')}}}
 
 // ---- Send the changes PatchBay made to itself to GitHub (own branch, confirmed first)
 async function drawGithub(note){const box=$('sc-gh');if(!box)return;let j;
@@ -1449,17 +1447,18 @@ $('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window
       '<div class="row" style="margin-top:10px"><button onclick="closeModal()">Close</button></div>');$('box').classList.add('wide')}catch(e){msg(esc(e.message))}}};
 
 let MODES=null;
-function modeOf(k){return MODES&&MODES.modes.find(m=>m.key===k)}
-function modelLabel(){const m=MODES&&modeOf(MODES.current);return m?m.label+' mode ('+(m.model||'no model')+')':'the AI'}
-async function loadModels(){try{const j=await getJSON('/api/models');MODES=j;const m=modeOf(j.current);
-  document.querySelectorAll('#mode-sw button').forEach(b=>{b.classList.toggle('on',b.dataset.mode===j.current);const x=modeOf(b.dataset.mode);b.title=x?x.why+(x.model?' Uses '+x.model+'.':''):''});
-  $('model-why').textContent=j.error?j.error:(m&&m.model?'Uses '+m.model:'No model downloaded for this mode yet: get one in 🩺 Setup → AI.');
+function modelLabel(){return MODES&&MODES.model||'no model loaded'}
+async function loadModels(){try{const j=await getJSON('/api/models');MODES=j;
+  $('model-why').textContent=j.error?j.error:loadedText(j);$('model-why').title=j.no_model||'';
   const w=$('ai-where');if(w){const away=j.where&&j.where!=='this Mac';w.hidden=!away&&!j.error;
     w.className='ai-where'+(j.error?' down':'');w.textContent=(away?'on '+j.where.replace(/^the computer at /,''):'this Mac')+(j.error?' · not answering':'');
     w.title=j.error||('The AI runs on '+j.where+'. Change it in 🩺 Setup → AI.')}}catch(e){}}
-async function setMode(mode,quiet){try{MODES=await postJSON('/api/mode',{mode});loadModels();if(typeof drawModels==='function'&&$('sc-models'))drawModels();
-  const m=modeOf(mode);if(!quiet&&m)add('msg ai','<b>'+esc(m.label)+' mode.</b> '+esc(m.why)+(m.model?' Loading '+esc(m.model)+' now, so the first answer may take a few seconds.':''))}catch(e){alert(e.message);loadModels()}}
-document.querySelectorAll('#mode-sw button').forEach(b=>b.onclick=()=>{if(!b.classList.contains('on'))setMode(b.dataset.mode)});
+// The model Ollama really has loaded right now (PatchBay asks Ollama, it doesn't guess). That's the one it uses.
+function loadedText(j){const L=j.loaded;
+  if(!L)return 'Couldn\'t ask Ollama which model is loaded';
+  if(!j.model)return 'No model loaded. Load one in Ollama, then ask again';
+  const rest=L.filter(x=>x!==j.model);return 'Using '+j.model+(rest.length?' (also loaded: '+rest.join(', ')+')':'')}
+setInterval(()=>{if(!document.hidden&&!busy)loadModels()},30000);
 
 $('f').onsubmit=async e=>{e.preventDefault();const s=t.value.trim();if((!s&&!atts.length)||busy)return;
   const files=atts;atts=[];drawAtts();

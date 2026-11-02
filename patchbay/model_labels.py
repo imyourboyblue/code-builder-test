@@ -16,8 +16,8 @@ import urllib.request
 LOCAL = [
     ("35b-a3b", "Everyday help", "Fast and smart. Good for most questions, checks and fixes."),
     ("27b", "Hard problems and building", "Slower, but thinks harder. Use it for tricky crashes and building apps."),
-    ("gemma", "Second opinion", "A different maker's model (Google). Automatic asks it when the usual models get "
-                                "stuck on the same step twice."),
+    ("gemma", "Second opinion", "A different maker's model (Google). PatchBay asks it when the model you loaded "
+                                "gets stuck on the same step twice."),
     ("coder", "Writing code", "Made for reading and writing code."),
     ("vl", "Reading pictures", "Can look at screenshots and photos."),
     ("vision", "Reading pictures", "Can look at screenshots and photos."),
@@ -68,14 +68,8 @@ def cloud(model_id, fallback=""):
     return CLOUD.get(model_id, (fallback or model_id, ""))
 
 
-# ---------------------------------------------------------------- Automatic: pick the model for the job
+# ---------------------------------------------------------------- which model answers
 
-AUTO = "auto"
-AUTO_LABEL = ("Automatic", "Picks one of four layers for each answer: quick, everyday, hard, and a second opinion "
-                           "when stuck. Choose each layer's model in Setup → AI.")
-# Which local model does which job, by text in its name (first one installed wins). Edit to change the picks.
-FAST = ["35b-a3b", "30b-a3b", "a3b", "14b", "12b", "8b", "7b"]
-STRONG = ["27b", "32b", "70b", "35b", "30b", "coder"]
 SECOND = ["gemma4:26b", "gemma4", "gemma"]      # a different maker, for when the usual models are stuck
 SECOND_OPINION_MODEL = "gemma4:26b"             # what 🩺 Setup offers to download (about 18 GB)
 HARD_WORDS = re.compile(r"(?i)\b(build|compile|rebuild|crash|debug|fix|repair|broken|error|fail|plan|update|"
@@ -90,11 +84,11 @@ CATALOG = [
     ("qwen3.6:35b-a3b", "Everyday help", "PatchBay's usual model. Fast for its size because only part of it works "
                                           "on each word. Good for most questions, checks and fixes.", 24),
     ("qwen3.6:35b-a3b-nvfp4", "Everyday, faster", "The everyday model in Apple's MLX format: about twice as fast on "
-                                                   "M-series Macs. Replaces the normal one in Everyday mode.", 23),
-    ("qwen3.6:27b", "Building", "Thinks harder and slower. Used in Building mode.", 17),
+                                                   "M-series Macs.", 23),
+    ("qwen3.6:27b", "Building", "Thinks harder and slower. Good for building apps.", 17),
     ("qwen3.8:27b", "Hard problems and building", "Thinks harder and slower. Best for tricky crashes, plans and "
                                                  "building apps from source.", 17),
-    ("gemma4:26b", "Second opinion", "Google's model. Automatic asks it when the usual models get stuck twice.", 18),
+    ("gemma4:26b", "Second opinion", "Google's model. PatchBay asks it when your model gets stuck twice.", 18),
     ("qwen3-coder:30b", "Writing code", "Made for reading and writing code. Fast, like the everyday model.", 19),
     ("qwen3-vl:8b", "Reading pictures", "Can look at screenshots and photos, like an error on a TV screen.", 6),
     ("gemma3:12b", "Pictures and quick help", "Mid-size Google model that can also look at pictures.", 8),
@@ -158,7 +152,7 @@ _CAPS = {}
 def capabilities(ollama_url, name):
     """What Ollama says the model can do, e.g. ["completion", "tools", "thinking", "vision"]. None if it doesn't say
     (older Ollama) or couldn't be asked. Asked once per model."""
-    if not name or name == AUTO:
+    if not name:
         return None
     key = (ollama_url, name)
     if key not in _CAPS:
@@ -201,9 +195,9 @@ def tool_names(ollama_url, names):
     return [n for n in names if can_use_tools(ollama_url, n) is not False]
 
 
-def installed(ollama_url):
-    """Names of the models Ollama has (asked at most once a minute)."""
-    if _TAGS["url"] == ollama_url and time.time() - _TAGS["at"] < 60:
+def installed(ollama_url, fresh=False):
+    """Names of the models Ollama has (asked at most once a minute, unless fresh)."""
+    if not fresh and _TAGS["url"] == ollama_url and time.time() - _TAGS["at"] < 60:
         return _TAGS["names"]
     try:
         with urllib.request.urlopen(ollama_url + "/api/tags", timeout=8) as r:
@@ -212,15 +206,6 @@ def installed(ollama_url):
         names = _TAGS["names"] if _TAGS["url"] == ollama_url else []
     _TAGS.update(at=time.time(), names=names, url=ollama_url)
     return names
-
-
-def _first(names, wants, avoid=()):
-    for w in wants:
-        for n in names:
-            low = n.lower()
-            if w in low and n not in avoid and not any(x in low for x in ("embed", "vl", "vision")):
-                return n
-    return None
 
 
 def second(names):
@@ -232,57 +217,37 @@ def second(names):
     return None
 
 
-def picks(names):
-    """(fast model, strong model) from what's installed. The second-opinion model is kept for when they're stuck."""
-    chat = [n for n in names if not any(x in n.lower() for x in ("embed",)) and n != second(names)]
-    fast = _first(chat, FAST) or (chat[0] if chat else None)
-    strong = _first(chat, STRONG, avoid=(fast,)) or fast
-    return fast, strong
-
-
-# ---------------------------------------------------------------- the two work modes
-
-# Only one big model fits in the Mac's memory at a time, so the mode decides which one stays loaded.
-# (key, name, what it's for, models to use in order: an exact name or text in the name; first installed wins)
-MODES = [
-    ("everyday", "Everyday", "Questions, device checks, research, documents and small fixes. Fast.",
-     ["qwen3.6:35b-a3b-nvfp4", "qwen3.6:35b-a3b", "35b-a3b", "30b-a3b", "a3b", "26b-a4b", "14b", "12b", "8b"]),
-    ("building", "Building", "Building apps, rebuilding homebrew and tricky crashes. Slower, thinks harder.",
-     ["qwen3.6:27b-nvfp4", "qwen3.6:27b", "qwen3.8:27b", "27b", "32b", "31b", "coder"]),
-]
-MODE_KEYS = [m[0] for m in MODES]
 FASTER = {"qwen3.6:35b-a3b": "qwen3.6:35b-a3b-nvfp4"}    # the same model in Apple's faster MLX format
+NO_MODEL = ("No model is loaded. Load one in Ollama, then ask again. In Terminal: ollama run %s "
+            "(then type /bye). PatchBay keeps it loaded until you free the memory.")
 
 
-def mode_model(names, mode):
-    """The model a mode keeps loaded, from the installed models that can use tools."""
-    wants = dict((k, w) for k, _, _, w in MODES).get(mode) or MODES[0][3]
-    chat = [n for n in names if "embed" not in n.lower() and n != second(names)]
-    for w in wants:
-        for n in chat:
-            if n == w or (":" not in w and w in n.lower()):
-                return n
-    fast, strong = picks(chat)
-    return strong if mode == "building" else fast
+def running(ollama_url, timeout=3):
+    """Names of the models Ollama has loaded right now (its /api/ps), most recently used first."""
+    with urllib.request.urlopen(ollama_url + "/api/ps", timeout=timeout) as r:
+        rows = json.loads(r.read()).get("models") or []
+    # Ollama counts each model's keep-alive from its last use, so the latest expiry is the latest used.
+    rows.sort(key=lambda m: str(m.get("expires_at") or ""), reverse=True)
+    return [m.get("name") or m.get("model") for m in rows if m.get("name") or m.get("model")]
 
 
-# The four layers Automatic climbs: (key, name in Setup, when it's used)
-LAYERS = [
-    ("quick", "1. Quick answers", "Short questions and lookups."),
-    ("everyday", "2. Everyday help", "Most questions, checks and small fixes."),
-    ("hard", "3. Hard problems", "Builds, plans, crashes and anything that failed once."),
-    ("second", "4. Second opinion", "When the step failed twice: a different model takes a fresh look."),
-]
-LAYER_KEYS = [k for k, _, _ in LAYERS]
+def active(loaded):
+    """The model PatchBay answers with: the one you loaded in Ollama (no guessing). Of several, the most recently
+    used, leaving out search helpers and the second-opinion model while it's only reviewing. None if nothing is."""
+    chat = [n for n in loaded or [] if "embed" not in n.lower()]
+    main = [n for n in chat if n != second(chat)]
+    return (main or chat or [None])[0]
 
 
-def layer_models(names, chosen=None):
-    """{layer: model} from what's installed. A model picked in Setup wins if it's still installed;
-    otherwise PatchBay picks: quick = everyday = the fast model, hard = the strong one, second = Gemma or hard."""
-    chosen = chosen or {}
-    fast, strong = picks(names)
-    default = {"quick": fast, "everyday": fast, "hard": strong, "second": second(names) or strong}
-    return {k: chosen.get(k) if chosen.get(k) in names else default[k] for k in LAYER_KEYS}
+def example(installed_names=()):
+    """A model they have, for the load command PatchBay shows."""
+    have = [n for n in installed_names if "embed" not in n.lower() and n != second(installed_names)]
+    return have[0] if have else "MODEL-NAME"
+
+
+def no_model(installed_names=()):
+    """What to say when nothing is loaded, with a load command for a model they have."""
+    return NO_MODEL % example(installed_names)
 
 
 LOOKUPS = {"web_search", "read_web_page", "read_repo_file", "latest_release", "find_github_repo", "places_nearby"}

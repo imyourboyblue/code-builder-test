@@ -126,11 +126,12 @@ def local_ai(url=None, model=None, settings=None):
         raise PipelineError(str(e))
     model = model or (settings or {}).get("spec_local_model")
     if not model:
-        names = model_labels.installed(url)
-        if not names:
-            raise PipelineError("Ollama at %s has no models (or isn't open)." % url)
-        mode = cfg.get("work_mode") if cfg.get("work_mode") in model_labels.MODE_KEYS else "everyday"
-        model = model_labels.mode_model(names, mode) or names[0]
+        try:
+            model = model_labels.active(model_labels.running(url))      # the model you loaded in Ollama
+        except (OSError, ValueError) as e:
+            raise PipelineError("Couldn't ask Ollama at %s which model is loaded (%s). Is it open?" % (url, e))
+        if not model:
+            raise PipelineError(model_labels.no_model(model_labels.installed(url)))
     return url, model
 
 
