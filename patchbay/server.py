@@ -2799,15 +2799,17 @@ def modes_info(cfg):
         names = model_labels.tool_names(url, list(sizes))
     except (OSError, ValueError, ToolError) as e:
         err = "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
+    loaded = None if err else loaded_names(cfg)
     modes = []
     for key, name, why, _ in model_labels.MODES:
         m = model_labels.mode_model(names, key)
         faster = model_labels.FASTER.get(m or "")
         modes.append({"key": key, "label": name, "why": why, "model": m,
                       "size": core.human_size(sizes.get(m) or 0) if m else "",
-                      "faster": faster if faster and faster not in sizes else None})
+                      "faster": faster if faster and faster not in sizes else None,
+                      "loaded": bool(m and loaded and m in loaded)})
     sec = model_labels.second(names)
-    return {"current": work_mode(cfg), "modes": modes, "error": err, "where": core.ai_where(cfg),
+    return {"current": work_mode(cfg), "modes": modes, "error": err, "where": core.ai_where(cfg), "loaded": loaded,
             "second": sec, "second_why": "Reviews a step when it fails twice, then lets go of the memory."}
 
 
@@ -2834,6 +2836,8 @@ def warm_mode(cfg, mode, old=None):
                         r.read()
         except Exception:
             pass
+        _LOADED.clear()
+    _LOADED.clear()
     threading.Thread(target=go, daemon=True).start()
 
 
@@ -3476,16 +3480,35 @@ def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None, max
         last, tries, ai_down(cfg), ollama_log_hint(cfg)))
 
 
-def loaded_models(cfg):
+def loaded_models(cfg, timeout=8):
     """What Ollama has in memory now: [{"name", "gb", "until"}] (Ollama's /api/ps)."""
-    with urllib.request.urlopen(ollama_url(cfg) + "/api/ps", timeout=8) as r:
+    with urllib.request.urlopen(ollama_url(cfg) + "/api/ps", timeout=timeout) as r:
         rows = json.loads(r.read()).get("models") or []
     return [{"name": m.get("name") or m.get("model"), "gb": round((m.get("size") or 0) / 1e9, 1),
              "until": m.get("expires_at") or ""} for m in rows]
 
 
+_LOADED = {}     # Ollama address -> (when asked, names loaded or None if it couldn't say)
+
+
+def loaded_names(cfg):
+    """Names of the models Ollama really has loaded right now (asked again after 2 seconds), or None if Ollama
+    couldn't say. This is what the chat bar and Setup show, not the model PatchBay plans to use."""
+    url = ollama_url(cfg)
+    hit = _LOADED.get(url)
+    if hit and time.time() - hit[0] < 2:
+        return hit[1]
+    try:
+        names = [m["name"] for m in loaded_models(cfg, timeout=3) if m.get("name")]
+    except (OSError, ValueError):
+        names = None
+    _LOADED[url] = (time.time(), names)
+    return names
+
+
 def unload_models(cfg, names=None):
     """Take models out of memory (they load again by themselves when next needed). Returns the names unloaded."""
+    _LOADED.clear()
     gone = []
     for m in (loaded_models(cfg) if names is None else [{"name": n} for n in names]):
         body = json.dumps({"model": m["name"], "messages": [], "keep_alive": 0}).encode()
