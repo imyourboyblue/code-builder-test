@@ -68,10 +68,17 @@ class SanitizerTests(unittest.TestCase):
         self.assertEqual(kinds(found), ["device", "project", "secret"])
         self.assertIn("(hidden)", [f["shown"] for f in found if f["kind"] == "secret"])
 
+    def test_user_name_that_is_a_word(self):
+        terms = [("user", "blue"), ("seen", "blue")]
+        self.assertEqual(sanitizer.scan("make the button blue, with a blue border", terms, EMPTY), [])
+        for text in ("files in /Users/blue/x", "login: blue", "logged in as blue", "mail blue@host",
+                     "on blue's Mac", "run sudo -u blue"):
+            self.assertTrue(sanitizer.scan(text, terms, EMPTY), text)
+
     def test_allowed_terms_skip_known_values(self):
-        lst = dict(EMPTY, allowed_terms=["blue"])
-        self.assertEqual(sanitizer.scan("make the button blue", [("user", "blue")], lst), [])
-        self.assertEqual(len(sanitizer.scan("make the button blue", [("user", "blue")], EMPTY)), 1)
+        lst = dict(EMPTY, allowed_terms=["ftpd"])
+        self.assertEqual(sanitizer.scan("build ftpd", [("project", "ftpd")], lst), [])
+        self.assertEqual(len(sanitizer.scan("build ftpd", [("project", "ftpd")], EMPTY)), 1)
 
     def test_cli_exit_codes(self):
         with tempfile.TemporaryDirectory() as d:

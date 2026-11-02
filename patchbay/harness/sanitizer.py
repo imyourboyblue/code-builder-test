@@ -104,6 +104,16 @@ def _term_re(term):
     return re.compile(left + t + right, re.I)
 
 
+def _user_re(name):
+    """A user name that is also an everyday word (like "blue") only counts where it is used as a user name:
+    /Users/blue, ~blue, blue@host, "user: blue", "logged in as blue", "blue's Mac"."""
+    t = re.escape(name.strip())
+    before = (r"(?:(?:/Users/|/home/|\\Users\\|~)|\b(?:user(?:[ _-]?name)?|login|account|owner|uid|whoami|"
+              r"(?:logged|signed) in as|home folder of|run as|sudo -u|-u)\b[\s:=\"'`]*)")
+    return re.compile(r"(?:%s%s(?![A-Za-z0-9])|(?<![A-Za-z0-9])%s(?:@|['’]s\s+(?:mac|computer|laptop|account|"
+                      r"home)))" % (before, t, t), re.I)
+
+
 def scan(text, terms=(), blocked=None):
     """Everything private found in text, as a list of dicts:
          {"kind", "what" (plain description), "shown" (safe to show on screen), "line"}
@@ -133,11 +143,14 @@ def scan(text, terms=(), blocked=None):
             raise ValueError("The block list pattern %r isn't a valid regular expression (%s)." % (pat, e))
         if m:
             hit("blocked", "a pattern on your block list", m.group(0), m.start())
+    terms = list(terms)
+    # User names that are plain words: only blocked where they're used as a user name (see _user_re).
+    users = {v.strip().lower() for k, v in terms if k == "user" and re.match(r"^[A-Za-z]+$", (v or "").strip())}
     for kind, value in terms:
         value = (value or "").strip()
         if len(value) < 3 or value.lower() in allowed:
             continue
-        m = _term_re(value).search(text)
+        m = (_user_re(value) if value.lower() in users else _term_re(value)).search(text)
         if m:
             hide = kind in ("secret", "password")
             what = {"device": "one of your device names", "ip": "one of your device addresses",
