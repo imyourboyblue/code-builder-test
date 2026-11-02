@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -24,6 +25,8 @@ PREFIX = "@keychain:"
 NOT_SECRET = ("", "anonymous@", None)
 PROBLEMS = []      # recent read failures, for 🩺 Setup
 _CACHE = {}        # account -> secret, so settings that are loaded often don't ask the Keychain every time
+_MISSES = {}       # account -> when the Keychain last said no (settings load often: don't ask again at once)
+MISS_WAIT = 60
 
 _sec = None
 
@@ -87,6 +90,7 @@ def put(account, secret):
     else:
         st = lib.SecKeychainAddGenericPassword(None, len(s), s, len(a), a, len(w), w, None)
     _CACHE.pop(account, None)
+    _MISSES.pop(account, None)
     return st == 0 and get(account) == secret
 
 
@@ -96,6 +100,8 @@ def get(account):
         return None
     if account in _CACHE:
         return _CACHE[account]
+    if time.time() - _MISSES.get(account, 0) < MISS_WAIT:
+        return None
     st, item, secret = _find_item(account)
     if st == 0:
         _lib()._cf.CFRelease(item)
@@ -109,6 +115,7 @@ def get(account):
             return _CACHE[account]
     except (OSError, subprocess.SubprocessError):
         pass
+    _MISSES[account] = time.time()
     return None
 
 
