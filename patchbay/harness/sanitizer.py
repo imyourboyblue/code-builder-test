@@ -22,7 +22,6 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent          # the patchbay folder
 LIST_FILE = HERE / "config" / "redaction_list.json"
-EXAMPLE_FILE = HERE / "config" / "redaction_list.example.json"
 
 EMPTY_LIST = {
     "_help": "Words that must never be sent to Claude by the private builder. blocked_terms: plain words "

@@ -438,17 +438,6 @@ def _listen(sock, timeout, info):
         _absorb(parse_dns(data), addr[0], info)
 
 
-def mdns_names(timeout=2.5):
-    """Older helper kept for callers: ip -> name, ip -> services."""
-    info = mdns_browse(timeout)
-    names = {ip: (d["names"] or [d["host"]])[0] for ip, d in info.items() if d["names"] or d["host"]}
-    return names, {ip: sorted(d["services"]) for ip, d in info.items()}
-
-
-def _dns_query(name, qtype):
-    return _mdns_packet([name], qtype)
-
-
 # ---------------------------------------------------------------- other names a device gives out about itself
 
 def reverse_dns(ip):
@@ -722,7 +711,6 @@ CONNECT = {
     "cast": "A Chromecast/Google TV. Cast to it, or use Google's developer tools if you turn on its developer mode.",
     "roku": "A Roku. Turn on Developer Mode on the Roku to connect, or use its network remote (ECP).",
     "airplay": "AirPlay. Stream to it from your Mac.",
-    "sonos": "A Sonos. Use the Sonos app or its local control API.",
     "plex": "A Plex server. Sign in to its web page to manage it.",
     "rdp": "Windows Remote Desktop. Connect with your Windows login.",
     "telnet": "Telnet (old and unencrypted). Only if the device needs it; prefer SSH when it's offered.",
@@ -886,7 +874,3 @@ def scan(progress=None, stop=None, deep=True):
         })
     return out
 
-
-def reachable():
-    """True if we have a LAN address to scan from at all."""
-    return bool(subnets())

@@ -63,8 +63,6 @@ button{font:inherit;border:1px solid var(--line);background:var(--card);color:va
 padding:5px 11px;cursor:pointer}button.primary{background:var(--me);color:var(--meink);border-color:var(--me)}
 button:disabled{opacity:.5;cursor:default}
 .view{flex:1;min-height:0;display:none}.view.on{display:flex}
-.av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex:none;display:grid;place-items:center;
-font-weight:600;color:#fff;font-size:12px}
 
 /* home */
 #home{flex-direction:column;overflow:hidden}
@@ -1615,7 +1613,6 @@ async function uploadFiles(files,target){
 async function copyToMac(items,folder){
   act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'. Progress is in the queue below.');
   try{await postJSON('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder});pollQueue()}catch(e){act(e.message,'bad')}}
-function fileEvent(ev){if(ev.type==='progress')act(ev.text);else if(ev.type==='answer')act(ev.text,'good');else if(ev.type==='error')act(ev.text,'bad')}
 function download(path){const a=document.createElement('a');a.href='/api/files/download?device='+enc(cur)+'&path='+enc(path);
   a.download='';document.body.appendChild(a);a.click();a.remove();act('Downloading '+path+' to this computer\'s Downloads folder.')}
 async function plan(req){

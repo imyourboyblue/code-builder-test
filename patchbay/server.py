@@ -1091,9 +1091,9 @@ def t_build(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root = pe(projects.folder_of, pr)
     try:
-        console, needed, missing = projects.needed_packages(root)
+        missing = projects.needed_packages(root)[2]
     except Exception:      # never let the check itself stop a build
-        console, needed, missing = None, [], []
+        missing = []
     if missing:
         # Install everything the project needs in one go, instead of one failed build per library.
         res = t_install_packages(st, emit, {"manager": "devkitpro", "packages": missing,
@@ -2010,12 +2010,6 @@ def h_security_check(st, emit, a):
             "exploit a problem or guess passwords.")
 
 
-@home_tool("check_address", "See whether anything answers at an IP address and port, and what it says (FTP, SSH, "
-           "web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
-def h_check(st, emit, a):
-    return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
-
-
 @home_tool("add_device", "Save a new device after checking it answers (FTP, SFTP/SSH, SMB file sharing, or a folder "
            "on this Mac). It then gets a picture on the home screen.", {"name": dict(S, description="Short name like GD2"),
            "host": S, "protocol": {"type": "string", "enum": ["ftp", "sftp", "smb", "folder"]},
@@ -2195,7 +2189,7 @@ def confirm_self(st, p, emit):
     st.messages.append({"role": "user", "content": "[I confirmed the PatchBay change. %s]" % msg})
 
 
-for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
+for _n in ("check_address", "check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
            "read_web_page", "review_github_repo", "places_nearby"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
@@ -3190,7 +3184,7 @@ def spec_file_changes(root, files):
     for rel, content in files:
         try:
             p = macaccess.resolve(cfg, str(Path(root) / rel), must_exist=False)
-        except macaccess.AccessError as e:
+        except macaccess.AccessError:
             skipped.append(rel)
             continue
         if p.exists():
@@ -4304,7 +4298,7 @@ def _run_mac_step(st, cfg, p, emit):
         elif p.get("build_after") and pr.get("build"):
             if runs_by_itself(cfg, "build", {"project": pr["name"]}) or (
                     st.plan and in_plan(st.plan, "build", {"project": pr["name"]})):
-                b_short, b_detail = run_mac_step(st, cfg, {"kind": "build", "project": pr["name"], "remote": pr["name"],
+                _, b_detail = run_mac_step(st, cfg, {"kind": "build", "project": pr["name"], "remote": pr["name"],
                                                            "source": "", "note": ""}, emit)
                 detail += "\nBuilt right after saving: " + b_detail
             else:
@@ -4741,7 +4735,6 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 err = "Couldn't ask Ollama which models it has (%s). %s" % (e, ai_down(cfg))
             model_labels.label_all(installed)
             url = ollama_url(cfg)
-            import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(6) as pool:
                 caps = list(pool.map(lambda m: model_labels.can_use_tools(url, m["name"]), installed))
             for m, c in zip(installed, caps):

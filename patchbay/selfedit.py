@@ -106,25 +106,6 @@ def read(rel, start=1, count=300):
     return "%s, lines %d-%d of %d:\n%s%s" % (rel, start, start + len(part) - 1, len(lines), body, more)
 
 
-def search(text, limit=80):
-    if not text:
-        raise SelfEditError("Give some text to search for.")
-    hits = []
-    needle = text.lower()
-    for line in files().splitlines()[1:]:
-        rel = line.rsplit(" (", 1)[0]
-        try:
-            content = (HERE / rel).read_text("utf-8", "replace").splitlines()
-        except OSError:
-            continue
-        for i, x in enumerate(content, 1):
-            if needle in x.lower():
-                hits.append("%s:%d: %s" % (rel, i, x.strip()[:200]))
-                if len(hits) >= limit:
-                    return "\n".join(hits) + "\n(stopped at %d matches; search for something more exact)" % limit
-    return "\n".join(hits) or "No matches for %r." % text
-
-
 # ---------------------------------------------------------------- checking a change
 
 def check(rel, text):

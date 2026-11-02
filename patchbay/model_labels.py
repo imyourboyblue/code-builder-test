@@ -320,15 +320,3 @@ def which_layer(messages):
         return "quick", "a short question"
     return "everyday", "everyday help"
 
-
-def choose(ollama_url, messages, chosen=None):
-    """The model to use with Automatic on, and a short label like "Quick answers: a short question".
-    Only models that can use PatchBay's tools are picked."""
-    names = tool_names(ollama_url, installed(ollama_url))
-    layers = layer_models(names, chosen)
-    layer, why = which_layer(messages)
-    model = layers[layer]
-    if not model:
-        return None, ""
-    name = dict((k, n) for k, n, _ in LAYERS)[layer].split(". ", 1)[1]
-    return model, "%s: %s, %s" % (name, why, local(model)[0])

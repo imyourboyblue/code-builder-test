@@ -159,7 +159,6 @@ class Research:
 
     def write(self, title):
         self.status("Writing the report...")
-        sources = "\n".join("[%d] %s - %s" % (s["n"], s["title"], s["url"]) for s in self.sources)
         report = self.ask([{"role": "user", "content":
                             "Write a research report that answers this request: %s\n\nUse ONLY these notes (the "
                             "numbers in brackets are sources):\n%s\n\nFormat (Markdown):\n- First line: '# %s'\n"

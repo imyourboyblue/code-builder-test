@@ -28,9 +28,6 @@ HERE = Path(__file__).resolve().parent
 DATA = HERE / "data-cache"
 KNOWN_HOSTS = DATA / "ssh_known_hosts"
 MOUNTS = DATA / "mounts"
-PROTOCOLS = ("ftp", "sftp", "smb", "folder")
-DEFAULT_PORTS = {"ftp": [21, 5000], "sftp": [22], "smb": [445], "folder": []}
-LABELS = {"ftp": "FTP", "sftp": "SFTP (SSH)", "smb": "SMB file sharing", "folder": "a folder on this Mac"}
 
 _LS = re.compile(r"^([\-dlcbps])[rwxsStT\-]{9}\S*\s+(?:\d+|\?)\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$")
 
@@ -317,14 +314,6 @@ class SFTPClient:
                 pass
             self._askpass = None
 
-    def disconnect(self):
-        """Close the kept-open SSH connection too."""
-        try:
-            subprocess.run(["ssh", "-O", "exit", "-o", "ControlPath=%s" % self._control_path(), "-p", str(self.port),
-                            self.target], capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
-            pass
-
 
 # ---------------------------------------------------------------- a folder on this Mac (and SMB shares mounted into one)
 
@@ -491,12 +480,6 @@ def smb_mount(cfg, port=445, timeout=20):
             raise ftplib.error_perm("550 There's no shared folder called %s on it." % share)
         raise SSHError("Couldn't connect the shared folder: %s" % (err.splitlines() or ["unknown error"])[-1])
     return point
-
-
-def smb_unmount(cfg):
-    point = MOUNTS / re.sub(r"[^A-Za-z0-9_-]", "_", cfg["device_name"])
-    if os.path.ismount(str(point)):
-        subprocess.run(["/sbin/umount", str(point)], capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
 
 
 def open_client(cfg, port):

@@ -29,28 +29,22 @@ def _ollama(app):
                        "Turn that computer on and open Ollama there, or switch back under Where the AI runs below.")
         return bad("ollama", "Ollama (the AI)", "Can't reach Ollama: %s" % tlsfix.explain(e),
                    "The AI runs in the Ollama app. Make sure it's installed (ollama.com) and open.", fix="Start Ollama")
-    want = cfg.get("ollama_model")
-    if True:      # the Everyday / Building mode decides the model
-        import model_labels
-        tool_ok = model_labels.tool_names(server.ollama_url(cfg), models)
-        fast, strong = model_labels.mode_model(tool_ok, "everyday"), model_labels.mode_model(tool_ok, "building")
-        if not fast:
-            return warn("ollama", "Ollama (the AI)", "Running, but no models that can use PatchBay's tools are "
-                        "downloaded.", "Download one in Setup → AI.")
-        try:
-            rows = server.loaded_models(cfg)
-            mem = ("; %s GB in memory now (%s)" % (round(sum(m["gb"] for m in rows), 1),
-                                                    ", ".join(m["name"] for m in rows))) if rows else \
-                "; nothing loaded in memory right now"
-        except Exception:
-            mem = ""
-        return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s%s."
-                  % (core.ai_where(cfg), fast, strong, mem))
-    if models and want and want not in models:
-        return warn("ollama", "Ollama (the AI)", "Running, but the chosen model %s isn't downloaded. You have: %s"
-                    % (want, ", ".join(models[:6]) or "none"),
-                    "In Terminal run: ollama pull %s" % want)
-    return ok("ollama", "Ollama (the AI)", "Running on %s, %d model%s ready." % (core.ai_where(cfg), len(models), "" if len(models) == 1 else "s"))
+    # The Everyday / Building mode decides the model.
+    import model_labels
+    tool_ok = model_labels.tool_names(server.ollama_url(cfg), models)
+    fast, strong = model_labels.mode_model(tool_ok, "everyday"), model_labels.mode_model(tool_ok, "building")
+    if not fast:
+        return warn("ollama", "Ollama (the AI)", "Running, but no models that can use PatchBay's tools are "
+                    "downloaded.", "Download one in Setup → AI.")
+    try:
+        rows = server.loaded_models(cfg)
+        mem = ("; %s GB in memory now (%s)" % (round(sum(m["gb"] for m in rows), 1),
+                                                ", ".join(m["name"] for m in rows))) if rows else \
+            "; nothing loaded in memory right now"
+    except Exception:
+        mem = ""
+    return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s%s."
+              % (core.ai_where(cfg), fast, strong, mem))
 
 
 def _certs(app):
@@ -275,7 +269,6 @@ def fix(app, check_id, emit):
     if check_id == "second":
         import model_labels
         import server
-        import threading
         if not start_pull(server.ollama_url(app.home.cfg()), model_labels.SECOND_OPINION_MODEL):
             return "%s is still downloading. Wait for it to finish first." % PULL["model"]
         return ("Started downloading %s (about 18 GB) through Ollama. It keeps going in the background; press Check "
