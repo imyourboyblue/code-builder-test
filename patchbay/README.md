@@ -52,12 +52,12 @@ You do this once.
    cp config.example.json config.json
    ```
    You don't need to edit it. You add devices from the home screen.
-5. Install [Ollama](https://ollama.com) (the AI that runs on your Mac), open it, then get the two models PatchBay
-   uses:
+5. Install [Ollama](https://ollama.com) (the AI that runs on your Mac), open it, then get a model and load it:
    ```
    ollama pull qwen3.6:35b-a3b
-   ollama pull qwen3.8:27b
+   ollama run qwen3.6:35b-a3b
    ```
+   (type `/bye` to leave Ollama's own chat; the model stays loaded for PatchBay.)
 
 Nothing else needs installing. PatchBay only uses what comes with Python. Build tools for homebrew (devkitPro) are
 installed by PatchBay itself when a job needs them.
@@ -229,21 +229,17 @@ new, the AI researches it and saves what it learned, so next time it already kno
 
 ## AI models and Claude
 
-**Everyday / Building.** Only one big model fits in your Mac's memory at a time, so instead of picking models you
-pick a mode with the switch above the chat:
+**Which model answers.** PatchBay uses the model you load in Ollama, nothing else. Load one in Terminal with
+`ollama run qwen3.6:35b-a3b` (then type `/bye`). The top of the chat shows the model in use, read from Ollama
+itself. If nothing is loaded, the chat says so instead of picking one. If several are loaded, the one used most
+recently answers. PatchBay keeps the model you loaded in memory until you press **Free up memory**, so answers start
+quickly. To switch, free the memory (or `ollama stop <model>`) and load another. When a job gets hard, it thinks
+harder on the same model. When the same step fails twice, a second model (Gemma 4) reviews what went wrong and
+gives advice, then lets go of the memory again.
 
-- **Everyday** keeps the fast model loaded (qwen3.6:35b-a3b, or its faster MLX version if you download it). For
-  questions, device checks, research, documents and small fixes. When a job gets hard, it thinks harder on the same
-  model instead of swapping.
-- **Building** keeps the 27B model loaded and always thinks harder. For building apps, homebrew and tricky crashes.
-
-The mode's model stays loaded between questions, so answers start quickly. When the same step fails twice, a second
-model (Gemma 4) reviews what went wrong and gives advice, then lets go of the memory again.
-
-**🩺 Setup → AI** shows the mode, the models on your Mac with what uses each one and a **Delete** button, and
-**Get more free models** with descriptions, sizes and a memory check. **Memory** shows what Ollama has loaded right
-now; the mode's model stays loaded on purpose (about 20-30 GB) so answers start fast. **Free up memory** unloads it
-until your next question.
+**🩺 Setup → AI** shows the model in use, the models on your Mac with what uses each one and a **Delete** button,
+and **Get more free models** with descriptions, sizes and a memory check. **Memory** shows what Ollama has loaded
+right now, and **Free up memory** unloads it.
 
 **Coding.** For changes to code, the AI looks at a short map of the project first (files, functions and their line
 numbers), changes only the lines that need it, and every changed file is checked for mistakes before the card even
@@ -251,7 +247,7 @@ shows. After saving, the project is built straight away (when automatic Mac step
 errors with the code around them. Each question only gets the tools it needs, so more of the AI's memory goes to
 your code.
 
-Which models each mode uses, and the free-model list, are set in `model_labels.py` (MODES and CATALOG).
+The free-model list is set in `model_labels.py` (CATALOG).
 
 **🔎 Deep research.** Press 🔎 next to the message box (it turns dark), type a question and Send. PatchBay splits
 the question into smaller ones, searches the web, reads the pages, takes notes with numbered sources, looks again
@@ -344,7 +340,7 @@ are answered by the AI on your Mac.
 ## Setup, updates and looks
 
 **🩺 Setup** checks that everything works:
-- Ollama (the AI) and which models Everyday and Building use
+- Ollama (the AI) and which model is loaded
 - secure connections and the internet
 - the build tools and your devices
 - free space and saved passwords
@@ -415,7 +411,7 @@ builds; only the AI questions go to the desktop.
    Ollama. Click **Allow** if it asks about incoming connections. Keep the desktop awake.
 3. On the laptop, open **🩺 Setup → Where the AI runs**, type the desktop's address (like `192.168.50.10` or
    `Mac-Studio.local`) and press **Test and use**. The model list then shows the desktop's models, and a small
-   label next to **AI model** says where the AI is running. **Use this computer** switches back.
+   label next to **AI** at the top of the chat says where the AI is running. **Use this computer** switches back.
 
 Ollama has no password, so anyone on your Wi-Fi could use it. That's fine at home, but never forward port 11434 on
 your router. PatchBay refuses internet addresses for the AI, so your files never leave your home network.
@@ -464,7 +460,6 @@ the old and new values on a card first.
 | `include` / `exclude` | File patterns to check or skip, e.g. `["*.db", "*.json"]` |
 | `max_file_mb` | Skip files bigger than this when scanning |
 | `allow_writes` | Must be on for any change to the device |
-| `work_mode` | `everyday` or `building` (the switch above the chat) |
 | `mac_folders` | Folders on this Mac the chat may use (set in Setup → Mac) |
 | `calendar_access` | `true` lets the chat use Apple Calendar (set in Setup → Mac) |
 | `about` | One sentence about the device, so the AI knows what it is |
@@ -472,4 +467,4 @@ the old and new values on a card first.
 | `lan_access` | `true` always lets the laptop in |
 | `chat_memory` | On unless set to `false`. Long chats keep their older part in notes plus search, so details from early on aren't lost |
 
-The AI model and data folder are shared by all devices and come from `config.json`.
+Where the AI runs and the data folder are shared by all devices and come from `config.json`.

@@ -98,8 +98,8 @@ def unique_dir(parent, stamp):
 
 
 # Settings shared by every device. Files in devices/ take these from config.json.
-GLOBAL_KEYS = ["data_folder", "ollama_url", "ollama_model", "chat_context", "lan_access", "port", "auto_mac_steps",
-               "model_layers", "work_mode", "mac_folders", "calendar_access", "chat_memory"]
+GLOBAL_KEYS = ["data_folder", "ollama_url", "chat_context", "lan_access", "port", "auto_mac_steps",
+               "mac_folders", "calendar_access", "chat_memory"]
 
 
 def load_config(path):
@@ -138,7 +138,6 @@ def load_config(path):
     cfg.setdefault("keep_scans", 5)     # scan copies kept per device (older ones go, unless they hold the only good copy)
     cfg.setdefault("data_folder", "~/PatchBay-data")
     cfg.setdefault("ollama_url", "http://localhost:11434")
-    cfg.setdefault("ollama_model", "auto")     # Automatic: picks the model for each job
     cfg.setdefault("allow_writes", False)
     if cfg["protocol"] == "folder":
         cfg.setdefault("host", "this Mac")
@@ -1017,10 +1016,13 @@ def cmd_explain(cfg, args):
         "4) suggest what the program should change so a freeze can't damage files again (for example writing to "
         "a temporary file and renaming it, or using a database journal). Don't invent facts you can't see."
         % (report["device"], "\n\n".join(parts)))
-    model = cfg["ollama_model"]
-    if model == "auto":
-        import model_labels
-        model = model_labels.mode_model(model_labels.installed(url), "building") or model
+    import model_labels
+    try:
+        model = model_labels.active(model_labels.running(url))      # the model you loaded in Ollama
+    except (OSError, ValueError) as e:
+        sys.exit("Couldn't reach Ollama at %s (%s). Is the Ollama app running?" % (url, e))
+    if not model:
+        sys.exit(model_labels.no_model(model_labels.installed(url)))
     body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "user", "content": prompt}],
                        "options": {"num_ctx": 32768}}).encode()

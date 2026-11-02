@@ -29,13 +29,14 @@ def _ollama(app):
                        "Turn that computer on and open Ollama there, or switch back under Where the AI runs below.")
         return bad("ollama", "Ollama (the AI)", "Can't reach Ollama: %s" % tlsfix.explain(e),
                    "The AI runs in the Ollama app. Make sure it's installed (ollama.com) and open.", fix="Start Ollama")
-    # The Everyday / Building mode decides the model.
+    # PatchBay uses the model you loaded in Ollama.
     import model_labels
-    tool_ok = model_labels.tool_names(server.ollama_url(cfg), models)
-    fast, strong = model_labels.mode_model(tool_ok, "everyday"), model_labels.mode_model(tool_ok, "building")
-    if not fast:
-        return warn("ollama", "Ollama (the AI)", "Running, but no models that can use PatchBay's tools are "
-                    "downloaded.", "Download one in Setup → AI.")
+    if not models:
+        return warn("ollama", "Ollama (the AI)", "Running, but no models are downloaded.",
+                    "Download one in Setup → AI.")
+    model = model_labels.active(server.loaded_names(cfg))
+    if not model:
+        return warn("ollama", "Ollama (the AI)", "Running, but no model is loaded.", model_labels.no_model(models))
     try:
         rows = server.loaded_models(cfg)
         mem = ("; %s GB in memory now (%s)" % (round(sum(m["gb"] for m in rows), 1),
@@ -43,8 +44,8 @@ def _ollama(app):
             "; nothing loaded in memory right now"
     except Exception:
         mem = ""
-    return ok("ollama", "Ollama (the AI)", "Running on %s. Everyday uses %s; Building uses %s%s."
-              % (core.ai_where(cfg), fast, strong, mem))
+    return ok("ollama", "Ollama (the AI)", "Running on %s. Using %s, the model you loaded%s."
+              % (core.ai_where(cfg), model, mem))
 
 
 def _certs(app):

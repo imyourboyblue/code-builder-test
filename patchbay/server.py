@@ -2788,57 +2788,33 @@ def ollama_url(cfg):
         raise ToolError(str(e))
 
 
-def modes_info(cfg):
-    """The two work modes, which model each keeps loaded, and tips (for the switch and Setup → AI)."""
-    err, names, sizes = None, [], {}
+def models_info(cfg):
+    """The model PatchBay is using: whichever one you loaded in Ollama (for the chat bar and Setup → AI)."""
+    err, names = None, []
     try:
         url = ollama_url(cfg)
-        with urllib.request.urlopen(url + "/api/tags", timeout=10) as r:
-            tags = json.loads(r.read()).get("models", [])
-        sizes = {m.get("name"): m.get("size") or 0 for m in tags if m.get("name")}
-        names = model_labels.tool_names(url, list(sizes))
+        names = model_labels.installed(url, fresh=True)
     except (OSError, ValueError, ToolError) as e:
         err = "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
     loaded = None if err else loaded_names(cfg)
-    modes = []
-    for key, name, why, _ in model_labels.MODES:
-        m = model_labels.mode_model(names, key)
-        faster = model_labels.FASTER.get(m or "")
-        modes.append({"key": key, "label": name, "why": why, "model": m,
-                      "size": core.human_size(sizes.get(m) or 0) if m else "",
-                      "faster": faster if faster and faster not in sizes else None,
-                      "loaded": bool(m and loaded and m in loaded)})
-    sec = model_labels.second(names)
-    return {"current": work_mode(cfg), "modes": modes, "error": err, "where": core.ai_where(cfg), "loaded": loaded,
-            "second": sec, "second_why": "Reviews a step when it fails twice, then lets go of the memory."}
+    model = model_labels.active(loaded)
+    faster = model_labels.FASTER.get(model or "")
+    return {"model": model, "loaded": loaded, "error": err, "where": core.ai_where(cfg),
+            "no_model": model_labels.no_model(names) if loaded == [] else "", "example": model_labels.example(names),
+            "faster": faster if faster and faster not in names else None,
+            "second": model_labels.second(model_labels.tool_names(url, names)) if names else None,
+            "second_why": "Reviews a step when it fails twice, then lets go of the memory."}
 
 
-def work_mode(cfg):
-    m = cfg.get("work_mode")
-    return m if m in model_labels.MODE_KEYS else "everyday"
-
-
-def warm_mode(cfg, mode, old=None):
-    """Load the mode's model and let the other big one go, in the background, so the first answer is quick."""
-    def go():
-        try:
-            url = ollama_url(cfg)
-            names = model_labels.tool_names(url, model_labels.installed(url))
-            new = model_labels.mode_model(names, mode)
-            prev = model_labels.mode_model(names, old) if old else None
-            for name, keep in ((prev, 0), (new, -1)):
-                if name and (keep == -1 or name != new):
-                    body = {"model": name, "keep_alive": keep, "messages": [],
-                            "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
-                    req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
-                                                 headers={"Content-Type": "application/json"})
-                    with urllib.request.urlopen(req, timeout=300) as r:
-                        r.read()
-        except Exception:
-            pass
-        _LOADED.clear()
-    _LOADED.clear()
-    threading.Thread(target=go, daemon=True).start()
+def current_model(cfg):
+    """The model to answer with: the one loaded in Ollama. Never a guess: if nothing is loaded, it says so."""
+    loaded = loaded_names(cfg)
+    if loaded is None:
+        raise ToolError("Couldn't ask Ollama which model is loaded. %s" % ai_down(cfg))
+    model = model_labels.active(loaded)
+    if not model:
+        raise ToolError(model_labels.no_model(model_labels.installed(ollama_url(cfg))))
+    return model
 
 
 def mac_memory_gb():
@@ -3358,22 +3334,20 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         tools = TOOLS
     url = ollama_url(cfg)
     think = None
-    keep = -1           # the mode's model stays loaded: no reloading between questions
+    keep = -1           # the model you loaded stays loaded: no reloading between questions
     if not model:
-        mode = work_mode(cfg)
-        names = model_labels.tool_names(url, model_labels.installed(url))
-        model = model_labels.mode_model(names, mode)
-        if not model:
-            raise ToolError("Ollama has no models that can use PatchBay's tools yet. Download one in 🩺 Setup → AI.")
-        layer, why = model_labels.which_layer(messages)
-        # Everyday thinks harder on the same model when a job gets hard (no swapping); Building always does.
-        think = mode == "building" or layer in ("hard", "second")
+        model = current_model(cfg)
+        # It thinks harder on the same model when a job gets hard (no swapping models).
+        think = model_labels.which_layer(messages)[0] in ("hard", "second")
         if emit:
             emit({"type": "status", "text": "Thinking harder..." if think else "Thinking..."})
     else:
-        keep = 0 if model != model_labels.mode_model(model_labels.installed(url), work_mode(cfg)) else -1
-        if tools and model_labels.can_use_tools(url, model) is False:
-            tools = []
+        keep = 0 if model != model_labels.active(loaded_names(cfg)) else -1
+    if tools and model_labels.can_use_tools(url, model) is False:
+        tools = []
+        if emit:
+            emit({"type": "note", "text": "%s can't use PatchBay's tools (look at devices, read files, make cards), "
+                                          "so it can only talk. Load a model that can, for that." % model})
     if think and model_labels.can_think(url, model) is False:
         think = None
     # The same context size every time, or Ollama reloads the model.
@@ -3452,7 +3426,7 @@ def ollama_log_hint(cfg):
 
 
 def ai_simple(cfg, messages, think=False, fmt=None, stream=False, emit=None, max_words=None, tries=3):
-    """One answer from the mode's model without tools (deep research, reviews). Words arrive as they're written, so
+    """One answer from the model you loaded without tools (deep research, reviews). Words arrive as they're written, so
     a long answer or a slow model load isn't mistaken for a dead Ollama; with stream they're also shown on the page.
     max_words caps the answer (so a model stuck repeating itself can't run for ever). A dropped connection or a
     timeout is retried (Ollama may be reloading the model)."""
@@ -3489,26 +3463,46 @@ def loaded_models(cfg, timeout=8):
 
 
 _LOADED = {}     # Ollama address -> (when asked, names loaded or None if it couldn't say)
+_PINNED = set()  # models PatchBay has asked Ollama to keep loaded
+_FREED = [0.0]   # when Free up memory was last pressed (a model on its way out isn't kept loaded again)
 
 
 def loaded_names(cfg):
-    """Names of the models Ollama really has loaded right now (asked again after 2 seconds), or None if Ollama
-    couldn't say. This is what the chat bar and Setup show, not the model PatchBay plans to use."""
+    """Names of the models Ollama really has loaded right now, most recently used first (asked again after
+    2 seconds), or None if Ollama couldn't say. A model you load in Ollama is then kept loaded until you free the
+    memory, so it doesn't drop out after Ollama's usual 5 minutes."""
     url = ollama_url(cfg)
     hit = _LOADED.get(url)
     if hit and time.time() - hit[0] < 2:
         return hit[1]
     try:
-        names = [m["name"] for m in loaded_models(cfg, timeout=3) if m.get("name")]
+        names = model_labels.running(url)
     except (OSError, ValueError):
         names = None
     _LOADED[url] = (time.time(), names)
+    model = model_labels.active(names)
+    if model and (url, model) not in _PINNED and time.time() - _FREED[0] > 15:
+        _PINNED.add((url, model))
+        threading.Thread(target=_pin, args=(url, model, int(cfg.get("chat_context", 32768))), daemon=True).start()
     return names
+
+
+def _pin(url, model, ctx):
+    body = {"model": model, "keep_alive": -1, "messages": [], "options": {"num_ctx": ctx}}
+    req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            r.read()
+    except (OSError, ValueError):
+        _PINNED.discard((url, model))
 
 
 def unload_models(cfg, names=None):
     """Take models out of memory (they load again by themselves when next needed). Returns the names unloaded."""
     _LOADED.clear()
+    _PINNED.clear()
+    _FREED[0] = time.time()
     gone = []
     for m in (loaded_models(cfg) if names is None else [{"name": n} for n in names]):
         body = json.dumps({"model": m["name"], "messages": [], "keep_alive": 0}).encode()
@@ -3529,11 +3523,9 @@ class AiDropped(Exception):
 
 def _ai_simple_once(cfg, url, messages, think, fmt, stream, emit, max_words):
     try:
-        model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+        model = current_model(cfg)
     except OSError as e:
         raise AiDropped(str(e))
-    if not model:
-        raise ToolError("Ollama has no models yet. Download one in 🩺 Setup → AI.")
     body = {"model": model, "stream": True, "messages": messages, "keep_alive": -1,
             "options": {"num_ctx": int(cfg.get("chat_context", 32768))}}
     if max_words:
@@ -3605,11 +3597,11 @@ def deep_research(st, question, emit):
 
 def second_opinion(cfg, messages, emit):
     """The same step failed twice: a different model reviews it and suggests what to try. It only advises (no tools),
-    then lets go of the memory again, so the mode's model stays the one doing the work."""
+    then lets go of the memory again, so the model you loaded stays the one doing the work."""
     try:
         url = ollama_url(cfg)
         names = model_labels.tool_names(url, model_labels.installed(url))
-        main = model_labels.mode_model(names, work_mode(cfg))
+        main = current_model(cfg)
         other = model_labels.second(names)
         if not other or other == main:
             return None
@@ -3835,7 +3827,7 @@ def write_memory_notes(st, cfg):
         return
     try:
         url = ollama_url(cfg)
-        model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+        model = model_labels.active(loaded_names(cfg))
         if model:
             memory.after_answer(st, memory.ollama_ask(url, model))
     except Exception as e:      # notes are a bonus: search works without them
@@ -4730,7 +4722,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         elif path == "/api/info":
             st = APP.device(q.get("device"))
             cfg = st.cfg()
-            self.json({"device": cfg["device_name"], "host": cfg["host"], "model": cfg["ollama_model"],
+            self.json({"device": cfg["device_name"], "host": cfg["host"],
                        "writes_on": bool(cfg.get("allow_writes")), "folders": cfg["remote_folders"],
                        "firmware": APP.registry.firmware(cfg),
                        "computer": APP.computer, "remote": not self.from_this_mac(),
@@ -4848,12 +4840,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 m["tools"] = c is not False
             here = core.ai_where(cfg) == "this Mac"
             mem = mac_memory_gb() if here else None
-            self.json({"installed": installed, "current": cfg["ollama_model"], "error": err, "where": core.ai_where(cfg),
-                       "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL),
-                       "layers": [{"key": k, "name": n, "when": w, "chosen": (cfg.get("model_layers") or {}).get(k) or "",
-                                   "auto": model_labels.layer_models([m["name"] for m in installed if m["tools"]]).get(k)}
-                                  for k, n, w in model_labels.LAYERS],
-                       "auto": model_labels.AUTO_LABEL[1]})
+            self.json({"installed": installed, "error": err, "where": core.ai_where(cfg),
+                       "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL)})
         elif path == "/api/accept-edits":
             self.json({"on": bool(APP.home.cfg().get("auto_mac_steps", True))})
         elif path == "/api/models/memory":
@@ -4892,7 +4880,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         elif path == "/api/claude/sent":
             self.json({"items": APP.claude.sent_list()})
         elif path == "/api/models":
-            self.json(modes_info(APP.home.cfg()))
+            self.json(models_info(APP.home.cfg()))
         elif path == "/api/portrait":
             cfg = APP.device(q.get("device")).cfg()
             f = APP.registry.portrait_file(cfg)
@@ -5362,20 +5350,6 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except claude.ClaudeError as e:
                 raise ToolError(str(e))
             self.json(dict(APP.claude.public(), answer=answer[:200]))
-        elif path == "/api/models/layers":
-            layers = {}
-            for k in model_labels.LAYER_KEYS:
-                v = str((data.get("layers") or {}).get(k) or "").strip()
-                if v and not re.match(r"^[\w.:/-]{1,100}$", v):
-                    raise ToolError("That isn't a model name.")
-                if v:
-                    layers[k] = v
-            cfg = APP.home.cfg()
-            main = str(APP.registry.main)
-            old = json.loads(Path(main).read_text()).get("model_layers")
-            if (old or {}) != layers:
-                devices.apply_changes(cfg, [(main, "model_layers", old, layers)])
-            self.json({"layers": layers})
         elif path == "/api/models/delete":
             name = (data.get("model") or "").strip()
             cfg = APP.home.cfg()
@@ -5399,30 +5373,6 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             if not selfcheck.start_pull(ollama_url(APP.home.cfg()), name):
                 raise ToolError("%s is still downloading. Wait for it to finish first." % selfcheck.PULL["model"])
             self.json({"pull": dict(selfcheck.PULL)})
-        elif path == "/api/mode":
-            mode = data.get("mode")
-            if mode not in model_labels.MODE_KEYS:
-                raise ToolError("Pick Everyday or Building.")
-            cfg = APP.home.cfg()
-            old = work_mode(cfg)
-            main = str(APP.registry.main)
-            raw = json.loads(Path(main).read_text())
-            planned = [(main, "work_mode", raw.get("work_mode"), mode)]
-            if raw.get("ollama_model") != model_labels.AUTO:
-                planned.append((main, "ollama_model", raw.get("ollama_model"), model_labels.AUTO))   # the mode decides now
-            if raw.get("work_mode") != mode or len(planned) > 1:
-                devices.apply_changes(cfg, planned)
-            cfg = APP.home.cfg()
-            if old != mode or data.get("warm"):
-                warm_mode(cfg, mode, old if old != mode else None)
-            self.json(modes_info(cfg))
-        elif path == "/api/model":
-            name = (data.get("model") or "").strip()
-            if not re.match(r"^[\w.:/-]{1,100}$", name):
-                raise ToolError("That isn't a model name.")
-            planned = devices.plan_changes(APP.registry, APP.config_path, {"ollama_model": name})
-            devices.apply_changes(APP.home.cfg(), planned)
-            self.json({"ok": True, "model": name})
         elif path in ("/api/chat", "/api/confirm", "/api/cancel"):
             self.chat(path, data)
         elif path == "/api/follow":

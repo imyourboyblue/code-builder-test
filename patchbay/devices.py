@@ -241,7 +241,6 @@ SETTINGS = {
     "backup_keep": ("count", "how many backups to keep (older ones are deleted; 0 = keep all)"),
     "backup_mirror": ("text", "a second folder each backup is also copied to (empty = none)"),
     "backup_compress": ("bool", "zip each finished backup to save space"),
-    "ollama_model": ("text", "which AI model to use (shared)"),
     "chat_context": ("int", "how much the AI remembers at once (shared)"),
     "data_folder": ("text", "where scans and backups of changes are kept (shared)"),
     "lan_access": ("bool", "let the laptop open the app (shared, takes effect after a restart)"),
@@ -249,7 +248,7 @@ SETTINGS = {
     "auto_mac_steps": ("bool", "download source, edit project files and build on the Mac without a card each time "
                                "(shared; device writes always need a card)"),
 }
-SHARED = {"ollama_model", "chat_context", "data_folder", "lan_access", "port", "ollama_url", "auto_mac_steps"}
+SHARED = {"chat_context", "data_folder", "lan_access", "port", "ollama_url", "auto_mac_steps"}
 
 
 def coerce(key, value):
