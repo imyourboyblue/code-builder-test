@@ -7,7 +7,6 @@ The app is a tiny launcher that runs this same PatchBay (same Python, same folde
 LaunchAgent that starts PatchBay quietly in the background when the user logs in.
 """
 
-import os
 import plistlib
 import subprocess
 import sys

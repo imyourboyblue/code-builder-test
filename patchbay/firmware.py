@@ -23,7 +23,6 @@ from pathlib import PurePosixPath
 
 import core
 
-VERSION_LINE = re.compile(r"(?i)(firmware|atmosph|ams|hos|system version|fusee|hekate|version)")
 VERSION_STR = re.compile(rb"(?i)(atmosph[\x00-\xff]{0,20}?\d+\.\d+\.\d+|v?\d{1,2}\.\d{1,2}\.\d{1,2}(?:-[0-9a-f]{6,})?)")
 
 

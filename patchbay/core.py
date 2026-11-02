@@ -100,7 +100,6 @@ def unique_dir(parent, stamp):
 # Settings shared by every device. Files in devices/ take these from config.json.
 GLOBAL_KEYS = ["data_folder", "ollama_url", "ollama_model", "chat_context", "lan_access", "port", "auto_mac_steps",
                "model_layers", "work_mode", "mac_folders", "calendar_access", "chat_memory"]
-DEVICES_DIR = HERE / "devices"
 
 
 def load_config(path):
@@ -172,14 +171,6 @@ def data_dir(cfg):
     d = Path(os.path.expanduser(cfg["data_folder"])) / cfg["device_name"]
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def local_path_for(root, remote_path):
@@ -878,54 +869,6 @@ def cmd_scan(cfg, args):
     say()
     say(report_text(report))
     say("Report saved: %s" % tpath)
-
-
-def share_copy(old, new):
-    """Point new at the same disk space as old (a hard link), when the files are identical."""
-    try:
-        if old.exists() and old.stat().st_size == new.stat().st_size:
-            tmp = new.with_name(new.name + ".link")
-            os.link(str(old), str(tmp))
-            tmp.replace(new)
-    except OSError:
-        pass
-
-
-def latest_snapshot_dir(root, exclude=None):
-    snaps = sorted(p for p in (root / "snapshots").glob("*") if p.is_dir() and p.name != exclude)
-    for s in reversed(snaps):
-        if (s / "_manifest.json").exists():
-            return s
-    return None
-
-
-def prune_scans(root, keep, dry=False):
-    """Delete scan copies older than the newest `keep`, except ones holding the only good copy of a file.
-    Returns how many were removed."""
-    import shutil
-    snaps = sorted(p for p in (root / "snapshots").glob("*") if p.is_dir())
-    keep = max(1, keep)
-    kept, old = snaps[-keep:], snaps[:-keep]
-    good = set()
-    for s in kept:
-        try:
-            good |= {p for p, m in json.loads((s / "_manifest.json").read_text()).items() if m.get("ok")}
-        except (OSError, ValueError):
-            pass
-    removed = 0
-    for s in reversed(old):
-        try:
-            man = json.loads((s / "_manifest.json").read_text())
-        except (OSError, ValueError):
-            man = {}
-        only = {p for p, m in man.items() if m.get("ok")} - good
-        if only:
-            good |= only          # keep it: it has the last good copy of something
-            continue
-        if not dry:
-            shutil.rmtree(str(s), ignore_errors=True)
-        removed += 1
-    return removed
 
 
 def scan_usage(root):

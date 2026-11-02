@@ -31,13 +31,15 @@ RECOVERED = HERE / "data-cache" / "self-recovered.json"
 TEXT_TYPES = {".py", ".html", ".js", ".css", ".md", ".json", ".swift", ".txt", ".svg", ".c", ".h", ".cpp", ".sh",
               ".plist", ".toml", ".cfg", ".ini", ""}
 # Never edited this way: the user's own settings, passwords and data, and git's own files.
-BLOCKED_NAMES = {"config.json", "access.json", "claude.json", "claude-usage.json", "claude-aliases.json"}
+BLOCKED_NAMES = {"config.json", "access.json", "claude.json", "claude-usage.json", "claude-aliases.json",
+                 "redaction_list.json"}
 BLOCKED_DIRS = {"data-cache", "devices", "claude-sent", ".git", "__pycache__"}
 
 SAFETY = re.compile(r"needs_typing|typed|allow_writes|enable_writes|writes_on|device_name\b|ollama_url|localhost|"
                     r"127\.0\.0\.1|LOOPBACK|from_this_mac|same_site|signed_in|session_ok|password|is_private|"
                     r"private_ip|own subnet|brute|default.cred|redact|strip_private|never send|claude_ok|"
-                    r"safe_for_cloud|SAFE_COMMAND|SAFE_PART|runs_by_itself|auto_mac_steps|BLOCKED_|SAFETY",
+                    r"safe_for_cloud|SAFE_COMMAND|SAFE_PART|runs_by_itself|auto_mac_steps|BLOCKED_|SAFETY|sanitizer|"
+                    r"blocked_terms|spec_pipeline|request_body|CODE_SYSTEM|leaks_private",
                     re.I)
 RENAMED = {"gd1chat.py": "server.py", "gd1check.py": "core.py"}   # old file names, for undoing older changes
 CONFIRM_WORD = "PatchBay"
@@ -102,25 +104,6 @@ def read(rel, start=1, count=300):
     more = "" if start - 1 + count >= len(lines) else "\n(%d more lines; read on with start_line=%d)" % (
         len(lines) - (start - 1 + count), start + count)
     return "%s, lines %d-%d of %d:\n%s%s" % (rel, start, start + len(part) - 1, len(lines), body, more)
-
-
-def search(text, limit=80):
-    if not text:
-        raise SelfEditError("Give some text to search for.")
-    hits = []
-    needle = text.lower()
-    for line in files().splitlines()[1:]:
-        rel = line.rsplit(" (", 1)[0]
-        try:
-            content = (HERE / rel).read_text("utf-8", "replace").splitlines()
-        except OSError:
-            continue
-        for i, x in enumerate(content, 1):
-            if needle in x.lower():
-                hits.append("%s:%d: %s" % (rel, i, x.strip()[:200]))
-                if len(hits) >= limit:
-                    return "\n".join(hits) + "\n(stopped at %d matches; search for something more exact)" % limit
-    return "\n".join(hits) or "No matches for %r." % text
 
 
 # ---------------------------------------------------------------- checking a change

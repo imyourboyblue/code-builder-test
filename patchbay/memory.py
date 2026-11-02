@@ -19,7 +19,6 @@ import json
 import math
 import re
 import threading
-import time
 import urllib.request
 from pathlib import Path
 

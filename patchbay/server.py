@@ -28,6 +28,7 @@ import contextlib
 import difflib
 import errno
 import ftplib
+import gzip
 import io
 import ipaddress
 import json
@@ -84,6 +85,7 @@ import firmware
 import nro
 import platforms
 import projects
+from harness import coder as harness_coder, compiler as harness_compiler, pipeline as harness_pipeline, sanitizer
 import filemanager as fm
 import webauth
 
@@ -585,13 +587,37 @@ def clear_old_snapshots(cfg):
     return len(snaps)
 
 
-def backup_copies(cfg, path, newest_first=False):
-    """(backup, local file, passed the checks) for each full backup holding this file."""
-    out = []
+_COPY_CHECKS = {}     # (device path, backup file, its size and time) -> passed the checks
+
+
+def copy_passes(path, local, st):
+    """Whether a backed-up copy passes the damage checks. Backed-up files don't change, so each one is checked once
+    (the Needs attention tab asks for every file on it each time it opens)."""
+    key = (path, str(local), st.st_ino, st.st_size, st.st_mtime_ns)
+    ok = _COPY_CHECKS.get(key)
+    if ok is None:
+        ok = not [x for x in core.check_bytes(path, local.read_bytes()) if x["level"] == "error"]
+        if len(_COPY_CHECKS) > 5000:
+            _COPY_CHECKS.clear()
+        _COPY_CHECKS[key] = ok
+    return ok
+
+
+def iter_backup_copies(cfg, path):
+    """(backup, local file, passed the checks) for each full backup holding this file, newest first."""
     for b in backup.list_backups(cfg):
         local = core.local_path_for(Path(b["path"]), path)
-        if local.is_file() and local.stat().st_size <= NRO_LIMIT:
-            out.append((b, local, not [x for x in core.check_bytes(path, local.read_bytes()) if x["level"] == "error"]))
+        try:
+            st = local.stat()
+        except OSError:
+            continue
+        if local.is_file() and st.st_size <= NRO_LIMIT:
+            yield b, local, copy_passes(path, local, st)
+
+
+def backup_copies(cfg, path, newest_first=False):
+    """(backup, local file, passed the checks) for each full backup holding this file."""
+    out = list(iter_backup_copies(cfg, path))
     return out if newest_first else list(reversed(out))
 
 
@@ -670,7 +696,7 @@ def runs_by_itself(cfg, kind, extra):
 def in_plan(plan, kind, extra):
     """Whether an approved plan covers this Mac step. Risky commands only if the plan listed them and the user
     ticked "I understand" on it."""
-    if kind == "ask_claude":
+    if kind in ("ask_claude", "spec_claude", "spec_files"):
         return False
     cmd = (extra or {}).get("command") or ""
     if kind == "command" and risk.risky(cmd):
@@ -1095,9 +1121,9 @@ def t_build(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root = pe(projects.folder_of, pr)
     try:
-        console, needed, missing = projects.needed_packages(root)
+        missing = projects.needed_packages(root)[2]
     except Exception:      # never let the check itself stop a build
-        console, needed, missing = None, [], []
+        missing = []
     if missing:
         # Install everything the project needs in one go, instead of one failed build per library.
         res = t_install_packages(st, emit, {"manager": "devkitpro", "packages": missing,
@@ -2014,12 +2040,6 @@ def h_security_check(st, emit, a):
             "exploit a problem or guess passwords.")
 
 
-@home_tool("check_address", "See whether anything answers at an IP address and port, and what it says (FTP, SSH, "
-           "web...). Read-only.", {"host": S, "port": I}, ["host", "port"])
-def h_check(st, emit, a):
-    return devices.probe((a.get("host") or "").strip(), int(a.get("port") or 21))
-
-
 @home_tool("add_device", "Save a new device after checking it answers (FTP, SFTP/SSH, SMB file sharing, or a folder "
            "on this Mac). It then gets a picture on the home screen.", {"name": dict(S, description="Short name like GD2"),
            "host": S, "protocol": {"type": "string", "enum": ["ftp", "sftp", "smb", "folder"]},
@@ -2199,7 +2219,7 @@ def confirm_self(st, p, emit):
     st.messages.append({"role": "user", "content": "[I confirmed the PatchBay change. %s]" % msg})
 
 
-for _n in ("check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
+for _n in ("check_address", "check_build_tools", "latest_release", "find_github_repo", "read_repo_file", "web_search",
            "read_web_page", "review_github_repo", "places_nearby"):
     _spec = next(t for t in TOOLS if t["function"]["name"] == _n)
     HOME_TOOLS.append(_spec)
@@ -2997,6 +3017,8 @@ def claude_tools(tools):
             seen.add(n)
             uniq.append(t)
     tools = uniq
+    if not (APP and APP.claude.settings().get("spec_pipeline")):
+        tools = [t for t in tools if t["function"]["name"] != "private_build"]
     mode = APP.claude.mode() if APP else "off"
     if mode in ("off", "always"):
         return [t for t in tools if t["function"]["name"] != "ask_claude"]
@@ -3022,7 +3044,7 @@ LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_sea
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
-                  "propose_device_command"}
+                  "propose_device_command", "private_build"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -3083,6 +3105,172 @@ def research_done(st):
             first = next((l.strip() for l in str(m.get("content") or "").splitlines() if l.strip()), "")
             out.append("%s: %s" % (m["tool_name"], first[:160]))
     return list(reversed(out))
+
+
+# ----------------------------------------------------------------- the private builder (harness/)
+# The local AI writes a generic spec of the user's idea; the spec is checked for anything private; the user sees the
+# exact spec and presses Send; only the spec goes to Claude, as one fresh request; the files come back on a second
+# card and are saved with a backup and Undo (Setup → Mac). Off until the user turns it on in the ☁ Claude panel.
+
+PRIVATE_BUILDS = Path(os.path.expanduser(str(projects.PROJECTS_HOME))) / "private-builds"
+
+
+def spec_terms():
+    """Every personal value PatchBay knows, for the check (never sent anywhere)."""
+    extra = claude_known() + [("mac", APP.computer if APP else "")]
+    return harness_pipeline.auto_terms(APP.registry.main if APP else None, extra)
+
+
+def spec_access_cfg():
+    """The approved Mac folders, plus PatchBay's own private-builds folder."""
+    cfg = dict(access_cfg())
+    cfg["mac_folders"] = list(cfg.get("mac_folders") or []) + [str(PRIVATE_BUILDS)]
+    return cfg
+
+
+def spec_block_list():
+    try:
+        return sanitizer.load_list()
+    except ValueError as e:
+        raise ToolError(str(e))
+
+
+@tool("private_build",
+      "Private builder: turn the user's idea into working code written by Claude, without Claude ever seeing who they "
+      "are or what it's for. The AI on this Mac writes a generic spec, PatchBay checks it for anything private, the "
+      "user sees the exact spec on a card and presses Send, then Claude's files are saved after a second card. Use "
+      "it only when the user asks for the private builder (or a private / anonymous spec for Claude). Pass the "
+      "user's idea in their own words, with every detail they gave.",
+      {"idea": dict(S, description="The user's idea, in full"),
+       "name": dict(S, description="A short neutral name for the folder, like csv-merger"),
+       "folder": dict(S, description="Optional: where the files go (an approved Mac folder). Default: "
+                                     "~/Patchbay-projects/private-builds/<name>"),
+       "allow": {"type": "array", "items": S, "description": "Only words the user said are fine to send after the "
+                                                             "double-check flagged them"}}, ["idea"])
+def t_private_build(st, emit, a):
+    s = APP.claude.settings()
+    if not s.get("spec_pipeline"):
+        raise ToolError("The private builder is off. The user can turn it on in the ☁ Claude panel (above the chat).")
+    if not s.get("key"):
+        raise ToolError("There's no Claude API key yet. The user can add one in the ☁ Claude panel.")
+    try:
+        APP.claude.check_cap()
+    except claude.ClaudeError as e:
+        raise ToolError(str(e))
+    idea = (a.get("idea") or "").strip() or next(
+        (str(m.get("content")) for m in reversed(st.messages) if m.get("role") == "user"
+         and not str(m.get("content", "")).startswith("[")), "")
+    name = harness_pipeline.slug(a.get("name") or " ".join(idea.split()[:4]))
+    folder = ma(macaccess.resolve, spec_access_cfg(), a.get("folder") or str(PRIVATE_BUILDS / name), False)
+    blocked = spec_block_list()
+    terms = spec_terms()
+    cfg = st.cfg()
+    try:
+        url, local = harness_pipeline.local_ai(ollama_url(cfg), None, s)
+    except harness_pipeline.PipelineError as e:
+        raise ToolError(str(e))
+
+    def log(text):
+        check_stop()
+        emit({"type": "status", "text": text})
+    try:
+        spec, found, suspects = harness_pipeline.make_spec(idea, url, local, terms, blocked, s.get("spec_leak_check"),
+                                                           a.get("allow") or [], log, urlopen=stopper.urlopen)
+    except harness_compiler.CompileError as e:
+        check_stop()
+        raise ToolError(str(e))
+    rec = harness_pipeline.record_dir(name)
+    (rec / "spec_sanitized.md").write_text(spec, "utf-8")
+    if leaks_private(st, spec):
+        found.append({"kind": "mac", "what": "words from your own Mac files or calendar that this chat read",
+                      "shown": "(hidden)", "line": 1})
+    if found or suspects:
+        why = harness_pipeline.problems_text(found, suspects)
+        emit({"type": "note", "text": "**Private builder: stopped. Nothing was sent to Claude.** The spec still had "
+                                      "private details:\n\n%s\n\nThe spec is kept on this Mac in %s.%s" % (
+                                          why, rec, "" if found else " If those words are fine to send, say so and "
+                                          "I'll try again with them allowed."), "kind": "private_build"})
+        return ("Stopped before sending: the spec still has private details (listed to the user). Nothing was sent. "
+                "Tell the user in one sentence. Only if they say the double-check's words are fine, call "
+                "private_build again with those words in allow. Never put words from the block list there.")
+    model = s.get("spec_model") or claude.DEFAULTS["spec_model"]
+    _, cost = harness_pipeline.estimate(spec, model)
+    label = re.sub(r"\s*\(.*\)$", "", claude.MODELS.get(model, (model,))[0])
+    emit({"type": "note", "text": "The spec passed the privacy check. Rough cost to send it: %s" % cost})
+    return add_pending(st, emit, "spec_claude", cfg, "Claude", rec, name,
+                       "Send this spec to Claude (%s)" % label, spec, on_mac=True,
+                       extra_fields={"spec": spec, "model": model, "folder": str(folder), "name": name,
+                                     "record": str(rec)})
+
+
+HOME_TOOLS.append(TOOLS[-1])
+HOME_HANDLERS["private_build"] = t_private_build
+
+
+def spec_file_changes(root, files):
+    """The planned writes for Claude's files, the card text, and files PatchBay won't write (kept in the record)."""
+    cfg = spec_access_cfg()
+    changes, parts, skipped = [], [], []
+    for rel, content in files:
+        try:
+            p = macaccess.resolve(cfg, str(Path(root) / rel), must_exist=False)
+        except macaccess.AccessError:
+            skipped.append(rel)
+            continue
+        if p.exists():
+            old = p.read_text("utf-8", "replace")
+            parts.append("".join(difflib.unified_diff(old.splitlines(True), content.splitlines(True),
+                                                      "before: %s" % rel, "after: %s" % rel, n=3)) or
+                         "%s: no change\n" % rel)
+        else:
+            parts.append("New file: %s (%d lines)\n%s" % (rel, content.count("\n") + 1, content))
+        changes.append({"action": "write", "path": str(p), "content": content})
+    return changes, "\n\n".join(parts), skipped
+
+
+def confirm_spec(st, p, emit):
+    if p["kind"] == "spec_claude":
+        rec = Path(p["record"])
+        emit({"type": "status", "text": "Claude is writing the code from the spec. This can take a few minutes..."})
+        try:
+            files, notes = harness_pipeline.send(APP.claude, p["spec"], p["model"], spec_terms(), spec_block_list())
+        except (claude.ClaudeError, harness_coder.CodeError, harness_pipeline.PipelineError) as e:
+            check_stop()
+            emit({"type": "answer", "text": "The private build didn't work: %s" % e})
+            st.messages.append({"role": "user", "content": "[The private build failed: %s]" % e})
+            return
+        finally:
+            claude_cost(emit)
+        (rec / "claude-files.json").write_text(json.dumps({"notes": notes, "files": dict(files)}, indent=1), "utf-8")
+        changes, text, skipped = spec_file_changes(p["folder"], files)
+        if notes:
+            emit({"type": "note", "text": "**Claude's notes:**\n\n" + notes})
+        if skipped:
+            emit({"type": "note", "text": "These won't be saved (PatchBay never writes files that look like "
+                                          "passwords or keys, or outside the folder): %s. Their text is kept in %s."
+                                          % (", ".join(skipped), rec / "claude-files.json")})
+        if not changes:
+            emit({"type": "answer", "text": "Claude sent files, but none can be saved in %s." % p["folder"]})
+            return
+        add_pending(st, emit, "spec_files", st.cfg(), p["folder"], rec, p["name"],
+                    "Save %d file%s from Claude in %s" % (len(changes), "" if len(changes) == 1 else "s", p["folder"]),
+                    clip(text, 60000), on_mac=True, extra_fields={"changes": changes})
+        st.messages.append({"role": "user", "content": "[I sent the spec to Claude. It wrote: %s. A card to save "
+                                                       "them is showing.]" % ", ".join(f for f, _ in files)})
+        return
+    cfg = spec_access_cfg()
+    done, bad = [], []
+    for ch in p["changes"]:
+        try:
+            done.append(macaccess.apply(cfg, ch, "private build " + p["note"]))
+        except (macaccess.AccessError, OSError) as e:
+            bad.append("%s: %s" % (Path(ch["path"]).name, e))
+    result = "Saved %d file%s in %s. Each one can be undone in 🩺 Setup → Mac." % (
+        len(done), "" if len(done) == 1 else "s", p["remote"])
+    if bad:
+        result += " These failed: " + "; ".join(bad)
+    emit({"type": "answer", "text": result})
+    st.messages.append({"role": "user", "content": "[I confirmed saving Claude's files. %s]" % result})
 
 
 def stuck_help(st, emit, cfg, name, args, result):
@@ -3482,6 +3670,10 @@ HOME_GROUPS = {
                  r"setting|\bmodel\b|password|writing|change"),
     "mac": DEVICE_GROUPS["mac"],
 }
+PRIVATE_BUILD_GROUP = ("the private builder: the user's idea becomes a generic spec on this Mac, then Claude writes "
+                       "the code", ["private_build"], r"private build|spec|privacy|private|anonym|firewall")
+DEVICE_GROUPS["private"] = PRIVATE_BUILD_GROUP
+HOME_GROUPS["private"] = PRIVATE_BUILD_GROUP
 # PatchBay's own code can be changed from any chat, not only the home one.
 DEVICE_GROUPS["patchbay"] = HOME_GROUPS["patchbay"][:2] + (
     r"patchbay|own (source )?code|its own|your own|yourself|self.?edit",)
@@ -3571,24 +3763,29 @@ def compact_history(messages, keep=8, short=500, budget=None):
     if not budget:
         return out
 
-    def size():
-        return sum(len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or "")) for m in out)
+    def msg_size(m):
+        return len(str(m.get("content") or "")) + len(json.dumps(m.get("tool_calls") or ""))
+    sizes = [msg_size(m) for m in out]       # kept up to date as messages are cut (adding it all up again was slow)
+    total = [sum(sizes)]
 
     def cut(i, n):
         c = out[i].get("content")
         if isinstance(c, str) and len(c) > n + 200:
             out[i] = dict(out[i], content=c[:n] + "\n[... shortened to save the AI's memory. Run the step again "
                                                 "for the rest.]")
+            new = msg_size(out[i])
+            total[0] += new - sizes[i]
+            sizes[i] = new
     tools_now = [i for i, m in enumerate(out) if m.get("role") == "tool"]
     for limit, which in ((short, tools_now[:-2]), (3000, tools_now[-2:]), (300, tools_now)):
         for i in which:
-            if size() <= budget:
+            if total[0] <= budget:
                 return out
             cut(i, limit)
     # Still too big (a very long chat): shorten older messages, keeping the newest question whole.
     last_user = max((i for i, m in enumerate(out) if m.get("role") == "user"), default=len(out))
     for i in range(len(out)):
-        if size() <= budget:
+        if total[0] <= budget:
             break
         if i != last_user:
             cut(i, 200)
@@ -3892,7 +4089,7 @@ STEP_WORDS = {
     "find_homebrew": "Looking for {name} on the device", "prepare_homebrew_update": "Getting ready to update {name}",
     "platform_notes": "Reading notes about {platform}", "save_platform_notes": "Saving notes about {platform}",
     "backup": "Starting a backup", "read_attachment": "Reading the attached file {name}",
-    "propose_plan": "Writing a plan", "project_packages": "Checking which libraries {project} needs", "ask_claude": "Asking Claude", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
+    "propose_plan": "Writing a plan", "project_packages": "Checking which libraries {project} needs", "ask_claude": "Asking Claude", "private_build": "Writing a private spec on this Mac", "scan_network": "Looking for devices on your network", "propose_install_packages": "Installing {packages}", "list_devices": "Listing your devices", "open_device": "Opening {device}",
 }
 
 
@@ -3940,6 +4137,9 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
     if p["kind"] == "mac_access":
         del st.pending[pid]
         return confirm_access(st, p, emit)
+    if p["kind"] in ("spec_claude", "spec_files"):
+        del st.pending[pid]
+        return confirm_spec(st, p, emit)
     if p["kind"] in ("self_edit", "self_restart"):
         if p.get("word") and typed.strip().lower() != p["word"].lower():
             raise ToolError("This change touches one of PatchBay's safety rules, so type %s to confirm it." % p["word"])
@@ -4161,7 +4361,7 @@ def _run_mac_step(st, cfg, p, emit):
         elif p.get("build_after") and pr.get("build"):
             if runs_by_itself(cfg, "build", {"project": pr["name"]}) or (
                     st.plan and in_plan(st.plan, "build", {"project": pr["name"]})):
-                b_short, b_detail = run_mac_step(st, cfg, {"kind": "build", "project": pr["name"], "remote": pr["name"],
+                _, b_detail = run_mac_step(st, cfg, {"kind": "build", "project": pr["name"], "remote": pr["name"],
                                                            "source": "", "note": ""}, emit)
                 detail += "\nBuilt right after saving: " + b_detail
             else:
@@ -4263,6 +4463,14 @@ def do_cancel(st, pid, emit):
                                                        "yourself.]"})
         emit({"type": "answer", "text": "Not sent. Nothing went to Claude."})
         return
+    if p and p["kind"] == "spec_claude":
+        st.messages.append({"role": "user", "content": "[I chose not to send the spec to Claude.]"})
+        emit({"type": "answer", "text": "Not sent. Nothing went to Claude. The spec is kept in %s." % p["record"]})
+        return
+    if p and p["kind"] == "spec_files":
+        st.messages.append({"role": "user", "content": "[I chose not to save Claude's files.]"})
+        emit({"type": "answer", "text": "Nothing was saved. Claude's files are kept in %s." % p["source"]})
+        return
     if p:
         st.messages.append({"role": "user", "content": "[I cancelled the %s of %s. Nothing was written.]"
                                                        % (p["kind"], p["remote"])})
@@ -4305,6 +4513,7 @@ class App:
 APP = None
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 WEB = core.HERE / "web"
+PAGE_CACHE = {}     # the page as last read: (file, its size and time, theme) -> (plain, packed)
 
 
 def computer_name():
@@ -4380,6 +4589,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- replies
 
+    def wants_gzip(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
     def send_body(self, body, ctype, code=200, extra=()):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -4392,7 +4604,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def json(self, obj, code=200, extra=()):
-        self.send_body(json.dumps(obj).encode(), "application/json", code, extra)
+        body = json.dumps(obj).encode()
+        if len(body) > 16384 and not self.from_this_mac() and self.wants_gzip():
+            # Big answers to the laptop go packed (they travel over Wi-Fi); this Mac gets them as they are.
+            body, extra = gzip.compress(body, 5), list(extra) + [("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+        self.send_body(body, "application/json", code, extra)
 
     def fix_page(self, msg):
         """A plain page with no scripts, for when a change to PatchBay broke its own page."""
@@ -4421,16 +4637,29 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         self.send_body(body.encode(), "text/html; charset=utf-8")
 
     def page(self, name):
-        body = (WEB / name).read_bytes()
+        f = WEB / name
         ui = load_ui()   # the chosen theme goes on the page before it's drawn, so it never flashes
         attrs = ""
         if ui.get("theme") in THEMES and ui["theme"] != "auto":
             attrs += ' data-theme="%s"' % ui["theme"]
         if ui.get("density") == "compact":
             attrs += ' data-density="compact"'
-        if attrs:
-            body = body.replace(b'<html lang="en">', ('<html lang="en"%s>' % attrs).encode(), 1)
-        self.send_body(body, "text/html; charset=utf-8")
+        st = f.stat()
+        key = (name, st.st_mtime_ns, st.st_size, st.st_ino, attrs)
+        hit = PAGE_CACHE.get(key)
+        if not hit:      # read and packed once, until the file changes (a change to PatchBay's page, a new theme)
+            body = f.read_bytes()
+            if attrs:
+                body = body.replace(b'<html lang="en">', ('<html lang="en"%s>' % attrs).encode(), 1)
+            hit = (body, gzip.compress(body, 6))
+            if len(PAGE_CACHE) > 8:
+                PAGE_CACHE.clear()
+            PAGE_CACHE[key] = hit
+        if self.wants_gzip():   # about a quarter of the size: much quicker to the laptop
+            self.send_body(hit[1], "text/html; charset=utf-8",
+                           extra=[("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")])
+        else:
+            self.send_body(hit[0], "text/html; charset=utf-8")
 
     def start_stream(self):
         self.send_response(200)
@@ -4556,7 +4785,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
         elif path == "/api/report":
             self.json({"text": selfcheck.report(APP)})
         elif path == "/api/claude":
-            self.json(APP.claude.public())
+            self.json(dict(APP.claude.public(), spec_list=str(sanitizer.list_path()),
+                           spec_folder=str(PRIVATE_BUILDS)))
         elif path == "/api/cleardata":
             names = ([cfg["device_name"] for _, cfg in APP.registry.all()] if q.get("all") == "1"
                      else [APP.device(q.get("device")).cfg()["device_name"]])
@@ -4570,7 +4800,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             cfg = APP.device(q.get("device")).cfg()
             items = []
             for p, it in sorted(core.attention(cfg).items()):
-                good = next((b["name"] for b, _, ok in backup_copies(cfg, p, newest_first=True) if ok), None)
+                good = next((b["name"] for b, _, ok in iter_backup_copies(cfg, p) if ok), None)
                 items.append({"path": p, "problems": it.get("problems", []), "size": it.get("size"),
                               "found": it.get("found"), "good_backup": good, "good_copy": bool(it.get("good_copy")),
                               "release": p.lower().endswith((".nro", ".nsp", ".ovl"))})
@@ -4589,7 +4819,6 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 err = "Couldn't ask Ollama which models it has (%s). %s" % (e, ai_down(cfg))
             model_labels.label_all(installed)
             url = ollama_url(cfg)
-            import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(6) as pool:
                 caps = list(pool.map(lambda m: model_labels.can_use_tools(url, m["name"]), installed))
             for m, c in zip(installed, caps):

@@ -27,6 +27,7 @@ for help when it's stuck, using your own API key.
 - [Apps and homebrew updates](#apps-and-homebrew-updates)
 - [Building apps from source](#building-apps-from-source)
 - [AI models and Claude](#ai-models-and-claude)
+- [The private builder](#the-private-builder)
 - [Reviewing code projects](#reviewing-code-projects)
 - [Files on your Mac and Apple Calendar](#files-on-your-mac-and-apple-calendar)
 - [Setup, updates and looks](#setup-updates-and-looks)
@@ -272,6 +273,47 @@ the list of what it already tried. Before anything is sent, your user name, home
 emails and passwords are swapped for stand-ins like `<device-1>`. Unless you tick **Send automatically**, a card
 shows exactly what will be sent and you press **Send**. **See what was sent** lists everything that left the Mac.
 
+## The private builder
+
+Get code written by Claude without Claude ever seeing who you are or what it's for. It's **off** until you tick
+**Turn on the private builder** in the **☁ Claude** panel. Then ask in the chat, for example "use the private builder
+to make a tool that merges two CSV files by a key column".
+
+1. The AI on your Mac turns your idea into a plain, generic spec (only data types, functions, steps, edge cases and
+   tests). Nothing leaves the Mac for this.
+2. PatchBay checks the spec. It stops on anything private: words on your block list, your device names and
+   addresses, user names, saved passwords, project names and folders, the Mac's name, your git email, home-folder
+   paths, IP and MAC addresses, emails, `.local` host names, API keys and tokens. If the local AI can fix it, it
+   writes the spec once more without them; otherwise nothing is sent and the chat says what was found. With the
+   double-check on, the local AI also reads the spec once for anything that still looks private.
+3. A card shows **exactly** the spec that will be sent and a rough cost. Nothing goes until you press **Send to
+   Claude**. Only the spec is sent, as one fresh request: no chat, no memory, no paths, no device details.
+4. Claude's files show on a second card. **Save the files** puts them in
+   `~/Patchbay-projects/private-builds/<name>/` (or a folder you approved in Setup → Mac). Old versions are backed
+   up, and each file can be undone in 🩺 Setup → Mac.
+
+**Block list**: `config/redaction_list.json` in the PatchBay folder (made empty the first time; it stays on your Mac
+and is not in git). Put your own words under `blocked_terms`, regular expressions under `blocked_patterns`, and
+words the double-check flagged that are fine to send under `allowed_terms`. See `config/redaction_list.example.json`.
+
+**Cost**: the private builder uses your Anthropic API key, which is billed separately from a Claude Pro plan. Pick
+its model in the ☁ Claude panel (default: Claude Sonnet, cheaper). A small module usually costs a few cents; the
+card shows a rough range first, and the monthly limit still applies. The spec, Claude's answer and every request
+are kept on the Mac (`data-cache/private-builds/` and **See what was sent**).
+
+**From Terminal**, in the PatchBay folder:
+
+```
+python3 -m harness.run --input idea.txt --output-dir ~/Patchbay-projects/private-builds/my-tool
+python3 -m harness.run --input idea.txt --dry-run                  # stop before anything is sent
+python3 -m harness.run --input idea.txt --output-dir out --local-model qwen3.6:27b --claude-model claude-opus-5-5
+python3 -m harness.run --undo out                                  # put the folder back as it was
+python3 -m harness.sanitizer spec_sanitized.md                     # check a spec by itself (exit code 0 = clean)
+```
+
+It shows the spec and the cost and asks before sending and before writing. Tests: `python3 -m unittest discover -s
+tests -t .`
+
 ## Reviewing code projects
 
 Paste a GitHub link (yours or anyone's public one) and ask for a review, for example "look through this and critique
@@ -392,6 +434,7 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
   never guess passwords or try to break in.
 - **Your Mac and calendar**: only folders you added, and Calendar only when its switch is on. Every change shows
   a card first and can be undone. None of it goes to Claude or into web searches.
+- **The private builder** sends Claude only a generic spec, after the privacy check and your **Send to Claude**.
 - **Run by hand.** Nothing runs on a schedule.
 - **🕘 Activity** lists everything PatchBay did, with **Undo** where possible.
 
@@ -403,6 +446,8 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
 - **Projects** (source code): `~/Patchbay-projects/`.
 - **Device settings**: `config.json` for your first device, and one file per device in the `devices` folder.
 - **PatchBay's own data** (themes, saved prompts, caches): `data-cache/` inside the PatchBay folder.
+- **Private builder**: block list in `config/redaction_list.json`; each build's spec and Claude's answer in
+  `data-cache/private-builds/`; the code in `~/Patchbay-projects/private-builds/`.
 
 None of your settings, passwords, backups or data are uploaded to GitHub.
 

@@ -9,6 +9,7 @@ patchbay/claude-aliases.json
 patchbay/claude-sent/
 patchbay/data-cache/
 patchbay/gd1-data/
+patchbay/config/redaction_list.json
 # The same in the old folder name, until they've moved over
 gd1-checker/config.json
 gd1-checker/devices/

@@ -1,0 +1,13 @@
+{
+  "_help": "Copy this file to redaction_list.json (PatchBay makes an empty one by itself the first time) and put your own words in it. blocked_terms: plain words, not case-sensitive. blocked_patterns: regular expressions. allowed_terms: words the local AI's double-check flagged that are fine to send. redaction_list.json stays on your Mac and is not in git.",
+  "blocked_terms": [
+    "ProjectName",
+    "internal-domain.com",
+    "CompanySecret",
+    "UserIdentity"
+  ],
+  "blocked_patterns": [
+    "\\bACME-\\d{4}\\b"
+  ],
+  "allowed_terms": []
+}

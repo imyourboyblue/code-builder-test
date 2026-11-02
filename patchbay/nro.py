@@ -16,6 +16,7 @@ code itself: that's compiled, so you change the source code and rebuild.
 Only uses Python's built-in parts.
 """
 
+import re
 import struct
 
 NRO_MAGIC = b"NRO0"
@@ -158,18 +159,8 @@ def inspect(data):
 
 
 def _longest_zero_run(b):
-    best = cur = 0
-    i, n = 0, len(b)
-    while i < n:
-        j = b.find(b"\x00" * 4096, i)
-        if j < 0:
-            break
-        k = j
-        while k < n and b[k] == 0:
-            k += 1
-        best = max(best, k - j)
-        i = k
-    return best
+    """The longest run of zero bytes that is at least 4 KB long (0 if there's none)."""
+    return max((m.end() - m.start() for m in re.finditer(rb"\x00{4096,}", b)), default=0)
 
 
 def describe(data):

@@ -63,8 +63,6 @@ button{font:inherit;border:1px solid var(--line);background:var(--card);color:va
 padding:5px 11px;cursor:pointer}button.primary{background:var(--me);color:var(--meink);border-color:var(--me)}
 button:disabled{opacity:.5;cursor:default}
 .view{flex:1;min-height:0;display:none}.view.on{display:flex}
-.av{width:28px;height:28px;border-radius:50%;object-fit:cover;flex:none;display:grid;place-items:center;
-font-weight:600;color:#fff;font-size:12px}
 
 /* home */
 #home{flex-direction:column;overflow:hidden}
@@ -982,16 +980,16 @@ function riskBox(list,where){if(!list||!list.length)return '';
   return '<div class="riskbox"><b>⚠ Risky command</b> on '+esc(where)+'. It '+list.map(esc).join('; it ')+'. PatchBay can\'t undo this, and nothing is backed up first.'+
     '<label><input type="checkbox" class="risk-ok"> I understand what this can delete or change, and I want to run it.</label></div>'}
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
-  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',ask=ev.kind==='ask_claude',dcmd=ev.kind==='device_command';
+  const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',spec=ev.kind==='spec_claude',sfiles=ev.kind==='spec_files',ask=ev.kind==='ask_claude'||spec||sfiles,dcmd=ev.kind==='device_command';
   if(dcmd)ev.typing=true;
   const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
   if(plan)return planCard(ev,closed);
-  const label=dcmd?'Run it on '+ev.device:ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const label=dcmd?'Run it on '+ev.device:sfiles?'Save the files':ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
-    '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by PatchBay, so read it first.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
+    '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by PatchBay, so read it first.':spec?'This sends <b>only the spec below</b> to Claude (Anthropic\'s cloud AI) as one fresh request: no chat, no memory, no file paths, no device details. It passed the privacy check. It\'s billed to your Anthropic API account, not a Claude Pro plan.':sfiles?'This saves the files Claude wrote on '+esc(ev.computer)+'. No device is touched. Old versions are backed up first, and each file can be undone in 🩺 Setup → Mac.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
       (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
-    (ev.diff?'<details open><summary>'+(dcmd?'Command':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
+    (ev.diff?'<details open><summary>'+(dcmd?'Command':sfiles?'The files':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
     riskBox(ev.risk,dcmd?ev.device:(ev.computer||'the Mac'))+
     '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
@@ -1429,13 +1427,19 @@ $('claude-btn').onclick=async()=>{const j=await loadClaude();if(!j)return;window
     '<label>Monthly spending limit in dollars (0 = no limit)<input id="cl-cap" type="number" min="0" step="1" value="'+j.monthly_cap+'"></label>'+
     '<label>API key '+(j.key_set?'(saved, ends in …'+esc(j.key_end)+'; leave empty to keep it)':'(get one at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a>)')+
     '<input id="cl-key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>'+
+    '<details style="margin-top:10px"'+(j.spec_pipeline?' open':'')+'><summary><b>Private builder</b> (off unless you turn it on)</summary><div style="font-size:13px;margin:4px 0">Ask in the chat for the private builder: the AI on '+esc(info.computer||'this Mac')+' turns your idea into a generic spec, PatchBay checks it for anything private (your block list, device names, addresses, paths, emails, keys) and stops on any hit, you see the exact spec and press Send, and Claude writes the code. The files are saved after a second card, with Undo. Block list: <code>'+esc(j.spec_list||'')+'</code>. Files go to <code>'+esc(j.spec_folder||'')+'</code> unless you name an approved folder.</div>'+
+    '<label><input type="checkbox" id="cl-spec" style="width:auto"'+(j.spec_pipeline?' checked':'')+'> Turn on the private builder</label>'+
+    '<label>Claude model for the private builder<select id="cl-spec-model" style="width:100%;margin-top:2px">'+Object.entries(j.models).map(([k,v])=>'<option value="'+k+'"'+(k===j.spec_model?' selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>'+
+    '<label>Local model that writes the spec (empty = the one PatchBay uses now)<input id="cl-spec-local" value="'+esc(j.spec_local_model||'')+'" placeholder="for example qwen3.6:27b"></label>'+
+    '<label><input type="checkbox" id="cl-spec-check" style="width:auto"'+(j.spec_leak_check?' checked':'')+'> Also let the local AI double-check each spec for private details (slower, safer)</label></details>'+
     '<div style="margin-top:10px;font-size:13.5px">This session: <b>'+money(j.session_cost)+'</b> ('+j.session_calls+' questions). This month: <b>'+money(j.month_cost)+'</b>'+(j.monthly_cap?' of '+money(j.monthly_cap):'')+'.'+
       (j.cap_reached?' <b style="color:var(--bad)">The monthly limit is reached, so nothing is sent until you raise it.</b>':'')+'<br><small>Costs are worked out from what Claude reports for each answer; your Anthropic account shows the exact bill.</small></div>'+
     '<div id="cl-msg" style="font-size:13px;margin-top:6px"></div>'+
     '<div class="row" style="margin-top:12px;gap:6px;display:flex;flex-wrap:wrap"><button class="primary" id="cl-save">Save</button><button id="cl-test"'+(j.key_set?'':' disabled')+'>Test the key</button><button id="cl-sent">See what was sent</button>'+
     (j.key_set?'<button id="cl-forget">Remove the key</button>':'')+'<button onclick="closeModal()">Close</button></div>');
   const msg=t=>$('cl-msg').innerHTML=t;
-  const save=async extra=>{const b={mode:$('cl-mode').value,model:$('cl-model').value,auto_send:$('cl-auto').checked,monthly_cap:$('cl-cap').value};
+  const save=async extra=>{const b={mode:$('cl-mode').value,model:$('cl-model').value,auto_send:$('cl-auto').checked,monthly_cap:$('cl-cap').value,
+      spec_pipeline:$('cl-spec').checked,spec_model:$('cl-spec-model').value,spec_local_model:$('cl-spec-local').value.trim(),spec_leak_check:$('cl-spec-check').checked};
     const k=$('cl-key').value.trim();if(k)b.key=k;Object.assign(b,extra||{});return postJSON('/api/claude/settings',b)};
   $('cl-save').onclick=async()=>{try{const r=await save();showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap});msg('Saved.'+(r.key_set?'':' Add an API key to start using Claude.'));$('cl-key').value='';claudeStatus(true)}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
   $('cl-test').onclick=async()=>{msg('Asking Claude…');try{await save();const r=await postJSON('/api/claude/test',{});msg('It works. Claude said: '+esc(r.answer));claudeStatus(true);showCost({session:r.session_cost,month:r.month_cost,cap:r.monthly_cap})}catch(e){msg('<span style="color:var(--bad)">'+esc(e.message)+'</span>')}};
@@ -1609,7 +1613,6 @@ async function uploadFiles(files,target){
 async function copyToMac(items,folder){
   act('Copying '+items.length+' item'+(items.length>1?'s':'')+' from '+cur+' to '+folder+'. Progress is in the queue below.');
   try{await postJSON('/api/files/copy_to_mac',{device:cur,items,mac_folder:folder});pollQueue()}catch(e){act(e.message,'bad')}}
-function fileEvent(ev){if(ev.type==='progress')act(ev.text);else if(ev.type==='answer')act(ev.text,'good');else if(ev.type==='error')act(ev.text,'bad')}
 function download(path){const a=document.createElement('a');a.href='/api/files/download?device='+enc(cur)+'&path='+enc(path);
   a.download='';document.body.appendChild(a);a.click();a.remove();act('Downloading '+path+' to this computer\'s Downloads folder.')}
 async function plan(req){
