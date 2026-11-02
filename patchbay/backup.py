@@ -78,22 +78,47 @@ def write_manifest(folder, man):
     tmp.replace(Path(folder) / MANIFEST)
 
 
+_SUMMARIES = {}     # manifest file -> (its size and time, the summary list_backups shows)
+
+
+def _summary(folder):
+    """The short facts about one backup. A big backup's list of files can take a second to read, and the Backups tab
+    asks every 1.5 seconds, so each one is remembered until its file changes (every save replaces the file)."""
+    f = folder / MANIFEST
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size, st.st_ino)
+    hit = _SUMMARIES.get(str(f))
+    if hit and hit[0] == key:
+        return hit[1]
+    man = read_manifest(folder)
+    if not man:
+        return None
+    files = man.get("files", {})
+    summary = {"complete": bool(man.get("complete")),
+               "files": len(files), "bytes": sum(f["size"] or 0 for f in files.values()),
+               "failed": len(man.get("failed", [])), "started": man.get("started"), "finished": man.get("finished"),
+               "linked": man.get("linked", 0), "folders": man.get("folders", ["/"]),
+               "partial": bool(man.get("partial")), "label": man.get("label") or "",
+               "compressed": bool(man.get("compressed")), "verified": man.get("verified"),
+               "mirror": man.get("mirror")}
+    if len(_SUMMARIES) > 2000:
+        _SUMMARIES.clear()
+    _SUMMARIES[str(f)] = (key, summary)
+    return summary
+
+
 def list_backups(cfg):
     root = backup_root(cfg)
     out = []
     if not root.is_dir():
         return out
     for d in sorted((p for p in root.iterdir() if p.is_dir()), reverse=True):
-        man = read_manifest(d)
-        if not man:
-            continue
-        out.append({"name": d.name, "path": str(d), "complete": bool(man.get("complete")),
-                    "files": len(man.get("files", {})), "bytes": sum(f["size"] or 0 for f in man.get("files", {}).values()),
-                    "failed": len(man.get("failed", [])), "started": man.get("started"), "finished": man.get("finished"),
-                    "linked": man.get("linked", 0), "folders": man.get("folders", ["/"]),
-                    "partial": bool(man.get("partial")), "label": man.get("label") or "",
-                    "compressed": bool(man.get("compressed")), "verified": man.get("verified"),
-                    "mirror": man.get("mirror")})
+        summary = _summary(d)
+        if summary:
+            out.append(dict({"name": d.name, "path": str(d)}, **json.loads(json.dumps(summary))))
     return out
 
 

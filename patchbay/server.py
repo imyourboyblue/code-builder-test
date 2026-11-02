@@ -581,13 +581,37 @@ def clear_old_snapshots(cfg):
     return len(snaps)
 
 
-def backup_copies(cfg, path, newest_first=False):
-    """(backup, local file, passed the checks) for each full backup holding this file."""
-    out = []
+_COPY_CHECKS = {}     # (device path, backup file, its size and time) -> passed the checks
+
+
+def copy_passes(path, local, st):
+    """Whether a backed-up copy passes the damage checks. Backed-up files don't change, so each one is checked once
+    (the Needs attention tab asks for every file on it each time it opens)."""
+    key = (path, str(local), st.st_ino, st.st_size, st.st_mtime_ns)
+    ok = _COPY_CHECKS.get(key)
+    if ok is None:
+        ok = not [x for x in core.check_bytes(path, local.read_bytes()) if x["level"] == "error"]
+        if len(_COPY_CHECKS) > 5000:
+            _COPY_CHECKS.clear()
+        _COPY_CHECKS[key] = ok
+    return ok
+
+
+def iter_backup_copies(cfg, path):
+    """(backup, local file, passed the checks) for each full backup holding this file, newest first."""
     for b in backup.list_backups(cfg):
         local = core.local_path_for(Path(b["path"]), path)
-        if local.is_file() and local.stat().st_size <= NRO_LIMIT:
-            out.append((b, local, not [x for x in core.check_bytes(path, local.read_bytes()) if x["level"] == "error"]))
+        try:
+            st = local.stat()
+        except OSError:
+            continue
+        if local.is_file() and st.st_size <= NRO_LIMIT:
+            yield b, local, copy_passes(path, local, st)
+
+
+def backup_copies(cfg, path, newest_first=False):
+    """(backup, local file, passed the checks) for each full backup holding this file."""
+    out = list(iter_backup_copies(cfg, path))
     return out if newest_first else list(reversed(out))
 
 
@@ -4716,7 +4740,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             cfg = APP.device(q.get("device")).cfg()
             items = []
             for p, it in sorted(core.attention(cfg).items()):
-                good = next((b["name"] for b, _, ok in backup_copies(cfg, p, newest_first=True) if ok), None)
+                good = next((b["name"] for b, _, ok in iter_backup_copies(cfg, p) if ok), None)
                 items.append({"path": p, "problems": it.get("problems", []), "size": it.get("size"),
                               "found": it.get("found"), "good_backup": good, "good_copy": bool(it.get("good_copy")),
                               "release": p.lower().endswith((".nro", ".nsp", ".ovl"))})
