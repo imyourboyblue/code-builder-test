@@ -63,6 +63,7 @@ import mac_app
 import netscan
 import securitycheck
 import activity
+import memory
 import health
 import library
 import updater
@@ -188,12 +189,13 @@ class State:
         d = json.loads(f.read_text())
         self.chat_id, self.title = d.get("id") or chat_id, d.get("title") or ""
         self.messages, self.transcript = d.get("messages", []), d.get("transcript", [])
+        self.memory = None
         self.pending, self.plan = {}, None
 
     def new_chat(self):
         self.save_chat()
         self.messages, self.pending, self.transcript, self.plan = [], {}, [], None
-        self.chat_id, self.title = None, ""
+        self.chat_id, self.title, self.memory = None, "", None
 
     def delete_chat(self, chat_id):
         if not re.match(r"^[\w.-]{1,60}$", chat_id or ""):
@@ -201,9 +203,12 @@ class State:
         f = self.chats_dir() / (chat_id + ".json")
         if f.exists():
             f.unlink()
+        mem = self.chats_dir() / (chat_id + ".memory")
+        if mem.exists():
+            mem.unlink()
         if chat_id == self.chat_id:
             self.messages, self.pending, self.transcript, self.plan = [], {}, [], None
-            self.chat_id, self.title = None, ""
+            self.chat_id, self.title, self.memory = None, "", None
 
     def record(self, ev):
         t = ev.get("type")
@@ -3590,6 +3595,33 @@ def compact_history(messages, keep=8, short=500, budget=None):
     return out
 
 
+def history_view(st, cfg, system, tools):
+    """What the AI is sent of the chat. A long chat keeps its older part in a memory file (notes + search, see
+    memory.py) instead of shortening old messages until they're useless. "chat_memory": false in config.json turns
+    that off."""
+    budget = history_budget(cfg, system, tools)
+    if cfg.get("chat_memory", True) is False:
+        return compact_history(st.messages, budget=budget)
+    try:
+        return memory.view(st, st.messages, budget, lambda ms, b: compact_history(ms, budget=b))
+    except (OSError, ValueError) as e:
+        print("Chat memory: %s" % e)
+        return compact_history(st.messages, budget=budget)
+
+
+def write_memory_notes(st, cfg):
+    """After an answer: notes for the older messages, written by the AI on this Mac in the background."""
+    if cfg.get("chat_memory", True) is False or not getattr(st, "memory", None):
+        return
+    try:
+        url = ollama_url(cfg)
+        model = model_labels.mode_model(model_labels.tool_names(url, model_labels.installed(url)), work_mode(cfg))
+        if model:
+            memory.after_answer(st, memory.ollama_ask(url, model))
+    except Exception as e:      # notes are a bonus: search works without them
+        print("Chat memory notes: %s" % e)
+
+
 def history_budget(cfg, system, tools):
     """Characters of conversation that fit next to the instructions and tools, leaving room for the answer."""
     ctx = int(cfg.get("chat_context", 32768))
@@ -3684,6 +3716,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             (last_question(st) or "")[:60])
         TIMINGS.append(line)
         print("Timing: " + line)
+        write_memory_notes(st, cfg)
 
 
 def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
@@ -3712,8 +3745,8 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                                                                "far. Its advice, to weigh and use if it helps:\n%s]"
                                                                % advice})
         t0 = time.time()
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + compact_history(
-            st.messages, budget=history_budget(cfg, system, tools)), tools, emit)
+        msg = ask_model(cfg, [{"role": "system", "content": system}] + history_view(st, cfg, system, tools),
+                        tools, emit)
         st.timing.append(("AI", time.time() - t0))
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
