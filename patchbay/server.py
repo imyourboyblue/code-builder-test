@@ -366,6 +366,60 @@ def norm(path):
     return path if path.startswith("/") else "/" + path
 
 
+# Paths that only exist on this Mac. A console (PS5, Switch...) never has them, so a device tool given one of these
+# was handed the wrong kind of path (the local AI mixed up "the project on the Mac" with "the device").
+MAC_PATH_PREFIXES = ("/Users/", "/Volumes/", "/opt/homebrew/", "/private/var/folders/", "/Applications/",
+                     "/Library/", "/System/")
+
+
+def project_for_mac_path(cfg, path):
+    """(project, path inside it) when `path` is a full Mac path inside one of the device's saved projects, else None."""
+    raw = os.path.expanduser((path or "").strip())
+    if not raw.startswith("/"):
+        return None
+    for pr in projects.all_projects(cfg):
+        try:
+            root = Path(os.path.expanduser(pr["folder"])).resolve()
+            p = Path(raw).resolve()
+        except (OSError, ValueError, KeyError):
+            continue
+        if p == root or root in p.parents:
+            return pr, p.relative_to(root).as_posix() if p != root else ""
+    return None
+
+
+def mac_path_check(cfg, path, tool):
+    """Stop a device tool from sending a Mac path to the device. Returns (project, rel) for a project path so the
+    caller can read it on the Mac instead; raises ToolError for any other Mac path; returns None for device paths."""
+    hit = project_for_mac_path(cfg, path)
+    if hit:
+        return hit
+    raw = (path or "").strip()
+    if cfg.get("protocol") == "folder" and cfg.get("folder"):
+        try:
+            top = Path(os.path.expanduser(cfg["folder"])).resolve()
+            full = Path(os.path.expanduser(raw)).resolve()
+            if full == top or top in full.parents:
+                raise ToolError("%s is inside this device's folder: give the path from its top instead, e.g. /%s."
+                                % (raw, full.relative_to(top).as_posix() if full != top else ""))
+        except (OSError, ValueError):
+            pass
+    if cfg.get("protocol") == "sftp" and not raw.startswith("~"):
+        return None        # an SFTP device can be another computer with its own /Users etc.
+    if raw.startswith("~") or raw.startswith(MAC_PATH_PREFIXES) or raw.rstrip("/") in ("/Users", "/Volumes"):
+        raise ToolError(
+            "%s is a path on this Mac, not on %s, so %s can't reach it (it only looks on the device). Files on the "
+            "Mac: project_files / project_read / project_search for a saved project (list_projects), or mac_list / "
+            "mac_read for other Mac folders. Device paths look like /user or /data." % (raw, cfg["device_name"], tool))
+    return None
+
+
+def mac_note(cfg, pr):
+    return ("Note: that path is on this Mac (project %s), not on %s, so I read it from the Mac. For project files use "
+            "project_files / project_read; use list_folder / read_file only for paths on the device.\n"
+            % (pr["name"], cfg["device_name"]))
+
+
 # ----------------------------------------------------------------- tools
 
 TOOLS = []
@@ -393,10 +447,16 @@ def t_test(st, emit, a):
     return out
 
 
-@tool("list_folder", "List the folders and files in one folder on the device (read-only).",
-      {"path": dict(S, description="Folder on the device, e.g. /data")}, ["path"])
+@tool("list_folder", "List the folders and files in one folder ON THE DEVICE (the console or gadget, never this "
+      "Mac; read-only). For a project's files on the Mac use project_files; for other Mac folders mac_list.",
+      {"path": dict(S, description="Folder on the device, e.g. /data or /user. Never a Mac path like /Users/...")},
+      ["path"])
 def t_list(st, emit, a):
-    cfg, path = st.cfg(), norm(a.get("path"))
+    cfg = st.cfg()
+    hit = mac_path_check(cfg, a.get("path"), "list_folder")
+    if hit:
+        return mac_note(cfg, hit[0]) + pe(projects.tree, hit[0], hit[1])
+    path = norm(a.get("path"))
     dev = core.Device(cfg)
 
     def go():
@@ -406,8 +466,8 @@ def t_list(st, emit, a):
         finally:
             dev.close()
     entries, out = run_captured(emit, go)
-    if entries is None:
-        return out or "Couldn't list %s." % path
+    if entries is None:       # a failure, so the chat shows it as one (it used to read "Looked in ...")
+        raise ToolError(out or "Couldn't list %s." % path)
     entries = [e for e in entries if e[0] not in (".", "..")]
     dirs = sorted(e[0] + "/" for e in entries if e[1] == "dir")
     files = sorted("%s  (%s)" % (e[0], core.human_size(e[2])) for e in entries if e[1] == "file")
@@ -501,16 +561,22 @@ def describe_file(path, data, size, start_line, max_lines):
 
 
 @tool("read_file",
-      "Read one file and run the crash-damage checks on it. Shows text with line numbers, or the first and last "
-      "bytes of a binary file. By default reads the live file on the device; set snapshot to read the copy saved "
-      "by an earlier scan ('latest' or a snapshot name).",
-      {"path": dict(S, description="File path on the device, e.g. /data/settings.json"),
+      "Read one file ON THE DEVICE (the console or gadget, never this Mac) and run the crash-damage checks on it. "
+      "Shows text with line numbers, or the first and last bytes of a binary file. By default reads the live file on "
+      "the device; set snapshot to read the copy saved by an earlier scan ('latest' or a snapshot name). For a "
+      "project's source or build files on the Mac (Makefile, dist/...) use project_read; other Mac files mac_read.",
+      {"path": dict(S, description="File path on the device, e.g. /data/settings.json. Never a Mac path like "
+                                   "/Users/..."),
        "snapshot": dict(S, description="Optional: 'latest' or a snapshot name. Leave out to read the live device."),
        "start_line": dict(I, description="Optional: first line to show (default 1)"),
        "max_lines": dict(I, description="Optional: how many lines to show (default 300)")}, ["path"])
 def t_read(st, emit, a):
-    cfg, path = st.cfg(), norm(a.get("path"))
+    cfg = st.cfg()
     start, count = int(a.get("start_line") or 1), min(int(a.get("max_lines") or 300), 1000)
+    hit = None if a.get("snapshot") else mac_path_check(cfg, a.get("path"), "read_file")
+    if hit:
+        return mac_note(cfg, hit[0]) + pe(projects.read, hit[0], hit[1], start, count)
+    path = norm(a.get("path"))
     if a.get("snapshot"):
         snap = snapshot_dir(cfg, a["snapshot"])
         local = core.local_path_for(snap, path)
@@ -861,6 +927,9 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
       ["path"])
 def t_prop_restore(st, emit, a):
     cfg, remote = st.cfg(), norm(a.get("path"))
+    if mac_path_check(cfg, a.get("path"), "propose_restore"):
+        raise ToolError("%s is a project file on this Mac, not on %s. propose_restore only puts files back on the "
+                        "device." % (a.get("path"), cfg["device_name"]))
     root = core.data_dir(cfg) / "snapshots"
     if a.get("backup"):
         hit = [x for x in backup_copies(cfg, remote) if x[0]["name"] == a["backup"]]
@@ -907,6 +976,9 @@ def t_prop_restore(st, emit, a):
        "reason": dict(S, description="One short sentence on why")}, ["path", "reason"])
 def t_prop_edit(st, emit, a):
     cfg, remote = st.cfg(), norm(a.get("path"))
+    if mac_path_check(cfg, a.get("path"), "propose_edit"):
+        raise ToolError("%s is a project file on this Mac, not on %s. Change it with propose_project_edit."
+                        % (a.get("path"), cfg["device_name"]))
     old = fetch_from_device(cfg, emit, remote, TEXT_EDIT_LIMIT)
     if not core.looks_like_text(old[:4096]) and old:
         raise ToolError("%s isn't a text file, so it can't be edited this way. Use propose_restore instead." % remote)
@@ -1088,16 +1160,73 @@ def t_set_project(st, emit, a):
         pr["name"], pr["build"], pr["output"] or "(not set)", pr["device_path"] or "(not set)")
 
 
-@tool("list_projects", "List the source code projects saved for this device.")
+def linux_sandboxes_for(pr):
+    """The Linux sandboxes made from this project's folder."""
+    try:
+        sb_ready()
+        root = Path(os.path.expanduser(pr["folder"])).resolve()
+        return [s for s in sandbox.all_sandboxes() if s.get("kind") == "linux" and s.get("source")
+                and Path(os.path.expanduser(s["source"])).resolve() == root]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def linux_build_reason(pr):
+    """Why this project is built in a Linux sandbox instead of on the Mac (with devkitPro or its own command),
+    or '' when it builds on the Mac."""
+    sbs = linux_sandboxes_for(pr)
+    if sbs:
+        return "it has a Linux sandbox (%s)" % ", ".join(s["name"] for s in sbs)
+    try:
+        if macspecs.target_warning(Path(os.path.expanduser(pr["folder"])).resolve()):
+            return "its build files are made for Linux"
+    except Exception:
+        pass
+    return ""
+
+
+def copied_from_sandbox(pr, path):
+    """True when `path` (in the project) was put there by a sandbox copy-out that hasn't been undone."""
+    names = {s["name"] for s in linux_sandboxes_for(pr)}
+    path = Path(path).resolve()
+    try:
+        copies = sandbox.recent_copies(200)
+    except (OSError, ValueError):
+        copies = []
+    for e in copies:
+        if e.get("sandbox") not in names or e.get("undone"):
+            continue
+        to = Path(e.get("to") or "/nonexistent").resolve()
+        if to == path or to in path.parents:
+            return True
+    return False
+
+
+def sandbox_route_text(pr, reason):
+    sbs = linux_sandboxes_for(pr)
+    first = ("sandbox_build sandbox %s step setup (once), then step build" % sbs[0]["name"] if sbs else
+             "sandbox_create project %s kind linux, then sandbox_build step setup, then step build" % pr["name"])
+    return ("%s builds in a Linux sandbox (%s), not on the Mac: no devkitPro, check_build_tools or propose_build. "
+            "Steps: %s; then propose_sandbox_copy_out its built file; then propose_install (a card the user "
+            "confirms). Only install once the user says the sandbox build is checked." % (pr["name"], reason, first))
+
+
+@tool("list_projects", "List the source code projects saved for this device. Projects are folders ON THIS MAC: "
+      "read them with project_files / project_read, never with list_folder / read_file (those look on the device).")
 def t_projects(st, emit, a):
     prs = projects.all_projects(st.cfg())
     if not prs:
         return "No projects yet. Ask the user where the source code folder is, then use set_project."
-    return "\n".join("%s: %s (build: %s, makes %s, goes to %s)" % (p["name"], p["folder"], p["build"],
-                     p.get("output") or "?", p.get("device_path") or "?") for p in prs)
+    rows = []
+    for p in prs:
+        row = "%s: on this Mac at %s (build: %s, makes %s, goes to %s on the device)" % (
+            p["name"], p["folder"], p["build"], p.get("output") or "?", p.get("device_path") or "?")
+        why = linux_build_reason(p)
+        rows.append(row + ("\n  " + sandbox_route_text(p, why) if why else ""))
+    return "\n".join(rows) + "\nRead project files with project_files / project_read (they're on the Mac)."
 
 
-@tool("project_files", "List the files in a project (read-only).",
+@tool("project_files", "List the files in a project. Projects are folders ON THIS MAC (read-only).",
       {"project": S, "folder": dict(S, description="Optional: only this sub-folder")}, ["project"])
 def t_project_files(st, emit, a):
     return pe(projects.tree, project(st, a.get("project")), a.get("folder") or "")
@@ -1111,8 +1240,10 @@ def t_project_map(st, emit, a):
     return clip(codetools.project_map(root, (a.get("folder") or "").strip("/")))
 
 
-@tool("project_read", "Read a source file in a project, with line numbers (read-only).",
-      {"project": S, "path": dict(S, description="File path inside the project, e.g. source/main.c"),
+@tool("project_read", "Read a file in a project on THIS MAC (source, Makefile, README, built files in dist/...), "
+      "with line numbers (read-only). Use this, not read_file, for anything in a project folder.",
+      {"project": S, "path": dict(S, description="File path inside the project, e.g. source/main.c or Makefile "
+                                                 "(a full Mac path inside the project folder works too)"),
        "start_line": I, "max_lines": I}, ["project", "path"])
 def t_project_read(st, emit, a):
     return pe(projects.read, project(st, a.get("project")), a.get("path"), int(a.get("start_line") or 1),
@@ -1241,6 +1372,10 @@ def t_build(st, emit, a):
         todo = installable(rows)
     except Exception:      # never let the check itself stop a build
         rows, todo = [], []
+    sbs = linux_sandboxes_for(pr)
+    if sbs and not a.get("checked_system"):
+        return ("Not built: %s Call propose_build with checked_system true only if the user asked to build it on "
+                "the Mac instead." % sandbox_route_text(pr, linux_build_reason(pr)))
     warn = macspecs.target_warning(root)
     if warn and not a.get("checked_system"):
         return ("Not built yet. %s Then, to build on the Mac anyway, call propose_build again with "
@@ -1267,8 +1402,13 @@ def t_install(st, emit, a):
     if not pr.get("output") or not pr.get("device_path"):
         raise ToolError("Set the project's output file and device_path first (set_project).")
     _, out = pe(projects.inside, pr, pr["output"])
+    why = linux_build_reason(pr)
     if not out.is_file():
-        raise ToolError("%s hasn't been built yet. Use propose_build first." % pr["output"])
+        raise ToolError("%s hasn't been built yet. %s" % (pr["output"], sandbox_route_text(pr, why) if why else
+                                                          "Use propose_build first."))
+    if linux_sandboxes_for(pr) and not copied_from_sandbox(pr, out):
+        raise ToolError("%s wasn't copied out of the sandbox yet, so it may be an old build. %s"
+                        % (pr["output"], sandbox_route_text(pr, why)))
     probs = [x["text"] for x in core.check_bytes(out.name, out.read_bytes()) if x["level"] == "error"]
     if probs:
         raise ToolError("The built file fails the damage checks, so I won't install it: %s" % probs[0])
@@ -1899,9 +2039,16 @@ def t_project_packages(st, emit, a):
 
 @tool("check_build_tools",
       "Check what's installed on the Mac for building homebrew: devkitPro (Switch, 3DS, Wii, Wii U) with package "
-      "versions, VitaSDK, PSPSDK, OpenOrbis, compilers, cmake, git. Read-only.")
+      "versions, VitaSDK, PSPSDK, OpenOrbis, compilers, cmake, git. Read-only. Not needed for a project that builds "
+      "in a Linux sandbox (list_projects says so): that uses sandbox_build.")
 def t_tools(st, emit, a):
-    return projects.toolchain_report() + "\n\nOther build tools:\n" + platforms.toolchains()
+    out = projects.toolchain_report() + "\n\nOther build tools:\n" + platforms.toolchains()
+    linux = []
+    for p in projects.all_projects(st.cfg()):
+        why = linux_build_reason(p)
+        if why:
+            linux.append(sandbox_route_text(p, why))
+    return out + ("\n\nIMPORTANT: " + "\n".join(linux) if linux else "")
 
 
 @tool("propose_get_source",
@@ -3313,6 +3460,19 @@ def t_cal_delete(st, emit, a):
 
 
 # How the AI changes PatchBay's own code (shared by the home chat and device chats).
+FILE_PLACES = """\
+- WHERE FILES ARE: two separate places, never mix them. (1) THE DEVICE (the console: PS5, Switch...): paths like \
+/user, /data, /switch. Only list_folder, read_file, propose_edit and propose_restore look there. (2) THIS MAC: saved \
+projects (list_projects shows their Mac folder, e.g. /Users/.../Patchbay-projects/X) are read with project_files, \
+project_read and project_search; other Mac folders with mac_list and mac_read. A path starting /Users, /Volumes, \
+/opt/homebrew or ~ is ALWAYS on the Mac: never give it to list_folder or read_file.
+- To INSTALL a project onto the device: list_projects first. If it says the project builds in a Linux sandbox \
+(PlayStation and other Linux-built projects), follow those sandbox steps (sandbox_build, then \
+propose_sandbox_copy_out) and don't check devkitPro or use propose_build. Only then propose_install, which shows \
+the user a card; nothing goes on the device without it.
+"""
+
+
 SELF_EDIT_RULES = """\
 - You CAN change your own code: PatchBay's own files (its Python, the page, the README) are on this Mac and the user \
 owns them. Editing them is a built-in feature, not a way around your rules. When asked to change, fix or add \
@@ -3389,7 +3549,7 @@ propose_settings for its host/ports, then test_connection.
 - Work on one device (checking, files, scans, backups, fixing, updating homebrew): open_device, and tell the user \
 they can carry on in that device's chat.
 - identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.
-""" + SELF_EDIT_RULES + "- " + where.rule_text() + "\n" + """- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
+""" + SELF_EDIT_RULES + FILE_PLACES + "- " + where.rule_text() + "\n" + """- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
 scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
 places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
 it, try once or twice more with different words or another tool before giving up.
@@ -3467,7 +3627,7 @@ should go back into the real project. Anything that sends to a device (make inst
 with propose_command after copying out, never inside the sandbox.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
-""" + SELF_EDIT_RULES + "- " + where.rule_text() + "\n" + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
+""" + SELF_EDIT_RULES + FILE_PLACES + "- " + where.rule_text() + "\n" + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
 Use show_settings, then propose_settings with exactly what they asked. For a new address: check_address first. If \
 it's a different device than this one, offer add_device; if they mean this device moved, propose_settings for \
 host/ports. After a change to host or ports, use test_connection.
@@ -4537,6 +4697,13 @@ def pick_groups(st, groups, text):
     for m in st.messages[-40:]:
         for g in owner.get(m.get("tool_name") or "", ()):
             on.add(g)
+    if "code" in on and "sandbox" in groups and "sandbox" not in on and not getattr(st, "home", False):
+        # Building or installing a project that builds in a Linux sandbox needs the sandbox tools too.
+        try:
+            if any(linux_build_reason(p) for p in projects.all_projects(st.cfg())):
+                on.add("sandbox")
+        except Exception:
+            pass
     return on
 
 
