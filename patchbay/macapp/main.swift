@@ -1,6 +1,6 @@
 // PatchBay for macOS: a small native window around PatchBay's page.
 // It starts PatchBay (the same Python and folder it was built for) if it isn't running yet, shows the page in its
-// own window, and stops PatchBay again on Quit if it was the one that started it.
+// own window, and quits PatchBay on Quit (which stops everything PatchBay started).
 // Built on the user's Mac by mac_app.py with: swiftc -O main.swift -framework Cocoa -framework WebKit
 // The three values below are filled in by mac_app.py.
 
@@ -121,8 +121,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ note: Notification) {
-        // Only stop PatchBay if this window started it (not if it runs at login on its own).
-        if let p = server, p.isRunning { p.terminate() }
+        // Quitting the app quits PatchBay, which then stops everything it started (Ollama, Colima, sandboxes...).
+        if let p = server, p.isRunning { p.terminate(); return }
+        // PatchBay started some other way (at login): ask it to quit. It stays running only if
+        // Setup → App → When PatchBay quits says so.
+        var req = URLRequest(url: HOME_URL.appendingPathComponent("api/app-quit"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 2
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 3)
     }
 
     // ---- menus (Edit is needed for copy and paste in the page)

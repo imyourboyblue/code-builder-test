@@ -15,12 +15,14 @@ import json
 import os
 import re
 import shutil
+import signal
 import sys
 import subprocess
 import time
 from pathlib import Path
 
 import core
+import services
 
 SKIP_DIRS = {".git", "build", "out", "node_modules", "__pycache__", ".vscode", ".idea"}
 TEXT_LIMIT = 2 * 1024 * 1024
@@ -233,27 +235,35 @@ def run_shell(cwd, command, emit, timeout=BUILD_TIMEOUT, stop=None):
     pkgconf = _console_pkgconfig(cwd, env)
     proc = subprocess.Popen([shell, "-lc", 'export PATH="$PATCHBAY_PATH:$PATH"; ' + pkgconf + command],
                             cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                            start_new_session=True)   # its own group: stopping it stops everything it started
+
+    def kill():
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
     lines = []
     try:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            lines.append(line)
-            del lines[:-400]
-            if line.strip():
-                emit({"type": "progress", "text": line[:300]})
-            if stop is not None and stop.is_set():
-                proc.kill()
-                lines.append("(stopped: you pressed Stop)")
-                break
-            if time.time() - started > timeout:
-                proc.kill()
-                lines.append("(stopped: it took longer than %d minutes)" % (timeout // 60))
-                break
-        code = proc.wait()
+        with services.track(proc, "a command on the Mac (%s)" % command[:60]):
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                lines.append(line)
+                del lines[:-400]
+                if line.strip():
+                    emit({"type": "progress", "text": line[:300]})
+                if stop is not None and stop.is_set():
+                    kill()
+                    lines.append("(stopped: you pressed Stop)")
+                    break
+                if time.time() - started > timeout:
+                    kill()
+                    lines.append("(stopped: it took longer than %d minutes)" % (timeout // 60))
+                    break
+            code = proc.wait()
     finally:
         if proc.poll() is None:
-            proc.kill()
+            kill()
     return code, "\n".join(lines)
 
 

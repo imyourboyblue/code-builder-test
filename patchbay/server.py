@@ -80,6 +80,7 @@ import sandbox
 import sandboxrecipe
 import stopper
 import ollamactl
+import services
 import codereview
 import codetools
 import places
@@ -3480,7 +3481,8 @@ def models_info(cfg):
     model = model_labels.active(loaded)
     faster = model_labels.FASTER.get(model or "")
     return {"model": model, "loaded": loaded, "error": err, "where": core.ai_where(cfg),
-            "starting": bool(ollamactl.STATE["starting"]),
+            "starting": bool(ollamactl.STATE["starting"] or ollamactl.STATE["loading"]),
+            "loading": ollamactl.STATE["loading"],
             "no_model": model_labels.no_model(names) if loaded == [] else "", "example": model_labels.example(names),
             "faster": faster if faster and faster not in names else None,
             "second": model_labels.second(model_labels.tool_names(url, names)) if names else None,
@@ -3528,7 +3530,22 @@ def ollama_status(cfg):
     return {"here": here, "up": up, "starting": ollamactl.STATE["starting"], "note": ollamactl.status_text(),
             "started_by_us": ollamactl.STATE["started_by_us"], "how": ollamactl.how_installed() if here else None,
             "autostart": bool(cfg.get("ollama_autostart", True)), "on_close": cfg.get("ollama_on_close", "started"),
+            "loading": ollamactl.STATE["loading"], "startup_model": ollamactl.startup_model(cfg),
+            "models": _model_names(cfg) if here and up else [],
             "processes": ollamactl.processes() if here else []}
+
+
+def _model_names(cfg):
+    try:
+        return model_labels.installed(ollama_url(cfg))
+    except (OSError, ValueError, ToolError):
+        return []
+
+
+def services_status(cfg):
+    """For Setup → App → When PatchBay quits: what PatchBay started, and the switches."""
+    return {"running": services.listing(), "settings": {k: services.setting(cfg, k) for k in services.SETTINGS},
+            "labels": services.SETTINGS, "on_close": cfg.get("ollama_on_close", "started")}
 
 
 def ai_computer_test(url, timeout=6):
@@ -5470,12 +5487,37 @@ class Handler(BaseHTTPRequestHandler):
                     raise ToolError("Unknown choice.")
                 if saved.get("ollama_on_close", "started") != mode:
                     planned.append((main, "ollama_on_close", saved.get("ollama_on_close"), mode))
+            if "startup_model" in data:
+                model = str(data.get("startup_model") or "").strip()
+                if model and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$", model):
+                    raise ToolError("That doesn't look like a model name.")
+                if saved.get("ollama_startup_model", ollamactl.STARTUP_MODEL_DEFAULT) != model:
+                    planned.append((main, "ollama_startup_model", saved.get("ollama_startup_model"), model))
             if planned:
                 devices.apply_changes(cfg, planned)
             msg = "Saved."
+        elif act == "load":
+            model = ollamactl.startup_model(cfg)
+            if not model:
+                raise ToolError("Pick a model first.")
+            threading.Thread(target=ollamactl.load_model, args=(cfg, model), daemon=True).start()
+            ollamactl.STATE["loading"] = model
+            msg = "Loading %s..." % model
         else:
             raise ToolError("Unknown action.")
         return dict(ollama_status(APP.home.cfg()), message=msg)
+
+    def services_api(self, data):
+        """Setup → App → When PatchBay quits: the switches."""
+        if not self.from_this_mac():
+            raise ToolError("These can only be changed on the Mac itself.")
+        main = str(APP.registry.main)
+        saved = json.loads(Path(main).read_text())
+        planned = [(main, k, saved.get(k), bool(data[k])) for k in services.SETTINGS
+                   if k in data and bool(saved.get(k, True)) != bool(data[k])]
+        if planned:
+            devices.apply_changes(APP.home.cfg(), planned)
+        return dict(services_status(APP.home.cfg()), message="Saved.")
 
     def from_this_mac(self):
         # Refuse requests that reach us under another name (a trick some websites use).
@@ -5746,6 +5788,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             self.json({"on": bool(APP.home.cfg().get("auto_mac_steps", True))})
         elif path == "/api/ollama":
             self.json(ollama_status(APP.home.cfg()))
+        elif path == "/api/services":
+            self.json(services_status(APP.home.cfg()))
         elif path == "/api/models/memory":
             cfg = APP.home.cfg()
             try:
@@ -5913,6 +5957,16 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 self.json(save_attachment(APP.device(q.get("device")), q.get("name"), self.rfile, n))
             except (ToolError, OSError) as e:
                 self.json({"error": str(e)}, 400)
+            return
+        if url.path == "/api/app-quit":
+            # The PatchBay app's window is quitting (Quit or closing it). PatchBay quits too, unless Setup says not to.
+            if not self.from_this_mac():
+                self.send_error(403)
+                return
+            go = services.setting(APP.home.cfg(), "quit_with_app")
+            self.json({"quitting": go})
+            if go:
+                threading.Timer(0.2, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
             return
         if url.path == "/fix":
             if not self.signed_in():
@@ -6194,6 +6248,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             self.json(mac_app.status())
         elif path == "/api/ollama":
             self.json(self.ollama_api(data))
+        elif path == "/api/services":
+            self.json(self.services_api(data))
         elif path == "/api/models/unload":
             if APP.chat_job and not APP.chat_job.done:
                 raise ToolError("The chat is still working. Press Stop first.")
@@ -6948,26 +7004,37 @@ def main():
     print("Leave this Terminal window open. Press Ctrl+C here to stop.")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    ollamactl.start_in_background(main_cfg)      # Ollama isn't running yet? Start it (Setup → AI can turn this off)
+    try:   # things a PatchBay that crashed left running (a sandbox, Colima, a build) are stopped now
+        services.sweep(main_cfg, ollama_adopt=ollamactl.adopt)
+    except Exception as e:
+        print("Couldn't check for things left running last time: %s" % e)
+    ollamactl.start_in_background(main_cfg)      # start Ollama and load your model (Setup → AI)
 
-    def stop_now(signum, frame):                  # the PatchBay app's window closed: stop like Ctrl+C does
+    def stop_now(signum, frame):                  # the app quit, Terminal closed, or the Mac said stop: like Ctrl+C
         raise KeyboardInterrupt
-    try:
-        signal.signal(signal.SIGTERM, stop_now)
-    except (ValueError, OSError):
-        pass
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, stop_now)
+        except (ValueError, OSError, AttributeError):
+            pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            try:   # tidying up mustn't be cut short by a second "stop" (Ctrl+C again still cuts it short)
+                signal.signal(sig, signal.SIG_IGN)
+            except (ValueError, OSError, AttributeError):
+                pass
         try:
-            signal.signal(signal.SIGTERM, signal.SIG_DFL)   # a second "stop" really stops
-            done = ollamactl.on_close(APP.home.cfg())
-            if done:
-                print(done)
+            server.server_close()
+        except OSError:
+            pass
+        try:   # stop, right now, everything PatchBay started: builds, sandboxes, Colima, Ollama and its model
+            services.on_quit(APP.home.cfg(), ollama_close=ollamactl.on_close)
         except Exception as e:
-            print("Couldn't tidy up Ollama: %s" % e)
+            print("Couldn't stop everything PatchBay started: %s" % e)
 
 
 if __name__ == "__main__":
