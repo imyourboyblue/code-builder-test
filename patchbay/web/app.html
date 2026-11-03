@@ -164,6 +164,18 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 .sbs td.se{background:repeating-linear-gradient(45deg,transparent 0 6px,color-mix(in srgb,var(--line) 45%,transparent) 6px 7px)}
 .sbs tr.sh td{background:var(--code);color:var(--mute);font:11.5px system-ui,sans-serif;padding:3px 8px}
 .modal .box.wide{max-width:min(1400px,96vw)}
+/* "Runs on / Changes on" box at the top of every confirm card: bold red when a real device changes, calm when it stays on the Mac */
+.where{margin:8px 0;padding:8px 11px;border-radius:8px;font-size:13.5px;display:grid;grid-template-columns:auto 1fr;gap:3px 10px;align-items:baseline}
+.where .wh{grid-column:1/-1;font-weight:700;font-size:12.5px;letter-spacing:.02em;text-transform:uppercase}
+.where .k{color:var(--mute);white-space:nowrap}
+.where.dev{border:2px solid var(--bad);background:color-mix(in srgb,var(--bad) 11%,transparent)}
+.where.dev .wh,.where.dev .chg{color:var(--bad);font-weight:700}
+.where.maybe{border:2px dashed var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+.where.maybe .wh,.where.maybe .chg{color:var(--warn);font-weight:700}
+.where.mac{border:1px solid var(--line);background:color-mix(in srgb,var(--ok) 7%,transparent)}
+.where.mac .wh{color:var(--ok)}
+.where.cloud{border:1px dashed var(--me);background:color-mix(in srgb,var(--me) 7%,transparent)}
+.where.cloud .wh{color:var(--me)}
 .riskbox{margin:8px 0;padding:9px 11px;border-radius:8px;border:1.5px solid var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent);font-size:13.5px}
 .riskbox b{color:var(--bad)}.riskbox label{display:flex!important;gap:8px;align-items:flex-start;margin-top:8px;color:var(--ink)!important;border-radius:6px;padding:2px}
 .riskbox input{width:auto!important;flex:none;margin-top:3px}
@@ -966,7 +978,7 @@ function card(ev,closed){
   if(ev.kind==='sandbox')return sandboxCard(ev,closed);
   if(ev.self)return selfCard(ev,closed);
   if(ev.on_mac)return macCard(ev,closed);
-  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(ev.where||{level:'device',runs_on:'this Mac',changes_on:ev.device})+
     '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
     (/\.(nro|nsp|ovl|3dsx|elf)$/i.test(ev.remote||'')?'<div>If this app is open on '+esc(ev.device)+', close it first.</div>':'')+
     (ev.writes_on?'':'<label style="display:block;margin-top:6px"><input type="checkbox" class="ew" checked style="width:auto"> Also turn on writing for '+esc(ev.device)+' (it\'s off right now, and this change needs it). You can turn it off again any time by asking.</label>')+
@@ -979,6 +991,13 @@ function card(ev,closed){
     const ew=c.querySelector('.ew');close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:inp.value,enable_writes:!!(ew&&ew.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
+// Two plain lines on every card: where it runs, and what it changes (see where.py).
+function whereBox(w){if(!w)return '';
+  const lv={device:'dev',maybe:'maybe',cloud:'cloud'}[w.level]||'mac';
+  const head={dev:'⚠ This changes a real device',maybe:'⚠ This might change a device',cloud:'☁ This leaves your Mac',mac:'✓ Stays on this Mac'}[lv];
+  return '<div class="where '+lv+'"><div class="wh">'+head+'</div>'+
+    '<span class="k">'+(lv==='cloud'?'Sent to:':'Runs on:')+'</span><span>'+esc(w.runs_on)+'</span>'+
+    '<span class="k">Changes on:</span><span class="chg">'+esc(w.changes_on)+'</span></div>'}
 // A red box for commands that can delete or break things, with a tick the user must give.
 function riskBox(list,where){if(!list||!list.length)return '';
   return '<div class="riskbox"><b>⚠ Risky command</b> on '+esc(where)+'. It '+list.map(esc).join('; it ')+'. PatchBay can\'t undo this, and nothing is backed up first.'+
@@ -986,26 +1005,29 @@ function riskBox(list,where){if(!list||!list.length)return '';
 function macCard(ev,closed){ // a change on the Mac (project files, builds): no device is touched
   const build=/^(In folder|Run:)/.test(ev.diff||''),inst=ev.kind==='install_packages',spec=ev.kind==='spec_claude',sfiles=ev.kind==='spec_files',ask=ev.kind==='ask_claude'||spec||sfiles,dcmd=ev.kind==='device_command';
   if(dcmd)ev.typing=true;
+  const w=ev.where,lv=w&&w.level,word=ev.type_word||ev.device;
   const sets=ev.title.startsWith('Change settings'),plan=ev.title.startsWith('Plan:');
   if(plan)return planCard(ev,closed);
-  const label=dcmd?'Run it on '+ev.device:sfiles?'Save the files':ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
-  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+  const label=dcmd?'Run it on '+ev.device:lv==='device'&&build?'Run it and send to '+word:sfiles?'Save the files':ask?'Send to Claude':inst?'Install':ev.title.startsWith('Build')?'Run the build':ev.title.startsWith('Download')?'Download it':build?'Run it':sets?'Save settings':'Save the change';
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(w)+
     '<div>'+(dcmd?'<b>This runs the command below on '+esc(ev.device)+' itself</b>, over SSH. Commands can change the device, and they can\'t be undone by PatchBay, so read it first.':spec?'This sends <b>only the spec below</b> to Claude (Anthropic\'s cloud AI) as one fresh request: no chat, no memory, no file paths, no device details. It passed the privacy check. It\'s billed to your Anthropic API account, not a Claude Pro plan.':sfiles?'This saves the files Claude wrote on '+esc(ev.computer)+'. No device is touched. Old versions are backed up first, and each file can be undone in 🩺 Setup → Mac.':ask?'This sends the text below to Claude (Anthropic\'s cloud AI) and nothing else. Personal details are already swapped for stand-ins like &lt;device-1&gt;. Costs a few cents.':inst?'This installs build tools on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':sets?'This changes the app\'s settings on '+esc(ev.computer)+'. The settings file is backed up first.'+
-      (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?'This runs the command below on '+esc(ev.computer)+'. It doesn\'t touch '+esc(ev.device)+'.':
+      (ev.typing?' <b>This turns on writing to '+esc(ev.device)+'.</b>':''):build?(lv==='device'?'<b>This runs on '+esc(ev.computer)+', then sends to '+esc(w.changes_on)+'.</b> Read the command first. PatchBay can\'t undo what it does there.':
+      lv==='maybe'?'This runs on '+esc(ev.computer)+'. <b>It might also copy to a device</b>: commands like this often do, but this one doesn\'t say where. Check before you run it.':
+      'This runs the command below on '+esc(ev.computer)+'. Nothing outside this Mac changes.'):
       'This changes the source code on '+esc(ev.computer)+', not '+esc(ev.device)+'. The old version is backed up first.')+'</div>'+
     (ev.diff?'<details open><summary>'+(dcmd?'Command':sfiles?'The files':ask?'Exactly what will be sent':inst?'What happens':build?'Command':sets?'Changes':'Exact change')+'</summary>'+(!(build||sets||inst||ask||dcmd)&&/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre'+(ask?' style="white-space:pre-wrap;max-height:320px;overflow:auto"':'')+'>'+(build||sets||inst||ask||dcmd?esc(ev.diff):diffHtml(ev.diff))+'</pre>')+'</details>':'')+
-    riskBox(ev.risk,dcmd?ev.device:(ev.computer||'the Mac'))+
-    '<div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
+    riskBox(ev.risk,dcmd?ev.device:lv==='device'?(ev.computer||'the Mac')+' and '+w.changes_on:(ev.computer||'the Mac'))+
+    '<div class="row">'+(ev.typing?'Type <b>'+esc(word)+'</b> to confirm: <input autocomplete="off">':'')+'<button class="primary">'+label+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
   const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input'),und=c.querySelector('.risk-ok');
-  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==word){inp.focus();inp.style.borderColor='var(--bad)';return}
     if(und&&!und.checked){und.parentNode.style.outline='2px solid var(--bad)';return}
     const typed=inp?inp.value:'';close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed,understood:!!(und&&und.checked)})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})};
 }
 function accessCard(ev,closed){ // a change to a file on this Mac or to Apple Calendar
-  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+(ev.calendar?'This changes your <b>Apple Calendar</b>. None of your devices are touched. You can undo it in 🩺 Setup → Mac.':
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(ev.where)+'<div>'+(ev.calendar?'This changes your <b>Apple Calendar</b>. None of your devices are touched. You can undo it in 🩺 Setup → Mac.':
       'This changes a file on <b>'+esc(ev.computer||'this Mac')+'</b>, not a device. The old version is backed up first (deleting moves it to the Trash), and you can undo it in 🩺 Setup → Mac.')+'</div>'+
     (ev.diff?'<details open><summary>'+(ev.calendar?'The event':'Exact change')+'</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre style="white-space:pre-wrap">'+esc(ev.diff)+'</pre>')+'</details>':'')+
     '<div class="row"><button class="primary">Confirm</button><button>Cancel</button></div>');
@@ -1016,7 +1038,7 @@ function accessCard(ev,closed){ // a change to a file on this Mac or to Apple Ca
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
 function selfCard(ev,closed){ // a change to PatchBay's own code, or restarting PatchBay
   const rs=ev.kind==='self_restart';
-  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(ev.where)+
     (rs?'<div>PatchBay stops and starts again so its new code is used. Chats in progress stop. The page reconnects by itself, and if PatchBay can\'t start, it puts the last change back by itself.</div>':
       '<div>This changes <b>PatchBay itself</b> ('+esc(ev.remote)+' on '+esc(ev.computer)+'). None of your devices are touched. It was checked for mistakes, the old version is backed up first, and <b>Undo</b> is in 🕘 Activity.</div>'+
       '<div style="font-size:12.5px;color:var(--mute);margin-top:4px">'+esc(ev.stats||'')+(ev.page_only?' · takes effect when you reload the page':' · takes effect after a restart')+'</div>'+
@@ -1036,15 +1058,16 @@ async function waitForRestart(){if(restarting)return;restarting=true;
     await new Promise(r=>setTimeout(r,1000))}
   note.innerHTML='PatchBay hasn\'t come back yet. Start it again from the Dock, or open <a href="/fix">PatchBay repair</a>.'}
 function planCard(ev,closed){
-  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>Approve this once and PatchBay does every step without stopping to ask. '+
+  const word=ev.type_word||ev.device;
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(ev.where)+'<div>Approve this once and PatchBay does every step without stopping to ask. '+
     'Changes on '+esc(ev.computer)+' happen by themselves'+(ev.typing?'; the changes to '+esc(ev.device)+' listed below go through too, each backed up first':
     '; anything else that writes to '+esc(ev.device)+' still asks you')+'. You can press Stop any time.</div>'+
-    '<pre>'+esc(ev.diff||'')+'</pre><div class="row">'+(ev.typing?'Type <b>'+esc(ev.device)+'</b> to approve: <input autocomplete="off">':'')+
+    '<pre>'+esc(ev.diff||'')+'</pre><div class="row">'+(ev.typing?'Type <b>'+esc(word)+'</b> to approve: <input autocomplete="off">':'')+
     '<button class="primary">Approve plan</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
   const [ok,no]=row.querySelectorAll('button'),inp=row.querySelector('input');
-  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==ev.device){inp.focus();inp.style.borderColor='var(--bad)';return}
+  ok.onclick=async()=>{if(busy)return;if(inp&&inp.value.trim()!==word){inp.focus();inp.style.borderColor='var(--bad)';return}
     const typed=inp?inp.value:'';close('Approved.');await chatStream('/api/confirm',{id:ev.id,typed})};
   no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
 
@@ -1312,7 +1335,7 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
   clearTimeout(SB_POLL);if(j.sandboxes.some(s=>s.running))SB_POLL=setTimeout(()=>{if($('sc-sb'))drawSandbox()},1500)}
 
 function sandboxCard(ev,closed){ // a sandbox step that needs the user: internet on, copy back, reset, delete, undo
-  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+esc(ev.what||'')+'</div>'+
+  const c=add('card','<h3>'+esc(ev.title)+'</h3>'+whereBox(ev.where)+'<div>'+esc(ev.what||'')+'</div>'+
     (ev.diff?'<details open><summary>What happens</summary>'+(/^(---|@@)/m.test(ev.diff)?'<pre style="white-space:pre-wrap">'+diffHtml(ev.diff)+'</pre>':'<pre style="white-space:pre-wrap">'+esc(ev.diff)+'</pre>')+'</details>':'')+
     '<div class="row"><button class="primary">'+esc(ev.label||'Confirm')+'</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
@@ -1739,7 +1762,7 @@ async function plan(req){
   let j;try{j=await postJSON('/api/files/plan',Object.assign({device:cur},req))}catch(e){return act(e.message,'bad')}
   showPlan(j)}
 function showPlan(j){
-  modal(`<h3>${esc(j.title)}</h3>
+  modal(`<h3>${esc(j.title)}</h3>${whereBox(j.where)}
     <div class="msgline">Nothing has been written yet. Every file that gets replaced or deleted is backed up to ${esc(info.computer)} first, and you can undo it.</div>
     <ul>${j.lines.map(l=>'<li>'+esc(l)+'</li>').join('')}${j.more?'<li>…and '+j.more+' more</li>':''}</ul>
     ${j.writes_on?'':'<div class="msgline bad">Writing is turned off for '+esc(j.device)+', so this will be refused. To allow it, set "allow_writes": true in its settings file ('+esc(info.settings_file||'')+').</div>'}
