@@ -338,6 +338,36 @@ def one_file(dev, path):
     return [(path, None, None)]
 
 
+def existing_items(cfg, paths):
+    """The safety backup before a change: just the exact files or folders that will be replaced, never their parent
+    folder (on a PS5 the parent of an app can be all of /user, hundreds of GB). Returns (items for Job, new paths
+    that aren't on the device yet, so there's nothing to back up)."""
+    items, new = [], []
+    dev = core.Device(cfg)
+    try:
+        dev.connect(quiet=True)
+    except SystemExit as e:
+        raise BackupError("Couldn't reach %s to back up first: %s" % (cfg["device_name"], e.code))
+    try:
+        for path in dict.fromkeys(paths):
+            p = PurePosixPath(path)
+            try:
+                kind = None if str(p) == "/" else next(
+                    (k for n, k, _, _ in dev._list(str(p.parent)) if n == p.name and k != "skip"), None)
+            except ftplib.error_perm:
+                kind = None     # the folder above isn't there either: it's all new
+            if str(p) == "/" or (kind == "dir" and len(p.parts) < 3):
+                raise BackupError("%s is a whole top-level folder, too big to back up before one change. Name the "
+                                  "exact file or app folder that will be replaced instead." % p)
+            if kind:
+                items.append({"path": str(p), "kind": kind})
+            else:
+                new.append(str(p))
+    finally:
+        dev.close()
+    return items, new
+
+
 def same(old, size, modified):
     """Unchanged since the last backup? Only trusted when the device gives exact times (to the second)."""
     exact = bool(modified) and len(modified) >= 14 and modified[:14].isdigit()

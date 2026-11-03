@@ -1204,6 +1204,29 @@ def t_project_edit(st, emit, a):
                        extra_fields={"project": pr["name"], "build_after": a.get("build_after") is not False})
 
 
+DOCKER_CMD = re.compile(r"(^|[;&|(`\s/])(docker(-compose)?|podman)(\s|$)")
+DOCKER_DOWN = re.compile(r"Cannot connect to the Docker daemon|Is the docker daemon running|docker\.sock.*(no such file|"
+                         r"connection refused)|error during connect", re.I)
+DOCKER_DOWN_HINT = ("Docker isn't answering because Colima (the Linux machine Docker runs in) isn't started. Call "
+                    "sandbox_preflight now: it shows the Start Colima card, and after the user presses it PatchBay "
+                    "waits for Docker and carries on. Don't retry docker commands or wait on Docker yourself")
+
+
+def docker_gate(st, emit, cmd):
+    """A Mac command that uses Docker needs Docker answering first. If it isn't (Colima not started), show the
+    sandbox check and its Start Colima card instead of a command that would just hang or fail. None = go ahead."""
+    if not DOCKER_CMD.search(cmd or ""):
+        return None
+    try:
+        pf = sandbox.preflight(None, emit, check_stop)
+    except sandbox.SandboxError:
+        return None
+    if pf["ok"] or not (pf["brew"] or pf["colima"] == "start" or pf["stuck"]):
+        return None
+    return ("Not run yet: this command uses Docker, and Docker isn't answering. " + sandbox_preflight(st, emit, None, pf)
+            + "\nAfter Colima is running, propose the same command again.")
+
+
 @tool("propose_build",
       "Suggest building a project on the Mac with its build command. Does NOT run: shows a card the user confirms. "
       "Afterwards you get the build output, so you can fix errors.",
@@ -1222,6 +1245,9 @@ def t_build(st, emit, a):
     if warn and not a.get("checked_system"):
         return ("Not built yet. %s Then, to build on the Mac anyway, call propose_build again with "
                 "checked_system true." % warn)
+    gate = docker_gate(st, emit, pr.get("build") or "")
+    if gate:
+        return gate
     if todo:
         # Install everything the project needs in one go, instead of one failed build per missing tool.
         res = tools_card(st, emit, rows, todo, "%s needs these tools before it can build." % pr["name"])
@@ -1487,7 +1513,9 @@ def start_backup(cfg, items=None, label=""):
 @tool("backup",
       "Back up files from the device to the user's backup folder on the Mac: give paths for just those files or "
       "folders, or nothing for a full backup. Only reads the device, so no card is needed. Runs in the background; "
-      "progress shows on the Backups tab.",
+      "progress shows on the Backups tab. Installs and approved plans already back up exactly what they replace, so "
+      "don't call this before them; if you do, give only the exact file or app folder being replaced, never the "
+      "folder above it (a PS5's /user can be 400+ GB).",
       {"paths": {"type": "array", "items": S, "description": "Files or folders on the device; leave out for everything"},
        "label": dict(S, description="Optional name, e.g. 'before the Atmosphère 1.8 update'")})
 def t_backup(st, emit, a):
@@ -1550,13 +1578,19 @@ def t_save_platform(st, emit, a):
     return "Saved notes for %s (%s). platform_notes will show them from now on." % (k, f)
 
 
+# Device folders far too big to back up before one change (the PS5's /user is often 400+ GB).
+TOO_BROAD = re.compile(r"^/*(user|data|mnt|system|system_data|system_ex|preinst|update|usb\d*|sdmc:)?/*$", re.I)
+
+
 @tool("propose_plan",
       "For a job with several steps (more than 3), first show the user a short numbered plan to approve once. "
       "After approval you carry it out without stopping to ask. List any device files the plan will write in "
       "device_writes: approving the plan (the user types the device name) covers those writes, each backed up "
       "first. Does NOT run anything by itself.",
       {"title": S, "steps": {"type": "array", "items": S, "description": "Plain steps, in order"},
-       "device_writes": {"type": "array", "items": S, "description": "Device paths the plan will change, if any"},
+       "device_writes": {"type": "array", "items": S,
+                         "description": "The exact device files or app folders the plan will replace, if any "
+                                        "(never a whole top-level folder like /user: only these are backed up)"},
        "mac_commands": {"type": "array", "items": S,
                         "description": "Exact commands the plan will run on the Mac, if any (installs and builds "
                                        "don't need listing)"},
@@ -1568,7 +1602,15 @@ def t_plan(st, emit, a):
     if not steps:
         raise ToolError("Give the steps of the plan.")
     writes = [norm(x) for x in (a.get("device_writes") or []) if str(x).strip()][:50]
+    broad = [w for w in writes if TOO_BROAD.match(w)]
+    if broad:
+        raise ToolError("%s is a whole top-level folder (it can hold hundreds of GB), so it can't be backed up before "
+                        "one change. In device_writes, list only the exact files or the app folder that will be "
+                        "replaced, e.g. /user/app/ABCD12345/eboot.bin." % broad[0])
     cmds = [str(x).strip() for x in (a.get("mac_commands") or []) if str(x).strip()][:30]
+    gate = docker_gate(st, emit, " ; ".join(cmds))
+    if gate:
+        return gate.replace("propose the same command again", "propose the plan again")
     danger = []
     for c in cmds:
         danger += [w for w in risk.risky(c) if w not in danger]
@@ -1913,6 +1955,9 @@ def t_command(st, emit, a):
     if re.search(r"(^|[;&|/]\s*)(colima\s+(start|stop|restart)|docker\s+info)\b", cmd):
         raise ToolError("Use sandbox_preflight instead: it checks Docker and Colima and starts Colima sized for "
                         "this Mac (plain colima start makes a machine too small for builds).")
+    gate = docker_gate(st, emit, cmd)
+    if gate:
+        return gate
     root = pe(projects.folder_of, pr)
     return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
                        "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
@@ -2949,6 +2994,13 @@ def t_sandbox_run(st, emit, a):
         raise ToolError("Not run: this command sends to %s, and sandboxes never change your devices. Copy the built "
                         "file out (propose_sandbox_copy_out), then use propose_command or propose_install in the real "
                         "project: that shows a card the user confirms by typing the device name." % sends["changes_on"])
+    if s["kind"] == "linux" and not a.get("_step"):
+        # Docker must answer before anything runs in a Linux sandbox. If Colima isn't started, show its card first
+        # (never start it silently or keep asking a Docker that isn't there). sandbox_build already checked.
+        pf = sb(sandbox.preflight, s, emit, check_stop)
+        if pf["brew"] or pf["colima"] == "start" or pf["stuck"]:
+            return ("Not run yet: Docker isn't answering. " + sandbox_preflight(st, emit, s, pf) +
+                    "\nAfter Colima is running, PatchBay carries on by itself: run the same command again then.")
     emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
@@ -3407,7 +3459,9 @@ sandbox_create (a copy of the project; kind linux for Linux/Ubuntu projects). Ma
 PatchBay reads the project's build files and sets it up (Linux version, packages, setup, build, memory); then \
 sandbox_build step setup, sandbox_build step build, and sandbox_run as often as needed. Never write your own \
 setup command or install/start Docker or Colima yourself: sandbox_preflight checks and installs what sandboxes \
-need (one card), and the project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
+need (one card). Docker only answers once Colima (its Linux machine) is started: if Docker doesn't answer, call \
+sandbox_preflight straight away (it shows the Start Colima card, then PatchBay waits and carries on); never wait on, \
+poll or retry Docker yourself. The project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
 asked for with a card when a download is needed. When it works, propose_sandbox_copy_out the file or folder that \
 should go back into the real project. Anything that sends to a device (make install, FTP upload) runs on the Mac \
 with propose_command after copying out, never inside the sandbox.
@@ -5073,20 +5127,30 @@ def device_write(cfg, p, emit):
 def confirm_on_mac(st, cfg, p, emit, typed=""):
     if p["kind"] == "plan":
         if p["writes"]:
-            # Back up the folders the plan will change, before anything is touched.
-            folders = sorted({str(PurePosixPath(w).parent) for w in p["writes"]})
-            emit({"type": "status", "text": "Backing up %s first..." % ", ".join(folders)})
-            job = backup.Job(cfg, [{"path": f, "kind": "dir"} for f in folders], "Before: " + (p.get("note") or "plan"))
-            APP.backups[cfg["device_name"]] = job
-            job._run_safe()
-            done = job.status()
-            if done["phase"] != "done":
-                emit({"type": "answer", "text": "I couldn't back up %s first, so I haven't started the plan: %s"
-                                                % (", ".join(folders), done["message"])})
-                st.messages.append({"role": "user", "content": "[The safety backup before the plan failed: %s]"
-                                                               % done["message"]})
+            # Back up exactly what the plan will replace, before anything is touched. Never the folder above it:
+            # on a PS5 the folder above an app can be all of /user (hundreds of GB).
+            try:
+                items, new = backup.existing_items(cfg, p["writes"])
+            except backup.BackupError as e:
+                emit({"type": "answer", "text": "I couldn't back up first, so I haven't started the plan: %s" % e})
+                st.messages.append({"role": "user", "content": "[The safety backup before the plan failed: %s]" % e})
                 return
-            emit({"type": "note", "text": "Backed up %s first (Backups tab)." % ", ".join(folders)})
+            folders = [i["path"] for i in items]
+            if items:
+                emit({"type": "status", "text": "Backing up %s first..." % ", ".join(folders)})
+                job = backup.Job(cfg, items, "Before: " + (p.get("note") or "plan"))
+                APP.backups[cfg["device_name"]] = job
+                job._run_safe()
+                done = job.status()
+                if done["phase"] != "done":
+                    emit({"type": "answer", "text": "I couldn't back up %s first, so I haven't started the plan: %s"
+                                                    % (", ".join(folders), done["message"])})
+                    st.messages.append({"role": "user", "content": "[The safety backup before the plan failed: %s]"
+                                                                   % done["message"]})
+                    return
+                emit({"type": "note", "text": "Backed up %s first (Backups tab)." % ", ".join(folders)})
+            if new:
+                emit({"type": "note", "text": "Nothing there yet, so nothing to back up: %s" % ", ".join(new)})
         st.plan = {"steps": p["steps"], "writes": p["writes"], "commands": p.get("commands") or [],
                    "typed": bool(p.get("needs_typing")), "reaches": p.get("reaches") or "",
                    "understood": bool(p.get("risk"))}     # a risky plan can only be confirmed with the tick
@@ -5291,6 +5355,8 @@ add -DZLIB_ROOT=/opt/devkitpro/portlibs/switch"
         else:
             err += (". A library is missing: for a console build install devkitPro's version (it's called %s) "
                     "with propose_install_packages" % lib)
+    if code != 0 and DOCKER_DOWN.search(out or ""):
+        err = (err + ". " if err else "") + DOCKER_DOWN_HINT
     summary = result + (" First error: " + err if err else "")
     emit({"type": "tool_result", "name": "output", "summary": summary, "text": tail or "(no output)", "open": code != 0})
     return summary, "%s\nOutput (last lines):\n%s" % (summary, tail or "(no output)")
