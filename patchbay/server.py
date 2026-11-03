@@ -3020,7 +3020,9 @@ def sandbox_recipe_for(src, a):
         r = {"recipe_notes": ["Couldn't read the project's build files: %s" % e]}
     for k in ("setup_command", "build_command", "output", "arch", "memory_gb", "cpus", "image"):
         if a.get(k) not in (None, ""):
-            r[k] = a[k]
+            # The AI's setup is added to the project's own (a short "apt-get install make gcc" used to replace it,
+            # and the build then stopped at one missing program after another).
+            r[k] = sandboxrecipe.merge_setup(r.get("setup_command"), a[k]) if k == "setup_command" else a[k]
     if a.get("memory_gb") and int(a["memory_gb"]) > int(r.get("memory_max") or 28):
         r["memory_max"] = min(28, int(a["memory_gb"]))
     return r
@@ -3041,7 +3043,8 @@ def memory_warning(s):
 
 
 @both_tool("sandbox_build", "Run the sandbox's recipe: step setup (once: installs the Linux packages and runs the "
-           "project's own setup script; needs the internet) or step build (the build command). If the internet is "
+           "project's own setup script; before it runs, PatchBay reads the build files and adds EVERY program they "
+           "check for, so all of them install at once; needs the internet) or step build (the build command). If the internet is "
            "off it shows the card to turn it on. When the build works, it says how to copy the result out and send "
            "it to the device from the Mac.",
            {"sandbox": S, "step": {"type": "string", "enum": ["setup", "build"]}}, ["step"])
@@ -3054,6 +3057,10 @@ def t_sandbox_build(st, emit, a):
     if not cmd and s["kind"] == "linux":
         # Older sandboxes (or ones made before the project's files were read) get the project's preset now.
         s, filled = fill_from_preset(s)
+        cmd = sandbox.step_command(s, step)
+    if step == "setup" and s["kind"] == "linux":
+        s, more = complete_setup(s)
+        filled += more
         cmd = sandbox.step_command(s, step)
     if not cmd:
         raise ToolError("Sandbox %s has no %s command. Set one with propose_sandbox_settings (%s_command)."
@@ -3069,6 +3076,57 @@ def t_sandbox_build(st, emit, a):
         if not pf["ok"]:
             return filled + sandbox_preflight(st, emit, s, pf)
     return filled + t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
+
+
+APT_STEP = re.compile(r"^\{?\s*(sudo\s+)?(export\s+DEBIAN_FRONTEND=\S+|apt(-get)?\s+(update|install)\b)")
+
+
+def complete_setup(s):
+    """Before the setup step runs: make the sandbox's setup install EVERYTHING the project needs in one go, so the
+    build doesn't stop at one missing program after another (git, then python3, then wget, then unzip...).
+    - the Linux the project's own files ask for (only replacing the plain default, and only before a build worked),
+    - the project's own setup (its package list, its setup script), with anything added since kept,
+    - every program the Makefile, tools/ scripts, CI files and dependency list check for.
+    Returns (sandbox, plain words for the chat; empty when nothing changed)."""
+    preset = project_preset(s)
+    said, upd = [], {}
+    image = s.get("image")
+    if preset.get("image") and preset["image"] != image and image == sandbox.DEFAULTS["image"] \
+            and not s.get("built_ok"):
+        image = upd["image"] = preset["image"]
+        said.append("uses %s, the Linux the project's own files ask for (it was the plain default, %s)"
+                    % (preset["image"], s.get("image")))
+    old = s.get("setup_command") or ""
+    try:
+        found, _unknown, read = sandboxrecipe.setup_packages(sandbox.work(s))
+    except (OSError, sandbox.SandboxError):
+        found, read = [], []
+    added = [p for p in found if p not in set(sandboxrecipe.apt_packages(old))]
+    if preset.get("setup_command") and image == preset.get("image"):
+        # Start from the project's setup; keep what was added since. Packages that aren't the project's own go in
+        # one step of their own that can't break the rest; other added steps run after.
+        base = preset["setup_command"]
+        theirs = set(sandboxrecipe.apt_packages(base))
+        mine = [p for p in sandboxrecipe.apt_packages(old) if p not in theirs]
+        extra = [x.strip() for x in re.split(r"\s+&&\s+", old) if x.strip() and not APT_STEP.match(x.strip())
+                 and x.strip() not in base]
+        setup = sandboxrecipe.add_found_packages(base, mine + found) + "".join(" && " + x for x in extra)
+    else:
+        setup = sandboxrecipe.add_found_packages(old, found)
+    if setup != old:
+        upd["setup_command"] = setup
+    if not upd:
+        return s, ""
+    s = sb(sandbox.set_recipe, s["name"], upd)
+    if old and setup != old and preset.get("setup_command") and preset["setup_command"] not in old:
+        said.append("installs the project's own package list again (%s)"
+                    % (", ".join(preset.get("recipe_from") or []) or "its build files"))
+    if added:
+        said.append("also installs %d program%s the build files check for (%s)%s" % (
+            len(added), "" if len(added) == 1 else "s", ", ".join(added[:14]) + (" ..." if len(added) > 14 else ""),
+            (", read from " + ", ".join(read[:6])) if read else ""))
+    return s, ("Before setup, PatchBay read the project's build files so everything installs at once. The setup now "
+               "%s.\n" % "; ".join(said)) if said else ""
 
 
 def project_preset(s):
@@ -3196,6 +3254,22 @@ def t_sandbox_run(st, emit, a):
     return detail
 
 
+def script_needs(s, out):
+    """The packages for every program the setup scripts named in a failed build's output check for. Those scripts
+    often come from a dependency the build fetched INTO the sandbox (e.g. /ps5-native-app-boilerplate), so they are
+    read inside it. Returns (packages, plain words for which scripts)."""
+    scripts, dirs = sandboxrecipe.scripts_named(out)
+    cmd = sandboxrecipe.show_scripts_command(scripts, dirs)
+    if not cmd:
+        return [], ""
+    try:
+        code, text = sandbox.run(s["name"], cmd, None, STOP, None, record=False)
+    except (sandbox.SandboxError, OSError):
+        return [], ""
+    pk, _ = sandboxrecipe.packages_for(sandboxrecipe.commands_in_text(text))
+    return pk, ", ".join(scripts[:3])
+
+
 def sandbox_hints(s, code, out, step):
     """Plain next steps after a sandbox run: ARM problems, and what to do once the build worked."""
     out = out or ""
@@ -3214,13 +3288,20 @@ def sandbox_hints(s, code, out, step):
     if code != 0 and s["kind"] == "linux":
         pk, unknown = sandboxrecipe.packages_for(sandboxrecipe.missing_commands(out))
         if pk:
+            more, script_words = script_needs(s, out)
+            # A script that wants clang-18 doesn't need the plain clang as well.
+            pk = [p for p in pk if not any(m.startswith(p + "-") for m in more)]
+            more = [m for m in more if m not in pk]
             try:
                 new = sandboxrecipe.add_packages(s.get("setup_command") or "", pk)
+                new = sandboxrecipe.add_found_packages(new, more)
                 if new != (s.get("setup_command") or ""):
                     sandbox.set_recipe(s["name"], {"setup_command": new})
                 tips += (" Missing program%s inside: PatchBay added the Linux package%s %s to the sandbox's setup. "
-                         "Next: sandbox_build step setup, then build again." % (
-                             "s" if len(pk) > 1 else "", "s" if len(pk) > 1 else "", ", ".join(pk)))
+                         "%sNext: sandbox_build step setup, then build again." % (
+                             "s" if len(pk) > 1 else "", "s" if len(pk) > 1 else "", ", ".join(pk),
+                             ("It also read %s and added everything else it checks for at once: %s. " % (
+                                 script_words, ", ".join(more))) if more else ""))
             except sandbox.SandboxError:
                 tips += " Missing inside: install %s (apt-get install -y %s)." % (", ".join(pk), " ".join(pk))
         if unknown:
@@ -3228,6 +3309,13 @@ def sandbox_hints(s, code, out, step):
                      "propose_sandbox_settings setup_command \"apt-get install -y <package>\"." % ", ".join(unknown))
     if code == 0 and step == "setup":
         tips += " Setup is done. Next: sandbox_build step build."
+    if code == 0 and step == "build" and not s.get("built_ok"):
+        try:
+            done = sandbox.load(s["name"])
+            done["built_ok"] = True       # keeps its Linux from now on (complete_setup won't switch it)
+            sandbox.save(done)
+        except sandbox.SandboxError:
+            pass
     if code == 0 and step == "build" and s.get("output"):
         try:
             made = sandbox.inside_work(s, s["output"]).exists()
@@ -4043,6 +4131,21 @@ DIAGNOSE = ("[PatchBay loop guard: %s %s. Don't run it again the same way: that 
             "4. Then offer ONE different fix with the right card tool (a setting, a command, a package, a sandbox "
             "card), and say plainly why it should work. If no tool can fix it, tell the user plainly what's wrong "
             "and what you found.]")
+
+
+SANDBOX_STEP_TOOLS = ("sandbox_build", "sandbox_run")
+
+
+def new_missing_programs(name, result, seen):
+    """True when a failed sandbox step reports a missing program it hasn't reported before in this question (and
+    remembers it). The same missing program again is a real repeat and returns False."""
+    if name not in SANDBOX_STEP_TOOLS:
+        return False
+    miss = set(sandboxrecipe.missing_commands(result))
+    if not miss or miss <= seen:
+        return False
+    seen |= miss
+    return True
 
 
 def first_line(text):
@@ -5059,6 +5162,7 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
     stamp = "\n\n[Sent %s, %s.]" % (time.strftime("%H:%M"), time.strftime("%Z") or "local time")
     fails, nudges, tried, idle = {}, 0, [], 0
     answers, diagnosed, helped = [], set(), False      # for the loop guard (same answer again) and diagnosis
+    missing_seen = set()        # programs a sandbox build said were missing (each new one is progress, not a repeat)
     idle_limit = 15 if st.plan else 8
     base = PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS
     seen, new_reads, rounds = set(), 0, 0
@@ -5145,6 +5249,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                 card = summary
                 continue
             bad = failed(result)
+            # A build that stops at a DIFFERENT missing program each time (git, then python3, then wget...) is moving
+            # forward: PatchBay adds each one to the setup. Only the same missing program again counts as a repeat.
+            fresh = bad and new_missing_programs(name, result, missing_seen)
             sig = name + json.dumps(args, sort_keys=True, default=str)
             again = 0 if bad else repeats(answers, name, result)     # failures have their own count below
             if again >= 3:
@@ -5154,7 +5261,7 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             if again == 2 and ("same", name) not in diagnosed:
                 diagnosed.add(("same", name))
                 start_diagnosis(st, emit, name, args, result, "gave the same answer twice")
-            if not bad and name in PROGRESS_TOOLS:
+            if (not bad and name in PROGRESS_TOOLS) or fresh:
                 idle = 0
             elif not bad and sig not in seen:
                 new_reads += 1          # reading something new (a file, a page, a folder) is progress too
@@ -5164,7 +5271,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             if result.startswith(BUG_PREFIX):
                 # Trying again or asking Claude about the project can't fix PatchBay's own code.
                 return ask_user(st, emit, BUG_STOP % (lambda d: d[:1].lower() + d[1:])(step_doing(name, args)), tried, bug=True)
-            if bad and name != "ask_claude":
+            if bad and fresh:
+                st.last_stuck = (name, args, result)
+            elif bad and name != "ask_claude":
                 # The same goal (e.g. building this project), even if the command changed in between.
                 key = name + ":" + str(args.get("project") or args.get("path") or args.get("manager") or "")
                 fails[key] = fails.get(key, 0) + 1

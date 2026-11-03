@@ -1104,8 +1104,9 @@ def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
     return code, "\n".join(lines)
 
 
-def run(name, command, emit=None, stop=None, base_path=None):
-    """Run one shell command inside the sandbox, in its copy of the project. Returns (exit code, output)."""
+def run(name, command, emit=None, stop=None, base_path=None, record=True):
+    """Run one shell command inside the sandbox, in its copy of the project. Returns (exit code, output).
+    record=False: a quiet look PatchBay takes itself (reading a script); the sandbox's last run stays as it was."""
     sb = load(name)
     command = (command or "").strip()
     if not command:
@@ -1127,6 +1128,8 @@ def run(name, command, emit=None, stop=None, base_path=None):
         argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", command]
         code, out = _stream(argv, w, cli_env(), emit, timeout, stop,
                             on_kill=lambda: _quiet([exe, "stop", cname], 60))
+    if not record:
+        return code, out
     sb = load(name)
     used = size_of(folder(name))
     sb["last_run"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "command": command[:300], "code": code,

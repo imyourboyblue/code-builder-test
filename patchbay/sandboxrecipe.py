@@ -304,7 +304,17 @@ APT_FOR = {"gcc": "build-essential", "g++": "build-essential", "cc": "build-esse
            "perl": "perl", "m4": "m4", "gperf": "gperf", "help2man": "help2man", "texinfo": "texinfo",
            "makeinfo": "texinfo", "ccache": "ccache", "jq": "jq", "openssl": "openssl", "7z": "p7zip-full"}
 NOT_FOUND = re.compile(r"command not found:\s+([A-Za-z0-9][A-Za-z0-9_.+-]{0,40})|"
-                       r"(?:^|[\s:])(?![0-9]+:)([A-Za-z0-9][A-Za-z0-9_.+-]{0,40}):\s+(?:command\s+)?not found", re.M)
+                       r"(?:^|[\s:])(?![0-9]+:)([A-Za-z0-9][A-Za-z0-9_.+-]{0,40}):\s+(?:command\s+)?not found|"
+                       # Setup scripts that check first: "missing required command: wget", "required command not
+                       # found: unzip", "wget is required", "please install unzip".
+                       r"(?:missing|required)\s+(?:required\s+)?(?:command|program|tool)s?(?:\s+not\s+found)?:?\s+"
+                       r"['\"`]?([A-Za-z0-9][A-Za-z0-9_.+-]{0,40})|"
+                       r"\b([A-Za-z0-9][A-Za-z0-9_.+-]{0,40})\s+is\s+(?:required|needed|not installed)\b|"
+                       r"[Pp]lease install\s+['\"`]?([A-Za-z0-9][A-Za-z0-9_.+-]{0,40})", re.M)
+ARE_REQUIRED = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.+ ,/-]{0,120}?)\s+(?:are|is)\s+(?:required|needed|missing)\b",
+                          re.M)
+NOT_COMMANDS = {"sh", "bash", "zsh", "line", "it", "this", "that", "which", "what", "python3-module", "module",
+                "the", "a", "an", "one", "and", "or", "is", "command", "program", "tool"}
 APT_INSTALL = re.compile(r"apt(?:-get)?\s+install\s+(?:-y\s+|--yes\s+|--no-install-recommends\s+|-q+\s+)*")
 
 
@@ -312,18 +322,54 @@ def missing_commands(output):
     """Programs a build said weren't there ('git: command not found', 'sh: 1: make: not found'), in order."""
     out = []
     for m in NOT_FOUND.finditer(output or ""):
-        name = m.group(1) or m.group(2)
-        if name in ("sh", "bash", "zsh", "line") or name.isdigit() or name in out:
+        name = next(g for g in m.groups() if g)
+        if name.lower() in NOT_COMMANDS or name.isdigit() or name in out:
             continue
+        if (m.group(4) or m.group(5)) and not package_for(name):
+            continue        # "zlib is required" is about a library, not a program: only known programs count here
         out.append(name)
+    # "clang, an archive tool, and ranlib are required to build zlib": every known program named in the list.
+    for m in ARE_REQUIRED.finditer(output or ""):
+        for w in re.split(r"[\s,/]+", m.group(1)):
+            w = w.strip("'\"`.()")
+            if w and w not in out and w.lower() not in NOT_COMMANDS and package_for(w):
+                out.append(w)
     return out[:8]
+
+
+APT_FOR.update({"sha256sum": "coreutils", "sha512sum": "coreutils", "nproc": "coreutils", "tar": "tar",
+                "gzip": "gzip", "bzip2": "bzip2", "ar": "binutils", "ranlib": "binutils", "objcopy": "binutils",
+                "strip": "binutils", "ld": "binutils", "rev": "bsdextrautils", "spirv-val": "spirv-tools",
+                "spirv-as": "spirv-tools", "ccache": "ccache", "python3-config": "python3-dev", "gpg": "gnupg",
+                "llvm-ranlib": "llvm", "llvm-nm": "llvm", "llvm-objcopy": "llvm", "llvm-readobj": "llvm",
+                "llvm-strip": "llvm", "ld.lld": "lld", "wasm-ld": "lld", "ninja-build": "ninja-build",
+                "pkg-config": "pkgconf", "dos2unix": "dos2unix", "sqlite3": "sqlite3", "ssh": "openssh-client",
+                "scp": "openssh-client", "svn": "subversion", "hg": "mercurial", "lz4": "lz4", "lzma": "xz-utils",
+                "unxz": "xz-utils", "zip": "zip", "xmllint": "libxml2-utils", "doxygen": "doxygen",
+                "convert": "imagemagick", "ffmpeg": "ffmpeg"})
+# Versioned LLVM programs: clang-18 / clang++-18 -> clang-18, ld.lld-18 / lld-18 -> lld-18, llvm-ar-18 -> llvm-18.
+VERSIONED = [(re.compile(r"^clang(?:\+\+)?-(\d{2})$"), "clang-%s"), (re.compile(r"^(?:ld\.)?lld-(\d{2})$"), "lld-%s"),
+             (re.compile(r"^llvm-[a-z-]+-(\d{2})$"), "llvm-%s"), (re.compile(r"^llvm-config-(\d{2})$"), "llvm-%s-dev"),
+             (re.compile(r"^gcc-(\d{1,2})$"), "gcc-%s"), (re.compile(r"^g\+\+-(\d{1,2})$"), "g++-%s"),
+             (re.compile(r"^python3\.(\d{1,2})$"), "python3.%s")]
+
+
+def package_for(command):
+    """The Ubuntu package that has this program, or None when PatchBay doesn't know."""
+    if command in APT_FOR:
+        return APT_FOR[command]
+    for rx, pkg in VERSIONED:
+        m = rx.match(command or "")
+        if m:
+            return pkg % m.group(1)
+    return None
 
 
 def packages_for(commands):
     """(apt packages for the known ones, commands PatchBay doesn't know a package for)."""
     pk, unknown = [], []
     for c in commands:
-        p = APT_FOR.get(c)
+        p = package_for(c)
         if p:
             if p not in pk:
                 pk.append(p)
@@ -369,3 +415,160 @@ def merge_setup(preset, mine):
         if p not in merged:
             extra.append(p)
     return merged + ("".join(" && " + p for p in extra))
+
+
+# ---------------------------------------------------------------- every program a build needs, found up front
+
+# The setup scripts of well-known dependencies a project fetches DURING its build (so their files can't be read
+# beforehand): what they check for. The PS5 Native App Boilerplate's tools/setup-native-dependencies.sh stops at the
+# first of these it doesn't find, one at a time.
+KNOWN_NEEDS = {
+    "ps5-native-app-boilerplate": ["wget", "unzip", "sha256sum", "tar", "make", "clang-18", "llvm-ar-18",
+                                   "llvm-ranlib-18", "git", "python3", "curl", "xz"],
+    "ps5-payload-sdk": ["rev"],         # its prospero-* wrappers use rev (minimal Ubuntu images lack it)
+}
+CMD_WORD = r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,40}"
+CHECK_RE = re.compile(r"\b(?:command\s+-v|which|type\s+-[pP]|hash)\s+['\"]?(%s)['\"]?" % CMD_WORD)
+PY_WHICH = re.compile(r"shutil\.which\(\s*['\"](%s)['\"]" % CMD_WORD)
+# for command in wget unzip tar; do ... (the loop variable says it's a list of programs)
+FOR_LIST = re.compile(r"\bfor\s+(?:command|cmd|tool|prog|program|bin|binary|exe|dep|req|c|t)\s+in\s+([^;\n]+?)\s*;?\s*"
+                      r"(?:do\b|\n)")
+SCRIPT_RE = re.compile(r"(?:^|[\s'\"(\[,])((?:\.{0,2}/)?(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:sh|bash))\b")
+INTO_RE = re.compile(r"\binto\s+(/[A-Za-z0-9_./-]+)")
+SCAN_DIRS = ("tools", "scripts", "ci", "tools/ci", ".ci", "build-scripts", "utils", "bin")
+SCAN_MAX = 80
+
+
+def commands_in_text(text):
+    """Programs a script or Makefile checks for or loops over, in order (only one of 'a || b' alternatives)."""
+    found = []
+
+    def add(w):
+        w = w.strip("'\"")
+        if w and not w.startswith(("$", "-")) and w.lower() not in NOT_COMMANDS and w not in found:
+            found.append(w)
+    for line in (text or "").splitlines():
+        code = line.split("#", 1)[0] if not line.lstrip().startswith("#!") else ""
+        if not code.strip():
+            continue
+        hits = list(CHECK_RE.finditer(code)) + list(PY_WHICH.finditer(code))
+        hits.sort(key=lambda m: m.start())
+        if hits:
+            add(hits[0].group(1))
+            for prev, m in zip(hits, hits[1:]):
+                if "||" not in code[prev.end():m.start()]:     # alternatives: the first one is enough
+                    add(m.group(1))
+    for m in FOR_LIST.finditer(text or ""):
+        for w in m.group(1).split():
+            if re.match(r"^%s$" % CMD_WORD, w):
+                add(w)
+    for name, needs in KNOWN_NEEDS.items():
+        if name in (text or ""):
+            for w in needs:
+                add(w)
+    return found
+
+
+def _scan_files(top):
+    files = []
+    mk = next((p for p in (top / "Makefile", top / "makefile", top / "GNUmakefile") if p.is_file()), None)
+    if mk:
+        files.append(mk)
+    for d in SCAN_DIRS:
+        dd = top / d
+        if dd.is_dir():
+            for pat in ("*.sh", "*.bash", "*.py", "*.json"):
+                files += sorted(dd.glob(pat))
+    files += _workflows(top)
+    files += [p for p in sorted(top.glob("*.sh"))]
+    seen, out = set(), []
+    for p in files:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out[:SCAN_MAX]
+
+
+def needed_commands(source):
+    """Every program the project's build files (Makefile, tools/ and scripts/ files, CI workflows, the dependency
+    list) check for, so the setup can install them ALL at once before the first build, instead of the build
+    stopping at one missing program after another. Returns (commands, files read)."""
+    top = Path(os.path.expanduser(str(source))).resolve()
+    if not top.is_dir():
+        return [], []
+    found, read = [], []
+    for p in _scan_files(top):
+        t = _read(p)
+        if not t:
+            continue
+        cmds = commands_in_text(t)
+        if cmds:
+            read.append(_rel(top, p))
+        for c in cmds:
+            if c not in found:
+                found.append(c)
+    return found, read
+
+
+def setup_packages(source):
+    """(apt packages the project's build needs, programs PatchBay knows no package for, files read)."""
+    cmds, read = needed_commands(source)
+    pk, unknown = packages_for(cmds)
+    return pk, unknown, read
+
+
+def scripts_named(output):
+    """Setup scripts a failed build ran, and the folders it fetched things into ('into /x'), from its output. Only
+    plain path characters, so they are safe to look at inside the sandbox."""
+    scripts, dirs = [], []
+    for m in SCRIPT_RE.finditer(output or ""):
+        s = m.group(1)
+        if ".." not in s and s not in scripts:
+            scripts.append(s)
+    for m in INTO_RE.finditer(output or ""):
+        d = m.group(1).rstrip("/.")
+        if d and ".." not in d and d not in dirs:
+            dirs.append(d)
+    return scripts[:8], dirs[:4]
+
+
+def show_scripts_command(scripts, dirs):
+    """A read-only shell command that prints those scripts from inside the sandbox (from /work and the fetch
+    folders), so PatchBay can read every program they need."""
+    import shlex
+    places = ["/work"] + dirs
+    parts = []
+    for s in scripts:
+        for d in places:
+            p = s if s.startswith("/") else "%s/%s" % (d, s.lstrip("./"))
+            q = shlex.quote(p)
+            parts.append("[ -f %s ] && head -c 200000 %s" % (q, q))
+            if s.startswith("/"):
+                break
+    return "; ".join(parts) + "; true" if parts else ""
+
+
+TOLERANT = "PatchBay: no package"
+
+
+def add_found_packages(setup, packages):
+    """The setup command with packages found by reading the build files added as their own install step, right after
+    the main apt-get install. If one of them doesn't exist on this Linux, the others still install (each is then
+    tried alone) and the setup goes on: a guess from reading files must never break a working setup."""
+    have = set(apt_packages(setup))
+    new = []
+    for p in packages:
+        if p not in have and p not in new:
+            new.append(p)
+    if not new:
+        return setup or ""
+    names = " ".join(new)
+    step = ("{ apt-get install -y --no-install-recommends %s || for p in %s; do apt-get install -y "
+            "--no-install-recommends \"$p\" || echo \"%s $p\"; done; }" % (names, names, TOLERANT))
+    parts = re.split(r"\s+&&\s+", (setup or "").strip()) if (setup or "").strip() else []
+    at = next((i for i, x in enumerate(parts) if APT_INSTALL.search(x)), None)
+    if at is None:
+        parts = ["export DEBIAN_FRONTEND=noninteractive", "apt-get update", step] + parts
+    else:
+        parts.insert(at + 1, step)
+    return " && ".join(parts)
