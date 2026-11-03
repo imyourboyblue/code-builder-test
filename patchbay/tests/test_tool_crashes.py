@@ -63,6 +63,70 @@ class SandboxRunTest(unittest.TestCase):
             self.run_tool("PS5_HOST=192.168.50.203 make install")
 
 
+class SandboxSetupTest(SandboxRunTest):
+    """The failures from setting up EglantinePS5: no git, hand-written setup, Docker/Colima not ready."""
+
+    def call(self, name, args):
+        return server.HOME_HANDLERS[name](self.st, self.events.append, dict(args, sandbox="EglantinePS5"))
+
+    def test_missing_git_is_added_to_the_setup(self):
+        out = "git submodule update --init Eglantine\n/bin/bash: line 1: git: command not found\n"
+        result, _ = self.run_tool("make", 2, out)
+        self.assertIn("added the Linux package git", result)
+        self.assertIn("git", sandbox.load("EglantinePS5")["setup_command"])
+
+    def test_hand_written_setup_keeps_the_preset(self):
+        # Made without a recipe, like an older sandbox: the project's preset is still used as the base.
+        result = self.call("propose_sandbox_settings", {"setup_command": "apt-get update && apt-get install -y make gcc"})
+        after = sandbox.load("EglantinePS5")["setup_command"]
+        self.assertIn("Kept the project's setup", result)
+        self.assertIn("git", after)
+        self.assertIn("gcc", after)
+
+    def test_empty_setup_is_filled_from_the_preset(self):
+        s = sandbox.load("EglantinePS5")
+        s["setup_command"] = ""
+        sandbox.save(s)
+        s["network"] = True
+        sandbox.save(s)
+        ok = {"rows": [], "brew": [], "colima": None, "ok": True}
+        with mock.patch.object(sandbox, "preflight", return_value=ok), \
+                mock.patch.object(sandbox, "run", return_value=(0, "done")) as run:
+            result = self.call("sandbox_build", {"step": "setup"})
+        self.assertIn("project's own preset", result)
+        self.assertIn("apt-get install", run.call_args[0][1])
+
+    def test_build_stops_at_preflight_card_when_docker_is_missing(self):
+        s = sandbox.load("EglantinePS5")
+        s["network"] = True
+        sandbox.save(s)
+        pf = {"rows": [(False, "Docker command-line tool", "missing")], "brew": ["docker", "colima"],
+              "colima": None, "ok": False}
+        with mock.patch.object(sandbox, "preflight", return_value=pf), \
+                mock.patch.object(server.projects, "find_brew", return_value="/opt/homebrew/bin/brew"), \
+                mock.patch.object(server, "add_pending", return_value="card shown") as card, \
+                mock.patch.object(sandbox, "run") as run:
+            result = self.call("sandbox_build", {"step": "setup"})
+        run.assert_not_called()
+        self.assertIn("card shown", result)
+        self.assertEqual(card.call_args.kwargs["extra_fields"]["packages"], ["brew:docker", "brew:colima"])
+
+    def test_small_colima_gets_a_restart_card(self):
+        pf = {"rows": [(False, "Docker's Linux machine size", "2 CPUs")], "brew": [], "colima": "resize", "ok": False}
+        with mock.patch.object(sandbox, "preflight", return_value=pf):
+            result = self.call("sandbox_preflight", {})
+        card = [e for e in self.events if e.get("type") == "confirm"][-1]
+        self.assertIn("Restart Colima bigger", card["title"])
+        self.assertIn("--cpu", card["diff"])
+        self.assertIn("card", result)
+
+    def test_plain_colima_start_command_is_refused(self):
+        with mock.patch.object(server, "project", return_value={"name": "EglantinePS5"}), \
+                self.assertRaises(server.ToolError) as e:
+            server.HANDLERS["propose_command"](self.st, self.events.append, {"command": "colima start"})
+        self.assertIn("sandbox_preflight", str(e.exception))
+
+
 class NoHiddenModulesTest(unittest.TestCase):
     """A local variable with the same name as an imported module breaks every use of that module in the function."""
 

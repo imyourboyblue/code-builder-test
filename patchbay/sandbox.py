@@ -216,9 +216,98 @@ def engine():
     return None, None
 
 
-INSTALL_HELP = ("Linux sandboxes need a container tool on the Mac. The simplest is Apple's free one: download the "
-                "installer (.pkg) from github.com/apple/container/releases, open it, then in Terminal run: "
-                "container system start. (Docker via Colima works too: brew install colima docker, then colima start.)")
+INSTALL_HELP = ("Linux sandboxes need a container tool on the Mac. Easiest: sandbox_preflight, which puts Colima and "
+                "Docker (Homebrew names: colima and docker) on one install card. Apple's free container tool works "
+                "too: the installer (.pkg) is on github.com/apple/container/releases.")
+# Homebrew's real names. "docker-cli" doesn't exist: the Docker command-line tool's formula is just "docker".
+ENGINE_BREW = ["colima", "docker"]
+
+
+def mac_memory_gb():
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5,
+                             stdin=subprocess.DEVNULL).stdout.strip()
+        if out.isdigit():
+            return round(int(out) / 1024 ** 3)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        return round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3)
+    except (OSError, ValueError, AttributeError):
+        return 16
+
+
+def colima_size(cores=None, mem_gb=None):
+    """CPUs, memory (GB) and disk (GB) for Colima's Linux machine, sized from this Mac. Colima's own default is only
+    2 CPUs and 2 GB, far too small for big builds. A 14-core 36 GB Mac gets 8 CPUs and 20 GB; macOS and a loaded AI
+    model keep the rest."""
+    cores = int(cores or os.cpu_count() or 8)
+    mem = int(mem_gb or mac_memory_gb() or 16)
+    cpus = max(2, min(12, cores // 2 + 1))
+    memory = max(4, min(48, int(mem * 0.56), mem - 12))
+    return cpus, memory, 100
+
+
+def colima_start_argv(colima, cores=None, mem_gb=None):
+    cpus, memory, disk = colima_size(cores, mem_gb)
+    return [colima, "start", "--cpu", str(cpus), "--memory", str(memory), "--disk", str(disk)]
+
+
+def colima_command(cores=None, mem_gb=None):
+    """The Terminal line that restarts Colima with the right size (for messages)."""
+    return "colima stop; " + " ".join(colima_start_argv("colima", cores, mem_gb))
+
+
+def uses_colima(exe=None):
+    """Whether Docker here runs through Colima (so PatchBay can size and restart it)."""
+    if not _which("colima"):
+        return False
+    exe = exe or _which("docker")
+    if not exe:
+        return True
+    code, out = _quiet([exe, "context", "show"], 15)
+    if code == 0 and "colima" in out.lower():
+        return True
+    return _quiet([_which("colima"), "status"], 20)[0] == 0
+
+
+def docker_capacity(exe):
+    """(CPUs, memory GB) of the Linux machine Docker runs in, or (None, None) if Docker can't say."""
+    code, out = _quiet([exe, "info", "--format", "{{.NCPU}} {{.MemTotal}}"], 20)
+    try:
+        n, m = out.split()[:2]
+        return int(n), int(m) / 1024 ** 3
+    except (ValueError, IndexError):
+        return None, None
+
+
+def fit_to_engine(kind, exe, sb):
+    """Lower the sandbox's CPUs and memory to what Docker's Linux machine really has (asking for more makes Docker
+    refuse to start it). Apple's tool gives each sandbox its own machine, so nothing to fit. Returns a plain note
+    ("" when it already fits). Saves the lowered numbers so {cpus} in the build command matches."""
+    if kind != "docker":
+        return ""
+    ncpu, mem = docker_capacity(exe)
+    if not ncpu:
+        return ""
+    changed = []
+    if int(sb["cpus"]) > ncpu:
+        changed.append("CPUs %d -> %d" % (int(sb["cpus"]), ncpu))
+        sb["cpus"] = ncpu
+    room = max(1, int(mem) - 1) if mem else None      # the Linux machine itself needs about 1 GB
+    if room and int(sb["memory_gb"]) > room:
+        changed.append("memory %d -> %d GB" % (int(sb["memory_gb"]), room))
+        sb["memory_gb"] = room
+    if not changed:
+        return ""
+    save(sb)
+    note = ("Docker's Linux machine only has %d CPUs and %.0f GB, so sandbox %s was lowered to fit (%s)."
+            % (ncpu, mem or 0, sb["name"], ", ".join(changed)))
+    if uses_colima(exe):
+        cpus, memory, _ = colima_size()
+        note += (" To give it more, restart Colima bigger (%d CPUs, %d GB): sandbox_preflight shows a card for it."
+                 % (cpus, memory))
+    return note
 
 
 def engine_ready(start=True):
@@ -236,12 +325,14 @@ def engine_ready(start=True):
     else:
         code, out = _quiet([exe, "info"], 20)
         if code != 0 and start and _which("colima"):
-            code, out = _quiet([_which("colima"), "start"], 600)
+            # Sized for builds: plain "colima start" makes a 2 CPU, 2 GB machine.
+            code, out = _quiet(colima_start_argv(_which("colima")), 900)
             if code == 0:
                 code, out = _quiet([exe, "info"], 20)
         if code != 0:
-            raise SandboxError("Docker isn't running: %s\nStart Colima (colima start in Terminal), OrbStack or Docker "
-                               "Desktop, then try again." % out[-400:])
+            raise SandboxError("Docker isn't running: %s\n%s" % (out[-400:], (
+                "Start Colima with sandbox_preflight (it shows a card)." if _which("colima") else
+                "Docker needs Colima to run: sandbox_preflight puts it on an install card (Homebrew name: colima).")))
     return kind, exe
 
 
@@ -253,7 +344,71 @@ def engine_status():
     running = _quiet(probe, 20)[0] == 0
     return {"engine": "Apple container" if kind == "apple" else "Docker", "running": running,
             "help": "" if running else ("In Terminal: container system start" if kind == "apple" else
-                                        "Start Colima (colima start), OrbStack or Docker Desktop.")}
+                                        "Start Colima with sandbox_preflight (a card), or OrbStack / Docker Desktop.")}
+
+
+def preflight(sb=None):
+    """Everything a Linux sandbox needs on the Mac, checked in one go BEFORE starting it. Only reads.
+    Returns {"rows": [(ok, name, words)], "brew": [Homebrew formulas to install], "colima": None|"start"|"resize",
+             "ok": bool}."""
+    rows, brew, colima = [], [], None
+    kind, exe = engine()
+    if kind == "apple":
+        code, out = _quiet([exe, "system", "status"], 20)
+        rows.append((True, "Apple container tool", exe))
+        rows.append((code == 0, "Apple container tool running", "yes" if code == 0 else
+                     "no: PatchBay starts it when the sandbox starts"))
+        return {"rows": rows, "brew": [], "colima": None, "ok": True}
+    docker, col = _which("docker"), _which("colima")
+    rows.append((bool(docker), "Docker command-line tool", docker or "missing (Homebrew: docker)"))
+    if not docker:
+        brew.append("docker")
+    have_desktop = any(Path(p).exists() for p in ("/Applications/Docker.app", "/Applications/OrbStack.app"))
+    rows.append((bool(col) or have_desktop, "Colima (runs Docker's Linux machine)",
+                 col or ("not needed: Docker Desktop/OrbStack is installed" if have_desktop else
+                         "missing (Homebrew: colima)")))
+    if not col and not have_desktop:
+        brew.append("colima")
+    running = bool(docker) and _quiet([docker, "info"], 20)[0] == 0
+    want_cpu = int((sb or {}).get("cpus") or DEFAULTS["cpus"])
+    want_mem = int((sb or {}).get("memory_gb") or DEFAULTS["memory_gb"])
+    if docker and not running:
+        rows.append((False, "Docker running", "no" + (": a card starts Colima at the right size" if col else "")))
+        colima = "start" if col else None
+    elif running:
+        ncpu, mem = docker_capacity(docker)
+        cpus, memory, _ = colima_size()
+        small = bool(ncpu) and (ncpu < min(want_cpu, cpus) or (mem or 0) + 1 < min(want_mem, memory))
+        rows.append((not small, "Docker's Linux machine size",
+                     "%s CPUs, %.0f GB%s" % (ncpu or "?", mem or 0,
+                                             (" (too small: the sandbox wants %d CPUs, %d GB)" % (want_cpu, want_mem))
+                                             if small else "")))
+        if small and col and uses_colima(docker):
+            colima = "resize"
+    return {"rows": rows, "brew": brew, "colima": colima, "ok": not brew and not colima and (running or not docker)}
+
+
+def start_colima(emit=None, resize=False):
+    """Start (or restart bigger) Colima, sized for builds. Only after the user confirmed the card."""
+    col = _which("colima")
+    if not col:
+        raise SandboxError("Colima isn't installed. Use sandbox_preflight: it shows the install card.")
+    if resize:
+        if emit:
+            emit({"type": "status", "text": "Stopping Colima..."})
+        code, out = _quiet([col, "stop"], 300)
+        if code != 0:
+            raise SandboxError("Colima didn't stop: %s" % out[-400:])
+    argv = colima_start_argv(col)
+    if emit:
+        emit({"type": "status", "text": "Starting Colima (%s CPUs, %s GB)... this takes a minute or two"
+                                        % (argv[3], argv[5])})
+    code, out = _quiet(argv, 900)
+    if code != 0:
+        raise SandboxError("Colima didn't start: %s" % out[-600:])
+    docker = _which("docker")
+    ncpu, mem = docker_capacity(docker) if docker else (None, None)
+    return "Colima is running%s." % (" with %d CPUs and %.0f GB" % (ncpu, mem) if ncpu else "")
 
 
 def _exists(kind, exe, ref, image=False):
@@ -322,7 +477,13 @@ def ensure_container(sb, emit=None):
         code, out = _quiet(pull + arch_args(kind, sb) + [image], 1800)
         if code != 0:
             raise SandboxError("Couldn't download the Linux image %s: %s" % (image, out[-400:]))
+    note = fit_to_engine(kind, exe, sb)
+    if note and emit:
+        emit({"type": "note", "text": note})
     code, out = _quiet(create_args(kind, exe, sb), 900)
+    if code != 0 and "CPUs available" in out:
+        raise SandboxError("Couldn't start the sandbox: %s\nLower its cpus with propose_sandbox_settings, or "
+                           "restart Colima bigger with sandbox_preflight." % out[-400:])
     if code != 0:
         raise SandboxError("Couldn't start the sandbox: %s" % out[-600:])
     sb["container_network"] = sb["network"]
