@@ -33,7 +33,9 @@ class SandboxRunTest(unittest.TestCase):
         (tmp / "dev").mkdir()
         self.st = FakeChat(self.cfg)
         self.events = []
-        self.patches = [mock.patch.object(server, "access_cfg", lambda: {"data_folder": str(tmp / "data")})]
+        ready = {"rows": [(True, "Docker running", "yes")], "brew": [], "colima": None, "stuck": "", "ok": True}
+        self.patches = [mock.patch.object(server, "access_cfg", lambda: {"data_folder": str(tmp / "data")}),
+                        mock.patch.object(sandbox, "preflight", return_value=ready)]   # Docker answers
         for p in self.patches:
             p.start()
         server.sb(sandbox.create, "EglantinePS5", str(proj), "linux")
