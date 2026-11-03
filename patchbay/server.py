@@ -35,6 +35,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -78,6 +79,7 @@ import where
 import sandbox
 import sandboxrecipe
 import stopper
+import ollamactl
 import codereview
 import codetools
 import places
@@ -3472,11 +3474,13 @@ def models_info(cfg):
         url = ollama_url(cfg)
         names = model_labels.installed(url, fresh=True)
     except (OSError, ValueError, ToolError) as e:
-        err = "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg))
+        err = (ollamactl.status_text() if ollamactl.STATE["starting"] and ollamactl.here(cfg)
+               else "Couldn't ask Ollama for its models (%s). %s" % (e, ai_down(cfg)))
     loaded = None if err else loaded_names(cfg)
     model = model_labels.active(loaded)
     faster = model_labels.FASTER.get(model or "")
     return {"model": model, "loaded": loaded, "error": err, "where": core.ai_where(cfg),
+            "starting": bool(ollamactl.STATE["starting"]),
             "no_model": model_labels.no_model(names) if loaded == [] else "", "example": model_labels.example(names),
             "faster": faster if faster and faster not in names else None,
             "second": model_labels.second(model_labels.tool_names(url, names)) if names else None,
@@ -3510,8 +3514,21 @@ def ai_down(cfg):
     """What to check when the AI doesn't answer."""
     host = core.ai_where(cfg)
     if host == "this Mac":
-        return "Is the Ollama app running?"
+        return ollamactl.status_text() or "Is the Ollama app running? (🩺 Setup → AI → Start Ollama)"
     return ("Is %s on, with Ollama open and shared to the network? (🩺 Setup → Where the AI runs)" % host)
+
+
+def ollama_status(cfg):
+    """For Setup → AI: is Ollama running here, did PatchBay start it, and what's in memory."""
+    here = ollamactl.here(cfg)
+    try:
+        up = ollamactl.is_up(ollama_url(cfg))
+    except ToolError:
+        up = False
+    return {"here": here, "up": up, "starting": ollamactl.STATE["starting"], "note": ollamactl.status_text(),
+            "started_by_us": ollamactl.STATE["started_by_us"], "how": ollamactl.how_installed() if here else None,
+            "autostart": bool(cfg.get("ollama_autostart", True)), "on_close": cfg.get("ollama_on_close", "started"),
+            "processes": ollamactl.processes() if here else []}
 
 
 def ai_computer_test(url, timeout=6):
@@ -5421,6 +5438,45 @@ class Handler(BaseHTTPRequestHandler):
             return {"text": "Running."}
         raise ToolError("Unknown sandbox action.")
 
+    def ollama_api(self, data):
+        """Setup → AI → Ollama: start it, stop it completely, or change when PatchBay starts and quits it."""
+        act = data.get("action")
+        cfg = APP.home.cfg()
+        if act != "start" and not self.from_this_mac():
+            raise ToolError("Stopping Ollama and its settings can only be changed on the Mac itself.")
+        if act == "start":
+            msg = ollamactl.start(cfg, wait=False)
+        elif act == "stop":
+            if (data.get("typed") or "").strip().lower() != "stop ollama":
+                raise ToolError("Type Stop Ollama to confirm.")
+            if APP.chat_job and not APP.chat_job.done:
+                raise ToolError("The chat is still working. Press Stop first.")
+            _LOADED.clear()
+            _PINNED.clear()
+            _FREED[0] = time.time()
+            msg = ollamactl.stop_all(cfg)
+            print(msg)
+        elif act == "settings":
+            main = str(APP.registry.main)
+            saved = json.loads(Path(main).read_text())
+            planned = []
+            if "autostart" in data:
+                on = bool(data.get("autostart"))
+                if bool(saved.get("ollama_autostart", True)) != on:
+                    planned.append((main, "ollama_autostart", saved.get("ollama_autostart"), on))
+            if "on_close" in data:
+                mode = data.get("on_close")
+                if mode not in ollamactl.ON_CLOSE:
+                    raise ToolError("Unknown choice.")
+                if saved.get("ollama_on_close", "started") != mode:
+                    planned.append((main, "ollama_on_close", saved.get("ollama_on_close"), mode))
+            if planned:
+                devices.apply_changes(cfg, planned)
+            msg = "Saved."
+        else:
+            raise ToolError("Unknown action.")
+        return dict(ollama_status(APP.home.cfg()), message=msg)
+
     def from_this_mac(self):
         # Refuse requests that reach us under another name (a trick some websites use).
         return self.client_address[0] in LOOPBACK and self.host_is_local()
@@ -5688,6 +5744,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                        "memory_gb": mem, "catalog": model_labels.catalog(names, mem), "pull": dict(selfcheck.PULL)})
         elif path == "/api/accept-edits":
             self.json({"on": bool(APP.home.cfg().get("auto_mac_steps", True))})
+        elif path == "/api/ollama":
+            self.json(ollama_status(APP.home.cfg()))
         elif path == "/api/models/memory":
             cfg = APP.home.cfg()
             try:
@@ -6134,6 +6192,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             except OSError as e:
                 raise ToolError(str(e))
             self.json(mac_app.status())
+        elif path == "/api/ollama":
+            self.json(self.ollama_api(data))
         elif path == "/api/models/unload":
             if APP.chat_job and not APP.chat_job.done:
                 raise ToolError("The chat is still working. Press Stop first.")
@@ -6888,10 +6948,26 @@ def main():
     print("Leave this Terminal window open. Press Ctrl+C here to stop.")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    ollamactl.start_in_background(main_cfg)      # Ollama isn't running yet? Start it (Setup → AI can turn this off)
+
+    def stop_now(signum, frame):                  # the PatchBay app's window closed: stop like Ctrl+C does
+        raise KeyboardInterrupt
+    try:
+        signal.signal(signal.SIGTERM, stop_now)
+    except (ValueError, OSError):
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        try:
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)   # a second "stop" really stops
+            done = ollamactl.on_close(APP.home.cfg())
+            if done:
+                print(done)
+        except Exception as e:
+            print("Couldn't tidy up Ollama: %s" % e)
 
 
 if __name__ == "__main__":
