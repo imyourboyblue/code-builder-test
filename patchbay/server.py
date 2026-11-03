@@ -63,6 +63,7 @@ import concurrent.futures
 import mac_app
 import netscan
 import securitycheck
+import preflight
 import activity
 import memory
 import health
@@ -1122,18 +1123,16 @@ def t_build(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root = pe(projects.folder_of, pr)
     try:
-        missing = projects.needed_packages(root)[2]
+        rows = preflight.check(preflight.needed_for_project(root))
+        todo = installable(rows)
     except Exception:      # never let the check itself stop a build
-        missing = []
-    if missing:
-        # Install everything the project needs in one go, instead of one failed build per library.
-        res = t_install_packages(st, emit, {"manager": "devkitpro", "packages": missing,
-                                            "reason": "%s needs these devkitPro libraries before it can build."
-                                                      % pr["name"]})
+        rows, todo = [], []
+    if todo:
+        # Install everything the project needs in one go, instead of one failed build per missing tool.
+        res = tools_card(st, emit, rows, todo, "%s needs these tools before it can build." % pr["name"])
         if not (res.startswith("Done as part of the approved plan") and not failed(res)):
-            return ("Not built yet: the project's build files need devkitPro libraries that aren't installed (%s). "
-                    "%s After the user confirms and they install, call propose_build again."
-                    % (", ".join(missing), res))
+            return ("Not built yet: the project needs tools that aren't on the Mac. %s After the user confirms and "
+                    "they install, call propose_build again." % res)
     return add_pending(st, emit, "build", cfg, pr["name"], root, "",
                        "Build project %s on %s" % (pr["name"], APP.computer if APP else "the Mac"),
                        "In folder: %s\nRun: %s" % (root, pr["build"]), on_mac=True, extra_fields={"project": pr["name"]})
@@ -1620,7 +1619,8 @@ def t_prepare(st, emit, a):
     else:
         parts.append("NEXT, without asking the user anything: if a newer release of the program already exists, say "
                      "so and offer it. Otherwise get the source (propose_get_source), read its README / build files, "
-                     "set_project with the right output file and device_path (where it was found above), "
+                     "set_project with the right output file and device_path (where it was found above), then "
+                     "check_tools with the project and every tool its build needs (one card for all missing tools), "
                      "propose_build, fix errors, and propose_install.")
     return clip("\n\n".join(parts))
 
@@ -1881,10 +1881,84 @@ def run_device_command(st, cfg, p, emit):
     chat_turn(st, None, emit)
 
 
+def installable(rows):
+    """The missing tools a card can install. Homebrew ones only when Homebrew itself is there."""
+    todo = preflight.install_list(rows)
+    if not projects.find_brew() and any(x.startswith("brew:") for x in todo):
+        todo = [x for x in todo if not x.startswith("brew:")]
+        if not any(r["name"] == "Homebrew" for r in rows):
+            rows.append(preflight.check_one("homebrew"))
+    return todo
+
+
+def tools_card(st, emit, rows, todo, reason):
+    """Show the found/missing checklist, then ONE card that installs everything missing."""
+    text = preflight.checklist_text(rows)
+    emit({"type": "note", "text": "**Tools this job needs** (checked on %s):\n%s" % (
+        APP.computer if APP else "the Mac", text)})
+    try:
+        cmds, admin, words = projects.install_plan("mixed", todo)
+    except projects.ProjectError as e:
+        raise ToolError(str(e))
+    via = sorted({x.split(":")[0] for x in todo})
+    detail = ("Missing tools: %s\n\nWhere they come from: %s\n\nCommands, in order:\n%s%s" % (
+        ", ".join(x.split(":", 1)[1] for x in todo), "; ".join(preflight.SOURCES[v] for v in via),
+        "\n".join("  " + c for c in cmds),
+        "\n\nAfter you press Install, your Mac asks for its own password for the devkitPro part (it runs as "
+        "administrator, like sudo). PatchBay never sees the password." if admin else
+        "\n\nNo password needed: nothing runs as administrator."))
+    result = add_pending(st, emit, "install_packages", st.cfg(), words, Path.home(), reason,
+                         "Install %d missing tool%s: %s" % (len(todo), "" if len(todo) == 1 else "s",
+                                                             ", ".join(x.split(":", 1)[1] for x in todo)),
+                         detail, on_mac=True, extra_fields={"manager": "mixed", "packages": todo, "update_all": False})
+    return "Checklist:\n%s\n\n%s" % (text, result)
+
+
+@tool("check_tools",
+      "BEFORE installing or building anything: check every tool the job needs on the Mac, in one go. Give the "
+      "project (its build files and CI workflow are read for what they need) and/or a list of tools you found by "
+      "research (cmake, make, git, llvm, pkg-config, ninja, imagemagick, switch-dev, switch-zlib, brew:<formula>, "
+      "devkitpro:<package>...). Shows the user a found/missing checklist and, if anything is missing, ONE card that "
+      "installs all of it at once (Homebrew, devkitPro, Apple's Command Line Tools). Use this instead of "
+      "installing tools one at a time.",
+      {"project": dict(S, description="Optional: the project to check"),
+       "tools": {"type": "array", "items": S, "description": "Tools the job needs, e.g. [\"cmake\", \"switch-dev\"]"},
+       "reason": dict(S, description="One short sentence on what the tools are for")})
+def t_check_tools(st, emit, a):
+    tools = a.get("tools") or []
+    if isinstance(tools, str):
+        tools = tools.replace(",", " ").split()
+    tools = [str(x) for x in tools][:60]
+    if a.get("project"):
+        pr = project(st, a.get("project"))
+        tools = preflight.needed_for_project(pe(projects.folder_of, pr)) + tools
+    if not tools:
+        raise ToolError("Give a project, or the list of tools the job needs (research them first if you don't "
+                        "know: the project's README, Makefile, CMakeLists.txt and .github/workflows).")
+    emit({"type": "status", "text": "Checking %d tools on %s..." % (len(tools), APP.computer if APP else "the Mac")})
+    rows = preflight.check(tools)
+    todo = installable(rows)
+    stuck = [r for r in rows if not r["found"] and not r.get("via")]
+    if not todo:
+        text = preflight.checklist_text(rows)
+        emit({"type": "note", "text": "**Tools this job needs** (checked on %s):\n%s" % (
+            APP.computer if APP else "the Mac", text)})
+        if stuck:
+            return ("Checklist:\n%s\n\nSome are missing and can't be installed from a card. Tell the user in one "
+                    "short line what each needs (see the checklist), or research where it comes from." % text)
+        return "Checklist:\n%s\n\nEverything the job needs is already on the Mac. Carry on." % text
+    out = tools_card(st, emit, rows, todo, a.get("reason") or "Tools this job needs.")
+    if stuck:
+        out += ("\nAlso missing, and not on the card (the user sets these up themselves): %s."
+                % ", ".join(r["name"] for r in stuck))
+    return out
+
+
 @tool("propose_install_packages",
       "Install or update build packages on the Mac: devkitPro packages (switch-dev, switch-zlib, 3ds-dev...; installs "
       "devkitPro itself first if it's missing) or Homebrew packages (cmake, pkg-config...). Shows a card; after the "
-      "user confirms, the Mac shows its own password box for devkitPro. Never tell the user to run these in Terminal.",
+      "user confirms, the Mac shows its own password box for devkitPro. Never tell the user to run these in Terminal. "
+      "For a new job, use check_tools first: it checks everything and installs all missing tools on one card.",
       {"manager": dict(S, description="devkitpro or homebrew"),
        "packages": {"type": "array", "items": S, "description": "Package names, e.g. [\"switch-dev\", \"switch-zlib\"]"},
        "update_all": {"type": "boolean", "description": "Also update everything already installed (devkitPro -Syu)"},
@@ -1901,8 +1975,9 @@ def t_install_packages(st, emit, a):
     except projects.ProjectError as e:
         raise ToolError(str(e))
     note = a.get("reason") or ""
-    detail = words + ("\n\nAfter you press Confirm, your Mac asks for its own password (the one you log in with). "
-                      "PatchBay never sees it." if admin else "")
+    detail = words + "\n\nCommands, in order:\n" + "\n".join("  " + c for c in cmds) + (
+        "\n\nAfter you press Install, your Mac asks for its own password (it runs as administrator, like sudo). "
+        "PatchBay never sees it." if admin else "")
     return add_pending(st, emit, "install_packages", cfg, words, Path.home(), note, words, detail, on_mac=True,
                        extra_fields={"manager": manager, "packages": pkgs, "update_all": bool(a.get("update_all"))})
 
@@ -2739,8 +2814,11 @@ yourself, saying in one short line what you're doing at each step:
   1. prepare_homebrew_update with the user's words for the program. It finds the program, the versions, the newest \
 releases, the build tools and any source project. If a newer release of the program already supports the \
 firmware, say so first.
-  2. If build tools or packages are missing or old (check_build_tools), install them yourself with \
-propose_install_packages (devkitPro packages like switch-dev and switch-zlib, or Homebrew ones like cmake). The \
+  2. Before installing or building anything, work out EVERY tool the job needs (read the project's README, \
+Makefile, CMakeLists.txt and .github/workflows, or research it with generic searches), then call check_tools once \
+with the project and that list. It shows the user a found/missing checklist and puts everything missing on ONE \
+install card (Homebrew, devkitPro, Apple's Command Line Tools). Never install tools one at a time when you can \
+list them together. For an update of what's already installed use propose_install_packages with update_all. The \
 Mac shows its own password box after the user confirms. Never ask the user to type commands in Terminal, and \
 never tell them to export variables or edit shell files: PatchBay sets up devkitPro and Homebrew paths itself. \
 Console builds link the console's own libraries from devkitPro (switch-zlib, switch-curl, switch-libzstd...), \
@@ -3072,7 +3150,8 @@ def ask_claude_choice(st, emit):
 
 
 RESEARCH_TOOLS = {"find_github_repo", "read_repo_file", "latest_release", "web_search", "read_web_page",
-                  "prepare_homebrew_update", "project_packages", "check_build_tools", "project_read", "project_search"}
+                  "prepare_homebrew_update", "project_packages", "check_build_tools", "check_tools", "project_read",
+                  "project_search"}
 NEED_RESEARCH = 3
 RESEARCH_FIRST = ("[PatchBay: before asking Claude (which costs money), research it yourself online first: "
                   "find_github_repo, read_repo_file (README, Makefile, .github/workflows), latest_release, web_search, "
@@ -3655,7 +3734,7 @@ DEVICE_GROUPS = {
     "code": ("source code and homebrew: projects, project map, reading and editing code, builds, installing builds, "
              "build tools, GitHub repositories and releases, reviews, homebrew updates",
              ["set_project", "list_projects", "project_map", "project_files", "project_read", "project_search",
-              "propose_project_edit", "propose_build", "propose_install", "project_packages", "check_build_tools",
+              "propose_project_edit", "propose_build", "propose_install", "project_packages", "check_build_tools", "check_tools",
               "propose_get_source", "propose_command", "propose_install_packages", "find_homebrew",
               "prepare_homebrew_update", "platform_notes", "save_platform_notes", "setup_firmware_helper",
               "latest_release", "find_github_repo", "read_repo_file", "review_github_repo", "device_firmware",
@@ -4138,7 +4217,7 @@ STEP_WORDS = {
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
     "identify_firmware": "Working out the firmware", "save_firmware_name": "Saving the firmware name",
     "web_search": "Searching the web for {query}", "device_firmware": "Reading the firmware versions",
-    "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "read_repo_file": "Reading {path} in {repo}", "check_build_tools": "Checking the build tools",
+    "latest_release": "Checking the newest release of {repo}", "find_github_repo": "Looking up {name} on GitHub", "read_repo_file": "Reading {path} in {repo}", "check_build_tools": "Checking the build tools", "check_tools": "Checking every tool the job needs",
     "propose_get_source": "Getting the source code from {url}", "propose_command": "Running {command}",
     "read_web_page": "Reading {url}", "review_github_repo": "Reviewing {repo}",
     "places_nearby": "Looking up {kind} places near {place}",

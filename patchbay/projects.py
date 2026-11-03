@@ -374,7 +374,7 @@ def quote(s):
 # ----------------------------------------------------------------- the build tools (devkitPro)
 
 DKP_INSTALLER = "https://github.com/devkitPro/pacman/releases/latest/download/devkitpro-pacman-installer.pkg"
-PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9_+.@-]{0,80}$")
+PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+.@-]{0,80}$")
 
 
 # What a build calls a library -> devkitPro's package name (without the switch-/3ds-/wiiu- part).
@@ -510,6 +510,9 @@ def needed_packages(folder):
 def install_plan(manager, packages, update_all=False):
     """What installing packages will do, as (commands, needs_password, words for the card). Raises ProjectError."""
     pkgs = [str(x).strip() for x in (packages or []) if str(x).strip()]
+    if manager == "mixed":
+        user, admin, words = mixed_plan(pkgs)
+        return user + admin, bool(admin), words
     bad = [x for x in pkgs if not PACKAGE_NAME.match(x)]
     if bad:
         raise ProjectError("These don't look like package names: %s" % ", ".join(bad))
@@ -527,7 +530,7 @@ def install_plan(manager, packages, update_all=False):
             cmds.append("%s upgrade %s" % (quote(brew), " ".join(pkgs)))
         return cmds, False, "Homebrew: " + " ".join(cmds).replace(quote(brew), "brew")
     if manager != "devkitpro":
-        raise ProjectError("manager must be devkitpro or homebrew.")
+        raise ProjectError("manager must be devkitpro, homebrew or mixed.")
     # Fix names a build tool uses but devkitPro doesn't (switch-freetype2 -> switch-freetype).
     pkgs = [dkp_name(x) if x.startswith(DKP_PREFIXES) else x for x in pkgs]
     avail = dkp_available("all")
@@ -555,6 +558,48 @@ def install_plan(manager, packages, update_all=False):
     return cmds, True, words
 
 
+XCODE_INSTALL = ("xcode-select --install; until xcode-select -p >/dev/null 2>&1; do echo \"Waiting for Apple's "
+                 "Command Line Tools to finish installing (finish the window Apple opened)...\"; sleep 10; done")
+MIXED_NAME = re.compile(r"^(xcode|brew|devkitpro):([A-Za-z0-9][A-Za-z0-9_+.@-]{0,80})$")
+
+
+def mixed_plan(packages):
+    """Several kinds of tools on one card: Apple's Command Line Tools, Homebrew and devkitPro.
+    Names look like brew:cmake, devkitpro:switch-dev, xcode:xcode-tools.
+    Returns (commands run as the user, commands that need the Mac password, words for the card)."""
+    xcode, brew, dkp = False, [], []
+    for x in packages:
+        m = MIXED_NAME.match(str(x).strip())
+        if not m:
+            raise ProjectError("%s isn't a tool name PatchBay can install (use brew:<name> or devkitpro:<name>)." % x)
+        via, name = m.groups()
+        if via == "xcode":
+            xcode = True
+        elif via == "brew":
+            if not PACKAGE_NAME.match(name):
+                raise ProjectError("%s doesn't look like a Homebrew name." % name)
+            brew.append(name)
+        else:
+            dkp.append(name)
+    user, admin, words = [], [], []
+    if xcode:
+        if sys.platform != "darwin":
+            raise ProjectError("Apple's Command Line Tools only exist on a Mac.")
+        user.append(XCODE_INSTALL)
+        words.append("Apple's Command Line Tools (make, git, clang): Apple opens its own install window")
+    if brew:
+        cmds, _, w = install_plan("homebrew", brew)
+        user += cmds
+        words.append(w)
+    if dkp:
+        cmds, _, w = install_plan("devkitpro", dkp)
+        admin += cmds
+        words.append(w + " (the Mac asks for its password for this part)")
+    if not words:
+        raise ProjectError("Nothing to install.")
+    return user, admin, "; ".join(words)
+
+
 def run_admin(commands, emit, stop=None):
     """Run commands that need the Mac password. On macOS the Mac shows its own password box (nothing is typed here)."""
     # Note: never start with "((": the shell reads that as arithmetic.
@@ -574,6 +619,16 @@ def run_admin(commands, emit, stop=None):
 
 
 def install_packages(manager, packages, update_all, emit, stop=None):
+    if manager == "mixed":
+        # Homebrew refuses to run with the password (as root), so its part runs as the user first.
+        user, admin, _ = mixed_plan(packages)
+        code, out = 0, ""
+        if user:
+            code, out = run_shell(Path.home(), " && ".join(user), emit, timeout=60 * 60, stop=stop)
+        if code == 0 and admin and not (stop is not None and stop.is_set()):
+            code, more = run_admin(admin, emit, stop)
+            out = (out + "\n" + more).strip()
+        return code, out
     cmds, admin, _ = install_plan(manager, packages, update_all)
     if admin:
         return run_admin(cmds, emit, stop)
