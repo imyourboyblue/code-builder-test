@@ -204,8 +204,13 @@ exact versions.
 ## Building apps from source
 
 PatchBay works on an app's source code on your Mac, in `~/Patchbay-projects/`, and never sends your code anywhere.
-- Before building a console app, it reads the project's build files and installs **every devkitPro library the
-  project needs in one go**. It uses devkitPro's real package names, for example `switch-freetype`.
+- Before installing or building, it works out **every tool the job needs** (cmake, make, git, LLVM, ImageMagick,
+  devkitPro packages, and so on) from the project's build files, its CI workflow and research. It checks which are
+  already on your Mac and shows a found/missing checklist. Everything missing goes on **one Install card**, with the
+  exact commands and where each comes from (Homebrew, devkitPro, Apple's Command Line Tools).
+  It uses devkitPro's real package names, for example `switch-freetype`.
+- Homebrew itself can't be installed from a card. If it's missing, the checklist says so (the one-time setup is on
+  https://brew.sh).
 - Builds find devkitPro's and Homebrew's tools by themselves, including the right library paths for console builds.
   You never need to type commands or set anything up in Terminal.
 - Installs bring up your Mac's own password box. PatchBay never sees that password.

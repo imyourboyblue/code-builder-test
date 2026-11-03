@@ -209,6 +209,7 @@ def toolchains():
             except (OSError, subprocess.SubprocessError):
                 v = []
             rows.append("%s: %s" % (tool, v[0][:80] if v else p))
-    rows.append("Missing tools: research the platform's install steps (generic), then give the user the exact "
-                "Terminal commands. Commands needing sudo can't run from the chat.")
+    rows.append("Missing tools: research the platform's install steps (generic), then call check_tools with every "
+                "tool the job needs: it puts all the missing ones on one install card. If one can't be installed "
+                "from a card, say in one short line what the user needs to set up.")
     return "\n".join(rows)
