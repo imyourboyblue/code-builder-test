@@ -17,11 +17,14 @@ Results only leave a sandbox through copy_out, which the chat shows on a confirm
 backed up first and the copy can be undone.
 
 Secrets are never copied in: files like config.json, .env, id_rsa and folders like .ssh are skipped, and the run
-environment has only a few plain variables (no tokens or passwords).
+environment has only a few plain variables (no tokens or passwords). Build leftovers aren't copied either:
+whatever the project's .gitignore marks (build/, dist/, caches, downloaded dependencies) was made on the Mac or by
+an older build and only gets in the way, so the sandbox starts like a fresh download (setting copy_ignored).
 
 Only uses Python's built-in parts.
 """
 
+import fnmatch
 import json
 import os
 import re
@@ -44,7 +47,7 @@ SECRET_NAMES = {"config.json", "access.json", "claude.json", "claude-aliases.jso
                 ".env", ".netrc", ".git-credentials", "credentials", "credentials.json", "redaction_list.json"}
 SECRET_ENDS = (".pem", ".key", ".p12", ".keychain", ".keychain-db", ".mobileprovision")
 COPY_LIMIT = 20 * 1024 ** 3          # projects bigger than this aren't copied in
-DEFAULTS = {"kind": "linux", "image": "ubuntu:24.04", "network": False, "cpus": 4, "memory_gb": 8,
+DEFAULTS = {"kind": "linux", "image": "ubuntu:24.04", "network": False, "copy_ignored": False, "cpus": 4, "memory_gb": 8,
             "timeout_min": 60, "disk_gb": 20, "arch": "native", "memory_max": 28,
             # The recipe: how this project is set up and built inside (see sandboxrecipe.py). Empty = none yet.
             "setup_command": "", "build_command": "", "output": "", "blocked": [], "upload_hint": "",
@@ -138,11 +141,17 @@ def is_secret(path):
     return n in SECRET_NAMES or n.lower().endswith(SECRET_ENDS) or n.startswith(".env.")
 
 
-def size_of(path, stop_at=None):
+def size_of(path, stop_at=None, leave=None):
+    """Bytes in a folder. leave(rel, is_dir) -> True for things that won't be copied (see left_out)."""
     total = 0
+    top = str(path)
     for dirpath, dirnames, filenames in os.walk(path):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel_dir = os.path.relpath(dirpath, top)
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not (leave and leave(rel_dir + d, True))]
         for n in filenames:
+            if leave and leave(rel_dir + n, False):
+                continue
             try:
                 total += os.lstat(os.path.join(dirpath, n)).st_size
             except OSError:
@@ -152,22 +161,122 @@ def size_of(path, stop_at=None):
     return total
 
 
-def copy_in(source, dest):
-    """Copy a project folder into the sandbox, leaving out secrets. Returns the number of files skipped as secrets."""
+# Build leftovers. A sandbox should start like a fresh download of the project: whatever the project's .gitignore
+# marks as not part of it (build/, dist/, caches, downloaded dependencies, a config.h from an earlier configure)
+# was made on the Mac or by an older build, and in a Linux sandbox it only gets in the way. The build makes it again.
+NEVER_LEFT_OUT = {".git", ".gitignore", ".gitmodules", ".gitattributes"}
+
+
+def _git_ignored(source):
+    """What git says is ignored in the folder, as relative paths (folders end with /). None: not a git project."""
+    git = shutil.which("git") or ("/usr/bin/git" if Path("/usr/bin/git").exists() else None)
+    if not git or not _in_git(source):
+        return None
+    try:
+        r = subprocess.run([git, "-C", str(source), "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                            "--directory", "--no-empty-directory"], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    found = [x for x in r.stdout.decode("utf-8", "replace").split("\0") if x]
+    if any(x in ("./", ".") or x.startswith("../") for x in found):
+        return None                   # the whole folder is ignored by a repo around it: copy it all as before
+    return found
+
+
+def _in_git(source):
+    for d in [source] + list(source.parents):
+        if (d / ".git").exists():
+            return True
+    return False
+
+
+def _gitignore_patterns(source):
+    """The top .gitignore's patterns, for a project that isn't a git checkout (or has no git)."""
+    try:
+        lines = (source / ".gitignore").read_text("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    pats = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        neg = line.startswith("!")
+        line = line[1:] if neg else line
+        dir_only = line.endswith("/")
+        line = line.strip("/") if dir_only else line
+        anchored = line.startswith("/") or "/" in line
+        pats.append((line.lstrip("/"), dir_only, anchored, neg))
+    return pats
+
+
+def _match_gitignore(pats, rel, is_dir):
+    left = False
+    name = rel.rsplit("/", 1)[-1]
+    for pat, dir_only, anchored, neg in pats:
+        if dir_only and not is_dir:
+            continue
+        if fnmatch.fnmatchcase(rel if anchored else name, pat):
+            left = not neg
+    return left
+
+
+def left_out(source, copy_ignored=False):
+    """(leave, listing): leave(rel, is_dir) says whether a path is a build leftover the sandbox copy skips, and
+    listing names what is skipped (relative paths, folders end with /). Nothing is skipped with copy_ignored."""
+    source = Path(source)
+    if copy_ignored:
+        return (lambda rel, is_dir: False), []
+    found = _git_ignored(source)
+    if found is not None:
+        found = [x for x in found if x.rstrip("/").split("/")[0] not in NEVER_LEFT_OUT]
+        dirs = {x.rstrip("/") for x in found if x.endswith("/")}
+        files = {x for x in found if not x.endswith("/")}
+
+        def leave(rel, is_dir):
+            return (rel in dirs) if is_dir else (rel in files)
+        return leave, found
+    pats = _gitignore_patterns(source)
+    if not pats:
+        return (lambda rel, is_dir: False), []
+    listing = []
+
+    def leave(rel, is_dir):
+        if rel.split("/")[0] in NEVER_LEFT_OUT:
+            return False
+        if _match_gitignore(pats, rel, is_dir):
+            listing.append(rel + ("/" if is_dir else ""))
+            return True
+        return False
+    return leave, listing
+
+
+def copy_in(source, dest, copy_ignored=False):
+    """Copy a project folder into the sandbox, leaving out secrets and build leftovers (what .gitignore marks).
+    Returns (names skipped as secrets, build leftovers left out)."""
     source = Path(source).resolve()
-    if size_of(source, COPY_LIMIT) > COPY_LIMIT:
+    leave, listing = left_out(source, copy_ignored)
+    if size_of(source, COPY_LIMIT, leave) > COPY_LIMIT:
         raise SandboxError("%s is over %d GB, too big to copy into a sandbox." % (source, COPY_LIMIT // 1024 ** 3))
     skipped = []
 
     def ignore(src, names):
         s = _ignore_from(source, src, names)
         skipped.extend(x for x in s if x not in SKIP_DIRS)
+        rel_dir = os.path.relpath(src, str(source))
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
+        for n in names:
+            if n not in s and leave(rel_dir + n, os.path.isdir(os.path.join(src, n)) and
+                                    not os.path.islink(os.path.join(src, n))):
+                s.append(n)
         return s
 
     if dest.exists():
         shutil.rmtree(str(dest))
     shutil.copytree(str(source), str(dest), symlinks=True, ignore=ignore)
-    return skipped
+    return skipped, sorted(set(listing))
 
 
 def _ignore_from(top, src, names):
@@ -185,6 +294,31 @@ def _ignore_from(top, src, names):
             if t != top and top not in t.parents:
                 skip.append(n)
     return skip
+
+
+def is_left_out(source, rel):
+    """Whether a path in the project (relative) is a build leftover by the .gitignore, or inside one."""
+    leave, _ = left_out(source)
+    parts = str(rel).strip("/").split("/")
+    return any(leave("/".join(parts[:i]), True) for i in range(1, len(parts))) or leave("/".join(parts), False)
+
+
+def left_out_words(sb, limit=6):
+    """Plain words on the build leftovers the copy skipped, for the chat."""
+    lo = sb.get("left_out") or []
+    if not lo:
+        return ""
+    return (" Left out as build leftovers (the project's .gitignore marks them; the build makes them again): %s%s."
+            % (", ".join(lo[:limit]), " and %d more" % (sb.get("left_out_count", len(lo)) - limit)
+               if sb.get("left_out_count", len(lo)) > limit else ""))
+
+
+def platform_words(sb):
+    """What the sandbox runs, in plain words (for hints about files built somewhere else)."""
+    if sb.get("kind") != "linux":
+        return "a locked-down folder on this Mac"
+    return "Ubuntu Linux on %s, in a container (Colima's Linux machine on this Mac)" % (
+        "x86 (amd64, through Rosetta)" if sb.get("arch") == "amd64" else "ARM (arm64)")
 
 
 # ---------------------------------------------------------------- engines (what runs the Linux sandboxes)
@@ -919,12 +1053,12 @@ def create(name, source, kind="linux", image=None, emit=None, recipe=None):
     if emit:
         emit({"type": "status", "text": "Copying %s into the sandbox..." % src.name})
     try:
-        skipped = copy_in(src, d / "work")
+        skipped, leftovers = copy_in(src, d / "work")
     except Exception:
         shutil.rmtree(str(d), ignore_errors=True)
         raise
     sb = dict(DEFAULTS, name=name, source=str(src), kind=kind, created=time.strftime("%Y-%m-%d %H:%M:%S"),
-              skipped=skipped[:50])
+              skipped=skipped[:50], left_out=leftovers[:50], left_out_count=len(leftovers))
     if recipe:
         sb = apply_recipe(sb, recipe)
     if image:
@@ -945,7 +1079,8 @@ def reset(name, emit=None):
         (d / sub).mkdir(parents=True, exist_ok=True)
     if emit:
         emit({"type": "status", "text": "Copying %s in fresh..." % Path(sb["source"]).name})
-    sb["skipped"] = copy_in(sb["source"], d / "work")[:50]
+    skipped, leftovers = copy_in(sb["source"], d / "work", bool(sb.get("copy_ignored")))
+    sb["skipped"], sb["left_out"], sb["left_out_count"] = skipped[:50], leftovers[:50], len(leftovers)
     sb["last_run"] = None
     save(sb)
     return sb
@@ -966,6 +1101,8 @@ def set_options(name, **opts):
             continue
         if k == "network":
             sb["network"] = bool(v)
+        elif k == "copy_ignored":
+            sb["copy_ignored"] = bool(v)      # used at the next reset
         elif k in ("cpus", "memory_gb", "timeout_min", "disk_gb"):
             lim = {"cpus": (1, 14), "memory_gb": (1, int(sb.get("memory_max") or 28)), "timeout_min": (1, 600),
                    "disk_gb": (1, 500)}[k]
@@ -1402,4 +1539,4 @@ def summary(sb):
         "CPU time %d min" % (sb["timeout_min"] * sb["cpus"]),
         sb["timeout_min"], sb["disk_gb"],
         " Last run: %s -> exit %s." % (last.get("command"), last.get("code")) if last else "",
-        " Left out as secrets: %s." % ", ".join(sb["skipped"][:8]) if sb.get("skipped") else ""))
+        " Left out as secrets: %s." % ", ".join(sb["skipped"][:8]) if sb.get("skipped") else "") + left_out_words(sb))
