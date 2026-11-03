@@ -1145,6 +1145,7 @@ async function openSetup(msg){
       '<span class="switch"><input type="checkbox" id="sc-login"'+(a.login?' checked':'')+'><span></span></span></label></div>'+
       (a.no_tools?'<div style="font-size:12.5px;color:var(--mute);margin-top:4px">The window version needs Apple\'s free command line tools. The button opens Apple\'s installer; when it has finished, press Rebuild the app.</div>':'')+
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
+      '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)"><h4 style="margin:0 0 4px">When PatchBay quits</h4><div id="sc-quit" style="font-size:13.5px">Checking…</div></div>'+
       '<div id="sc-lap" style="font-size:13.5px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">Checking…</div>')+
     pane('mac','<div id="sc-mac" style="font-size:13.5px">Checking…</div>')+
     pane('sandbox','<div id="sc-sb" style="font-size:13.5px">Checking…</div>')+
@@ -1170,7 +1171,7 @@ async function openSetup(msg){
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{const r=await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});lg.checked=!!r.login;
     say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more. If it still opens after a restart, untick <b>Reopen windows when logging back in</b> in the Mac\'s Restart or Shut Down box.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
-  drawLook();drawAiComputer();drawLaptop();drawModels();drawOllama();drawGithub();drawMac();drawSandbox();
+  drawLook();drawAiComputer();drawLaptop();drawModels();drawOllama();drawQuit();drawGithub();drawMac();drawSandbox();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -1241,21 +1242,27 @@ async function drawOllama(note){const box=$('sc-ol');if(!box)return;let j;
   const ps=j.processes||[],mine=ps.filter(p=>p.ollama),other=ps.filter(p=>!p.ollama);
   const how={app:'the Ollama app',brew:'Homebrew (brew services)',cli:'the ollama command'}[j.how]||'not found';
   let h=(note?'<div class="md-note">'+esc(note)+'</div>':'')+
-    '<div>'+(j.starting?'⏳ <b>Starting Ollama…</b>':j.up?'✅ Ollama is running'+(j.started_by_us?' (PatchBay started it)':'')+'.':'⚪ Ollama isn\'t running.')+
-    ' <span class="md-why">Installed as: '+esc(how)+'.</span></div>'+(j.note&&!j.starting?'<div style="color:var(--bad)">'+esc(j.note)+'</div>':'')+
+    '<div>'+(j.starting?'⏳ <b>Starting Ollama…</b>':j.loading?'⏳ <b>Loading '+esc(j.loading)+'…</b>':j.up?'✅ Ollama is running'+(j.started_by_us?' (PatchBay started it)':'')+'.':'⚪ Ollama isn\'t running.')+
+    ' <span class="md-why">Installed as: '+esc(how)+'.</span></div>'+(j.note&&!j.starting&&!j.loading?'<div style="color:var(--bad)">'+esc(j.note)+'</div>':'')+
     '<div style="margin-top:10px"><label class="sw-row"><span><b>Start Ollama when PatchBay opens</b><span class="md-why" style="display:block">If Ollama isn\'t running, PatchBay starts it for you. It still uses whichever model you load.</span></span>'+
     '<span class="switch"><input type="checkbox" id="ol-auto"'+(j.autostart?' checked':'')+'><span></span></span></label></div>'+
-    '<div style="margin-top:10px"><b>When PatchBay closes</b><div class="md-why">PatchBay always lets go of the model it was keeping loaded, so the memory frees itself after 5 minutes.</div>'+
-    '<select id="ol-close" style="margin-top:4px"><option value="started">Quit Ollama only if PatchBay started it</option><option value="always">Always quit Ollama</option><option value="never">Leave Ollama running</option></select></div>'+
+    '<div style="margin-top:10px"><b>Load this model when PatchBay starts</b><div class="md-why">Like typing <code>ollama run</code> with that model, but no Terminal window stays open.</div>'+
+    '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap"><select id="ol-model"><option value="">Off (load one yourself)</option>'+
+      [...new Set((j.models||[]).concat(j.startup_model?[j.startup_model]:[]))].map(m=>'<option value="'+esc(m)+'">'+esc(m)+((j.models||[]).length&&!(j.models||[]).some(x=>x===m||x===m+':latest')?' (not in your models)':'')+'</option>').join('')+
+      '</select>'+(j.up&&j.startup_model&&!j.loading?'<button id="ol-load">Load it now</button>':'')+'</div></div>'+
+    '<div style="margin-top:10px"><b>When PatchBay quits</b><div class="md-why">The model is unloaded right away, so the memory is free straight after you quit.</div>'+
+    '<select id="ol-close" style="margin-top:4px"><option value="started">Quit Ollama too, if PatchBay started it</option><option value="always">Always quit Ollama</option><option value="never">Leave Ollama and the model running (frees itself after 5 minutes)</option></select></div>'+
     '<div style="margin-top:12px"><b>Running now</b>: '+(mine.length?mine.map(p=>esc(p.what)+' <span class="md-id">pid '+p.pid+'</span>').join(', '):'nothing from Ollama')+
     (other.length?'<div class="md-why">Not Ollama\'s (PatchBay leaves these alone): '+other.map(p=>esc(p.cmd)+' <span class="md-id">pid '+p.pid+'</span>').join('; ')+'</div>':'')+'</div>'+
     '<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+(!j.up&&!j.starting?'<button id="ol-start" class="primary">Start Ollama</button>':'')+
     (mine.length?'<button id="ol-stop" class="danger">Stop Ollama completely</button>':'')+'</div><div id="ol-msg" style="font-size:13px"></div>';
-  box.innerHTML=h;$('ol-close').value=j.on_close;
+  box.innerHTML=h;$('ol-close').value=j.on_close;$('ol-model').value=j.startup_model||'';
   const err=e=>{$('ol-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'};
   const save=async x=>{try{const r=await postJSON('/api/ollama',Object.assign({action:'settings'},x));drawOllama(r.message)}catch(e){err(e);drawOllama()}};
   $('ol-auto').onchange=e=>save({autostart:e.target.checked});$('ol-close').onchange=e=>save({on_close:e.target.value});
-  if(j.starting)setTimeout(()=>{if($('sc-ol'))drawOllama()},2000);
+  $('ol-model').onchange=e=>save({startup_model:e.target.value});
+  const ld=$('ol-load');if(ld)ld.onclick=async()=>{ld.disabled=true;try{const r=await postJSON('/api/ollama',{action:'load'});drawOllama(r.message);loadModels()}catch(e){ld.disabled=false;err(e)}};
+  if(j.starting||j.loading)setTimeout(()=>{if($('sc-ol'))drawOllama();loadModels()},2000);
   const s=$('ol-start');if(s)s.onclick=async()=>{s.disabled=true;try{await postJSON('/api/ollama',{action:'start'});drawOllama();setTimeout(loadModels,2500)}catch(e){s.disabled=false;err(e)}};
   const b=$('ol-stop');if(b)b.onclick=()=>{
     modal('<h3>⏹ Stop Ollama completely</h3><div class="msgline">Runs on: this Mac. Nothing on your devices is touched.</div>'+
@@ -1268,6 +1275,17 @@ async function drawOllama(note){const box=$('sc-ol');if(!box)return;let j;
       try{const r=await postJSON('/api/ollama',{action:'stop',typed:$('ol-typed').value});closeModal();drawOllama(r.message);loadModels();drawMemory()}
       catch(e){$('ol-ok').disabled=false;$('ol-ok').textContent='Stop';$('ol-cm').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}};
     $('ol-ok').onclick=go;$('ol-typed').onkeydown=e=>{if(e.key==='Enter')go()}}}
+
+// ---- When PatchBay quits: it stops what it started (and only that). Switches for each kind.
+async function drawQuit(note){const box=$('sc-quit');if(!box)return;let j;
+  try{j=await getJSON('/api/services')}catch(e){box.textContent=e.message;return}
+  const oc={started:'quits Ollama if PatchBay started it, and unloads the model',always:'always quits Ollama',never:'leaves Ollama running'}[j.on_close]||'';
+  box.innerHTML=(note?'<div class="md-note">'+esc(note)+'</div>':'')+
+    '<div class="md-why">PatchBay stops the things it started, right away. Things you started yourself are never touched, and start at login, backups and settings stay.</div>'+
+    '<div style="margin-top:6px"><b>Started by PatchBay, running now</b>: '+(j.running.length?j.running.map(r=>esc(r.what)).join(', '):'nothing')+'</div>'+
+    Object.keys(j.labels).map(k=>'<label class="sw-row" style="margin-top:8px"><span>'+esc(j.labels[k])+'</span><span class="switch"><input type="checkbox" class="qt-sw" data-k="'+k+'"'+(j.settings[k]?' checked':'')+'><span></span></span></label>').join('')+
+    '<div class="md-why" style="margin-top:8px">Ollama: PatchBay '+esc(oc)+' (change it in the AI tab). Builds and commands still running are always stopped.</div><div id="qt-msg" style="font-size:13px"></div>';
+  box.querySelectorAll('.qt-sw').forEach(c=>c.onchange=async()=>{try{const r=await postJSON('/api/services',{[c.dataset.k]:c.checked});drawQuit(r.message)}catch(e){c.checked=!c.checked;$('qt-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}})}
 
 // ---- Send the changes PatchBay made to itself to GitHub (own branch, confirmed first)
 async function drawGithub(note){const box=$('sc-gh');if(!box)return;let j;
@@ -1652,6 +1670,7 @@ async function loadModels(){try{const j=await getJSON('/api/models');MODES=j;
   if(j.starting)setTimeout(loadModels,2000)}catch(e){}}
 // The model Ollama really has loaded right now (PatchBay asks Ollama, it doesn't guess). That's the one it uses.
 function loadedText(j){const L=j.loaded;
+  if(j.loading)return 'Loading '+j.loading+'…';
   if(!L)return 'Couldn\'t ask Ollama which model is loaded';
   if(!j.model)return 'No model loaded. Load one in Ollama, then ask again';
   const rest=L.filter(x=>x!==j.model);return 'Using '+j.model+(rest.length?' (also loaded: '+rest.join(', ')+')':'')}

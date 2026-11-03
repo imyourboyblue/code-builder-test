@@ -31,6 +31,8 @@ import threading
 import time
 from pathlib import Path
 
+import services
+
 HOME = Path.home()
 ROOT = HOME / "PatchBay-data" / "sandboxes"
 
@@ -319,6 +321,8 @@ def engine_ready(start=True):
         code, out = _quiet([exe, "system", "status"], 20)
         if code != 0 and start:
             code, out = _quiet([exe, "system", "start", "--enable-kernel-install"], 300)
+            if code == 0:
+                services.record("apple_container", "system", "Apple's container tool")
         if code != 0:
             raise SandboxError("Apple's container tool isn't running and didn't start: %s\nIn Terminal, run: "
                                "container system start" % out[-400:])
@@ -328,6 +332,7 @@ def engine_ready(start=True):
             # Sized for builds: plain "colima start" makes a 2 CPU, 2 GB machine.
             code, out = _quiet(colima_start_argv(_which("colima")), 900)
             if code == 0:
+                services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
                 code, out = _quiet([exe, "info"], 20)
         if code != 0:
             raise SandboxError("Docker isn't running: %s\n%s" % (out[-400:], (
@@ -406,6 +411,8 @@ def start_colima(emit=None, resize=False):
     code, out = _quiet(argv, 900)
     if code != 0:
         raise SandboxError("Colima didn't start: %s" % out[-600:])
+    if not resize:   # restarting a bigger one keeps it whoever's it was (yours if you had it running)
+        services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
     docker = _which("docker")
     ncpu, mem = docker_capacity(docker) if docker else (None, None)
     return "Colima is running%s." % (" with %d CPUs and %.0f GB" % (ncpu, mem) if ncpu else "")
@@ -466,6 +473,7 @@ def ensure_container(sb, emit=None):
         _save_and_remove(kind, exe, sb)        # network changed: keep what was installed, then recreate
     if _exists(kind, exe, name):
         _quiet([exe, "start", name], 120)
+        services.record("sandbox", name, "sandbox %s" % sb["name"])
         return kind, exe, name
     if emit:
         emit({"type": "status", "text": "Starting the Linux sandbox (%s)... the first time it downloads the image"
@@ -486,6 +494,7 @@ def ensure_container(sb, emit=None):
                            "restart Colima bigger with sandbox_preflight." % out[-400:])
     if code != 0:
         raise SandboxError("Couldn't start the sandbox: %s" % out[-600:])
+    services.record("sandbox", name, "sandbox %s" % sb["name"])
     sb["container_network"] = sb["network"]
     save(sb)
     return kind, exe, name
@@ -503,9 +512,30 @@ def _save_and_remove(kind, exe, sb):
 
 
 def stop_container(sb):
+    stop_container_named(container_name(sb["name"]))
+
+
+def stop_container_named(name):
+    """Stop one sandbox container (what's installed in it stays). Only ever patchbay-sb-... names."""
+    if not name.startswith("patchbay-sb-"):
+        return
     kind, exe = engine()
     if kind:
-        _quiet([exe, "stop", container_name(sb["name"])], 60)
+        _quiet([exe, "stop", "-t", "3", name] if kind == "docker" else [exe, "stop", name], 60)
+    services.forget("sandbox", name)
+
+
+def stop_engine(kind):
+    """Stop Colima ("colima") or Apple's container service ("apple_container"). Only called for one PatchBay
+    started. Returns True if it stopped."""
+    if kind == "colima":
+        col = _which("colima")
+        ok = bool(col) and _quiet([col, "stop"], 120)[0] == 0
+    else:
+        exe = _which("container")
+        ok = bool(exe) and _quiet([exe, "system", "stop"], 120)[0] == 0
+    services.forget(kind)
+    return ok
 
 
 def remove_container(sb, image_too=True):
@@ -514,6 +544,7 @@ def remove_container(sb, image_too=True):
         return
     name = container_name(sb["name"])
     _quiet([exe, "rm", "-f", name] if kind == "docker" else [exe, "delete", "--force", name], 120)
+    services.forget("sandbox", name)
     if image_too:
         _quiet([exe, "image", "rm", saved_image(sb["name"])] if kind == "docker" else
                [exe, "image", "delete", "--force", saved_image(sb["name"])], 120)
@@ -757,13 +788,14 @@ def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
     t = threading.Thread(target=watch, daemon=True)
     t.start()
     try:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            lines.append(line)
-            del lines[:-600]
-            if line.strip() and emit:
-                emit({"type": "progress", "text": line[:300]})
-        code = proc.wait()
+        with services.track(proc, "a sandbox command", " ".join(argv)[:300]):
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                lines.append(line)
+                del lines[:-600]
+                if line.strip() and emit:
+                    emit({"type": "progress", "text": line[:300]})
+            code = proc.wait()
     finally:
         watch_done.set()
         if proc.poll() is None:

@@ -80,9 +80,17 @@ free command line tools. If they're missing, Setup shows an **Install Apple's to
 In Setup you can also tick **Start PatchBay by itself when I log in**.
 
 **Ollama starts by itself.** If Ollama isn't running when PatchBay opens, PatchBay starts it (the Ollama app, or
-`ollama serve` if you only have the command), and the chat shows *Starting Ollama...* until it answers. It still uses
-whichever model you load. When PatchBay closes, it lets go of the model it was keeping loaded (Ollama frees the memory
-5 minutes later) and quits Ollama if PatchBay was the one that started it. Change both in **🩺 Setup → AI → Ollama**.
+`ollama serve` if you only have the command), and the chat shows *Starting Ollama...* until it answers. Then it
+loads the model picked in **Load this model when PatchBay starts** (like `ollama run <model>`, with no Terminal window
+left open; the chat shows *Loading ...* until it's ready). When PatchBay quits, it unloads the model right away and
+quits Ollama if PatchBay was the one that started it. Change all of it in **🩺 Setup → AI → Ollama**.
+
+**Quitting PatchBay stops what it started, right away.** PatchBay keeps a list (`data-cache/started.json`) of what it
+started that should only run while it runs: Ollama, Colima or Apple's container tool (for Linux sandboxes), the
+sandboxes' containers, and builds still running. Quitting (the app's Quit or closing its window, Ctrl+C, closing the
+Terminal window, or logging out) stops those and writes one *Stopped: ...* line in the log. Things you started yourself
+are never on the list. If PatchBay crashed, the next start stops the leftovers. Switches: **🩺 Setup → App → When
+PatchBay quits**.
 Closing Ollama's window doesn't quit it: it keeps running in the menu bar, with its `llama-server` / `ollama runner`
 model processes. **Stop Ollama completely** in the same place shows what's running, then ends all of Ollama's
 processes after you type *Stop Ollama*. Anything that isn't Ollama's (a llama-server from another program) is listed
@@ -588,6 +596,8 @@ the old and new values on a card first.
 | `lan_access` | `true` always lets the laptop in |
 | `ollama_autostart` | On unless `false`: start Ollama when PatchBay opens (Setup → AI) |
 | `ollama_on_close` | `started` (quit Ollama only if PatchBay started it), `always` or `never` (Setup → AI) |
+| `ollama_startup_model` | The model to load when PatchBay starts, `""` for none (Setup → AI) |
+| `quit_stops_sandboxes`, `quit_stops_linux_machine`, `quit_with_app` | On unless `false`: what quitting stops (Setup → App) |
 | `chat_memory` | On unless set to `false`. Long chats keep their older part in notes plus search, so details from early on aren't lost |
 
 Where the AI runs and the data folder are shared by all devices and come from `config.json`.

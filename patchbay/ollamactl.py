@@ -3,8 +3,11 @@ Starting and stopping Ollama on this Mac, so you don't have to.
 
 - When PatchBay opens and Ollama isn't answering, PatchBay starts it (the Ollama app if you have it,
   otherwise `ollama serve`) and the chat says "Starting Ollama..." until it answers.
-- When PatchBay closes, it lets go of the model it was keeping loaded, and (setting ollama_on_close) quits
-  Ollama too: "started" = only if PatchBay started it (the default), "always", or "never".
+- Then it loads the model you picked in Setup → AI ("Load this model when PatchBay starts", setting
+  ollama_startup_model), like `ollama run <model>` but with no Terminal window left open.
+- When PatchBay quits, it unloads the model right away and (setting ollama_on_close) quits Ollama too:
+  "started" = only if PatchBay started it (the default), "always", or "never" (then the model is just handed back
+  to Ollama's usual 5-minute timer). What PatchBay started is kept in services.py, so a crash is tidied up next time.
 - "Stop Ollama completely" (Setup → AI) ends Ollama and any leftover model processes (llama-server, ollama runner).
   It shows the list first. Programs that aren't Ollama's are listed but never stopped.
 
@@ -22,14 +25,19 @@ import urllib.request
 from pathlib import Path
 
 import core
+import services
 
 APP_PATHS = [Path("/Applications/Ollama.app"), Path.home() / "Applications" / "Ollama.app"]
 CLI_PATHS = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]
 BREW_PLIST = Path.home() / "Library" / "LaunchAgents" / "homebrew.mxcl.ollama.plist"
 START_WAIT = 45          # seconds to wait for Ollama to answer after starting it
 ON_CLOSE = ("started", "always", "never")
+LOAD_WAIT = 600          # seconds a big model may take to load
+# Used when the setting was never saved. Joshua's pick (2026-11-03); Setup → AI changes it ("" = off).
+STARTUP_MODEL_DEFAULT = "qwen36-uncensored-fixed"
 
-STATE = {"starting": False, "started_by_us": False, "how": None, "pid": None, "error": "", "since": 0.0}
+STATE = {"starting": False, "started_by_us": False, "how": None, "pid": None, "error": "", "since": 0.0,
+         "loading": ""}
 _LOCK = threading.Lock()
 
 
@@ -71,6 +79,8 @@ def status_text():
     """A line for the chat and Setup while Ollama is starting (or why it couldn't), else ""."""
     if STATE["starting"]:
         return "Starting Ollama... give it a few seconds."
+    if STATE["loading"]:
+        return "Loading %s..." % STATE["loading"]
     return STATE["error"]
 
 
@@ -98,6 +108,7 @@ def start(cfg, wait=True):
         STATE.update(starting=False, error="Couldn't start Ollama (%s). Open the Ollama app yourself." % e)
         return STATE["error"]
     STATE["started_by_us"] = True
+    services.record("ollama", "ollama", "Ollama", how=how, pid=STATE["pid"])
     if not wait:
         threading.Thread(target=_wait_up, args=(url,), daemon=True).start()
         return status_text()
@@ -135,11 +146,88 @@ def _wait_up(url):
     return STATE["error"]
 
 
+def startup_model(cfg):
+    """The model to load when PatchBay starts, or "" for none."""
+    m = cfg.get("ollama_startup_model", STARTUP_MODEL_DEFAULT)
+    return str(m or "").strip()
+
+
+def installed(url):
+    """Names of the models in `ollama list`, or None if Ollama didn't answer."""
+    try:
+        with urllib.request.urlopen(url + "/api/tags", timeout=5) as r:
+            return [m.get("name") or m.get("model") for m in json.loads(r.read()).get("models") or []]
+    except (OSError, ValueError):
+        return None
+
+
+def same_model(a, b):
+    """qwen3 and qwen3:latest are the same model."""
+    def norm(n):
+        n = (n or "").strip().lower()
+        return n if ":" in n else n + ":latest"
+    return norm(a) == norm(b)
+
+
+def load_model(cfg, model):
+    """Load a model into memory and keep it there, like `ollama run <model>` without the Terminal window.
+    Returns a plain sentence."""
+    try:
+        url = core.check_ai_url(cfg["ollama_url"])
+    except (KeyError, ValueError) as e:
+        return str(e)
+    names = installed(url)
+    if names is None:
+        return "Ollama isn't answering, so %s wasn't loaded." % model
+    match = next((n for n in names if same_model(n, model)), None)
+    if not match:
+        STATE["error"] = ("%s isn't one of your models (ollama list), so nothing was loaded. Pick another in "
+                          "Setup → AI → Load this model when PatchBay starts." % model)
+        return STATE["error"]
+    STATE.update(loading=match, error="")
+    body = json.dumps({"model": match, "keep_alive": -1}).encode()   # no prompt: just load it
+    req = urllib.request.Request(url + "/api/generate", data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=LOAD_WAIT) as r:
+            r.read()
+    except (OSError, ValueError) as e:
+        STATE.update(loading="", error="Couldn't load %s: %s" % (match, e))
+        return STATE["error"]
+    STATE["loading"] = ""
+    print("Loaded %s." % match)
+    return "Loaded %s." % match
+
+
+def _start_and_load(cfg):
+    if cfg.get("ollama_autostart", True) or startup_model(cfg):
+        start(cfg, True)
+    model = startup_model(cfg)
+    if model and here(cfg) and not STATE["starting"] and not STATE["error"]:
+        load_model(cfg, model)
+
+
 def start_in_background(cfg):
-    """PatchBay is opening: start Ollama without holding up the page."""
-    if not cfg.get("ollama_autostart", True):
+    """PatchBay is opening: start Ollama and load the chosen model without holding up the page."""
+    if not here(cfg) or not (cfg.get("ollama_autostart", True) or startup_model(cfg)):
         return
-    threading.Thread(target=start, args=(cfg, True), daemon=True).start()
+    threading.Thread(target=_start_and_load, args=(cfg,), daemon=True).start()
+
+
+def adopt(cfg, row):
+    """A PatchBay that crashed (or this one before an update) started Ollama: look after it as our own."""
+    if not here(cfg):
+        services.forget("ollama")
+        return
+    try:
+        up = is_up(core.check_ai_url(cfg["ollama_url"]))
+    except (KeyError, ValueError):
+        up = False
+    if not up:
+        services.forget("ollama")
+        return
+    STATE["started_by_us"] = True
+    STATE["how"] = STATE["how"] or row.get("how")
+    services.record("ollama", "ollama", "Ollama", how=row.get("how"), pid=row.get("pid"))
 
 
 # ---- what's running
@@ -242,7 +330,9 @@ def stop_all(cfg):
             if not left:
                 break
             time.sleep(0.3)
-    STATE.update(started_by_us=False, starting=False, error="", pid=None)
+    STATE.update(started_by_us=False, starting=False, error="", pid=None, loading="")
+    if not left:
+        services.forget("ollama")
     others = [p for p in processes() if not p["ollama"]]
     msg = "Ollama is stopped." if not left else ("Couldn't stop %d Ollama process(es): %s" % (
         len(left), ", ".join(str(p["pid"]) for p in left)))
@@ -252,12 +342,18 @@ def stop_all(cfg):
 
 
 def on_close(cfg):
-    """PatchBay is closing. Let go of the model it kept loaded, and quit Ollama if the setting says so."""
+    """PatchBay is quitting. Quit Ollama if the setting says so; otherwise unload the model right away
+    ("never": hand it back to Ollama's 5-minute timer instead)."""
     if not here(cfg):
         return ""
     mode = cfg.get("ollama_on_close", "started")
-    quit_it = mode == "always" or (mode == "started" and STATE["started_by_us"])
+    quit_it = mode == "always" or (mode == "started" and (STATE["started_by_us"] or services.has("ollama")))
     if quit_it:
         return stop_all(cfg)
-    let_go(cfg, unload=False)
-    return "Left Ollama running (its usual 5-minute timer will free the memory)."
+    if mode == "never":
+        let_go(cfg, unload=False)
+        return "Left Ollama running (its usual 5-minute timer will free the memory)."
+    done = let_go(cfg, unload=True)
+    if done:
+        return "Unloaded %s. Left Ollama running (you started it, not PatchBay)." % ", ".join(done)
+    return "Left Ollama running (you started it, not PatchBay)."
