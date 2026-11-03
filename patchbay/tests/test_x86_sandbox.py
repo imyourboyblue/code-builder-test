@@ -250,5 +250,84 @@ class ColimaRosetta(Base):
         self.assertEqual(self.cards()[0]["title"], "Turn on Rosetta in Colima (for x86 sandboxes)")
 
 
+TAR_FAIL = ("/usr/bin/tar: zlib-1.3.2/contrib/puff/puff.c: Cannot open: Function not implemented\n"
+            "/usr/bin/tar: zlib-1.3.2/contrib/iostream3: Cannot mkdir: Function not implemented\n"
+            "make: *** [Makefile:30: deps] Error 2\n")
+
+
+class RosettaTar(Base):
+    def amd64(self, image="ubuntu:26.04"):
+        s = self.sb()
+        s.update(arch="amd64", image=image)
+        sandbox.save(s)
+
+    def test_tar_error_in_x86_sandbox_saves_the_tar_fix_once(self):
+        self.amd64()
+        tips = server.sandbox_hints(self.sb(), 2, TAR_FAIL, "build", time.time(), "make package")
+        self.assertIn("openat2", tips)
+        self.assertIn("a reset won't fix it", tips)
+        s = self.sb()
+        self.assertEqual([f["command"] for f in s["fixes"]], [server.TAR_FIX])
+        self.assertIn("curl", r.apt_packages(s["setup_command"]))
+        self.assertTrue(s["needs_setup"])
+        self.assertIn(server.TAR_FIX, sandbox.step_command(s, "setup"))
+        server.sandbox_hints(self.sb(), 2, TAR_FAIL, "build", time.time(), "make package")
+        self.assertEqual(len(self.sb()["fixes"]), 1)
+
+    def test_only_newer_ubuntu_x86_needs_it(self):
+        self.amd64("ubuntu:26.04")
+        self.assertTrue(server.needs_tar_fix(self.sb()))
+        self.amd64("ubuntu:24.04")
+        self.assertFalse(server.needs_tar_fix(self.sb()))
+        self.assertFalse(server.needs_tar_fix(dict(self.sb(), arch="native", image="ubuntu:26.04")))
+
+    def test_switch_to_x86_on_26_04_adds_it_up_front(self):
+        s = self.sb()
+        s["image"] = "ubuntu:26.04"
+        sandbox.save(s)
+        with mock.patch.object(sandbox, "engine", return_value=("docker", "/opt/homebrew/bin/docker")), \
+                mock.patch.object(sandbox, "_which", return_value=None), \
+                mock.patch.object(sandbox, "remove_container"):
+            words = server.switch_to_x86("EglantinePS5")
+        self.assertIn("tar works under Rosetta", words)
+        self.assertIn(server.TAR_FIX, [f["command"] for f in self.sb()["fixes"]])
+
+
+class ResetGuard(Base):
+    def fail(self, out=TAR_FAIL):
+        s = self.sb()
+        s["last_run"] = {"code": 2, "output": out, "command": "make package", "time": "2026-11-03 18:00:00"}
+        sandbox.save(s)
+
+    def reset_once(self):
+        self.fail()
+        with mock.patch.object(sandbox, "remove_container"), mock.patch.object(sandbox, "stop_runs"):
+            server.t_sandbox_reset(self.st, self.events.append, {"sandbox": "EglantinePS5"})
+            pid = self.cards()[-1]["id"]
+            p = self.st.pending.pop(pid)
+            with mock.patch.object(server, "chat_turn"):
+                server.confirm_sandbox(self.st, p, self.events.append)
+
+    def test_card_shows_the_error_and_stops_after_two_same_resets(self):
+        self.reset_once()
+        self.assertIn("Cannot open: Function not implemented", self.cards()[0]["diff"])
+        self.reset_once()
+        self.assertIn("already reset 1 time", self.cards()[1]["diff"])
+        self.fail()
+        with self.assertRaises(server.ToolError) as e:
+            server.t_sandbox_reset(self.st, self.events.append, {"sandbox": "EglantinePS5"})
+        self.assertIn("reset 2 times for this same error", str(e.exception))
+        # The user asking in their own words still gets the card; a different error does too.
+        server.t_sandbox_reset(self.st, self.events.append, {"sandbox": "EglantinePS5", "user_asked": True})
+        self.fail("main.c:1:1: error: unknown type name 'foo'")
+        server.t_sandbox_reset(self.st, self.events.append, {"sandbox": "EglantinePS5"})
+
+    def test_a_working_build_clears_the_count(self):
+        self.reset_once()
+        self.assertTrue(self.sb()["reset_log"])
+        server.sandbox_hints(self.sb(), 0, "ok", "build", time.time(), "make package")
+        self.assertNotIn("reset_log", self.sb())
+
+
 if __name__ == "__main__":
     unittest.main()

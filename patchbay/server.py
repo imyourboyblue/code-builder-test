@@ -3053,6 +3053,14 @@ def confirm_sandbox(st, p, emit):
         s = sb(sandbox.set_options, ch["sandbox"], network=True)
         result = "Network is ON for sandbox %s. Turn it off again when the downloads are done." % s["name"]
     elif a == "reset":
+        if ch.get("error"):
+            try:
+                cur = sandbox.load(ch["sandbox"])
+                cur["reset_log"] = (cur.get("reset_log") or [])[-9:] + [{"error": ch["error"],
+                                                                          "time": time.strftime("%Y-%m-%d %H:%M")}]
+                sandbox.save(cur)
+            except sandbox.SandboxError:
+                pass
         fresh = sb(sandbox.reset, ch["sandbox"], emit)
         LEFTOVERS.pop(ch["sandbox"], None)
         result = "Sandbox %s was emptied and the project copied in fresh.%s" % (ch["sandbox"],
@@ -3230,6 +3238,15 @@ def t_sandbox_build(st, emit, a):
     if caught:
         emit({"type": "note", "text": caught})
     step = a.get("step") or "build"
+    if needs_tar_fix(s) and not any(f.get("command") == TAR_FIX for f in s.get("fixes") or []):
+        try:
+            add_tar_fix(name)
+            emit({"type": "note", "text": "Sandbox %s is x86 Ubuntu through Rosetta, and this Ubuntu's tar needs a "
+                                          "call Rosetta doesn't have, so PatchBay saved a fix that puts Ubuntu 24.04's "
+                                          "tar in place (the setup step does it)." % name})
+            s = sb(sandbox.load, name)
+        except sandbox.SandboxError:
+            pass
     early = x86_early_check(st, emit, s)
     if early:
         return early
@@ -3712,6 +3729,9 @@ def switch_to_x86(name, emit=None):
         if "libclang_rt.builtins-x86_64" in (s["fixes"][i].get("command") or ""):
             sandbox.remove_fix(name, i + 1)
             words.append("The x86 runtime-library download fix was taken away (x86 Linux has it already).")
+    if needs_tar_fix(sandbox.load(name)):
+        add_tar_fix(name)
+        words.append("Saved a fix so tar works under Rosetta (this Ubuntu's tar needs a call Rosetta doesn't have).")
     s = sandbox.load(name)
     s.pop("x86_needed", None)
     s.pop("x86_declined", None)
@@ -3749,6 +3769,45 @@ def rt_fix_command(path, ver):
             'd=$(mktemp -d) && curl -fsSL -o "$d/rt.deb" "http://archive.ubuntu.com/ubuntu/pool/universe/l/'
             'llvm-toolchain-%s/%s_${v}_amd64.deb" && dpkg-deb -x "$d/rt.deb" "$d/x" && rm -f "$f" && '
             'cp "$d/x$f" "$f" && rm -rf "$d"; fi' % (path, pkg, ver, pkg))
+
+
+# Ubuntu 25.10+ GNU tar opens every folder with openat2() (a 2025 security fix) and gives up when that call doesn't
+# exist. Apple's Rosetta doesn't have openat2, so in an x86 sandbox every file fails with "Cannot open/mkdir: Function
+# not implemented". Ubuntu 24.04's tar (the same GNU tar 1.35) falls back to the old way, and runs fine on newer Ubuntu.
+ROSETTA_TAR = re.compile(r"\btar: .{1,400}: Cannot (open|mkdir|utime|change mode|create symlink)[^\n]{0,40}: "
+                         r"Function not implemented")
+TAR_FIX = ("if [ ! -e /usr/bin/tar.openat2 ]; then d=$(mktemp -d) && f=$(curl -fsSL http://archive.ubuntu.com/ubuntu/"
+           "dists/noble-updates/main/binary-amd64/Packages.gz | gzip -dc | awk '/^Package: /{p=($2==\"tar\")} "
+           "p&&/^Filename: /{print $2; exit}') && [ -n \"$f\" ] && curl -fsSL -o \"$d/tar.deb\" "
+           "\"http://archive.ubuntu.com/ubuntu/$f\" && dpkg-deb -x \"$d/tar.deb\" \"$d/x\" && \"$d/x/usr/bin/tar\" "
+           "--version >/dev/null && cp \"$d/x/usr/bin/tar\" /usr/bin/tar.noble && dpkg-divert --local --rename "
+           "--divert /usr/bin/tar.openat2 --add /usr/bin/tar && mv /usr/bin/tar.noble /usr/bin/tar && rm -rf \"$d\"; fi")
+TAR_FIX_WHY = ("tar that works under Rosetta: Ubuntu 24.04's GNU tar in place of this Ubuntu's, which needs openat2 "
+               "(Rosetta doesn't have it)")
+
+
+def needs_tar_fix(s):
+    """An x86 sandbox on Ubuntu 25.10 or newer: its tar fails under Rosetta (see ROSETTA_TAR)."""
+    m = re.match(r"^(?:docker\.io/)?(?:library/)?ubuntu:(\d\d)\.(\d\d)", s.get("image") or "")
+    return s.get("kind") == "linux" and s.get("arch") == "amd64" and bool(m) and \
+        (int(m.group(1)), int(m.group(2))) >= (25, 10)
+
+
+def add_tar_fix(name):
+    """Save the tar fix (once) and its packages; the next setup step does it. True if something new was saved."""
+    s = sandbox.load(name)
+    changed = False
+    if not any(f.get("command") == TAR_FIX for f in s.get("fixes") or []):
+        sandbox.add_fix(name, TAR_FIX, TAR_FIX_WHY)
+        changed = True
+    cur = sandbox.load(name).get("setup_command") or ""
+    new = sandboxrecipe.add_packages(cur, ["curl", "ca-certificates"])
+    if new != cur:
+        sandbox.set_recipe(name, {"setup_command": new})
+        changed = True
+    if changed:
+        setup_again(name)
+    return changed
 
 
 def toolchain_fixes(s, code, out, command):
@@ -3816,6 +3875,17 @@ def toolchain_fixes(s, code, out, command):
                  "fix that unpacks it from Ubuntu's x86 package of the same version; every setup step redoes it. "
                  "Never link the aarch64 file in its place: the PS5 is x86, so that makes a broken app. Next: "
                  "sandbox_build step build (it runs the setup first)." % Path(path).name)
+    if code != 0 and ROSETTA_TAR.search(out):
+        try:
+            new = add_tar_fix(name) if s.get("arch") == "amd64" else False
+        except sandbox.SandboxError:
+            new = False
+        if s.get("arch") == "amd64":
+            tips += (" Cause: this x86 sandbox runs through Apple's Rosetta, which doesn't have the openat2 call that "
+                     "this Ubuntu's tar needs, so tar fails on every file (\"Function not implemented\"). It isn't a "
+                     "leftover, so a reset won't fix it. PatchBay %s a fix that puts Ubuntu 24.04's tar (the same GNU "
+                     "tar, it works without openat2) in place; every setup step redoes it. Next: sandbox_build step "
+                     "build (it runs the setup first)." % ("saved" if new else "already has"))
     if command and WRONG_CPU_LINK.search(command):
         tips += (" Warning: that links a file for one processor in place of another's (ARM vs x86). The build may "
                  "go further but makes a broken program. Undo it (rm the link).")
@@ -3980,6 +4050,13 @@ def sandbox_hints(s, code, out, step, started=None, command=""):
             pass
     if code == 0 and step == "build":
         LEFTOVERS.pop(s["name"], None)
+    if code == 0 and step == "build" and s.get("reset_log"):
+        try:
+            done = sandbox.load(s["name"])
+            done.pop("reset_log", None)          # the build works: earlier resets no longer count
+            sandbox.save(done)
+        except sandbox.SandboxError:
+            pass
     if code == 0 and step == "build" and not s.get("built_ok"):
         try:
             done = sandbox.load(s["name"])
@@ -4213,14 +4290,52 @@ def t_sandbox_settings(st, emit, a):
     return msg + sandbox.summary(s)
 
 
+RESETS_MAX = 2     # resets for the same error before PatchBay stops offering another one
+
+
+def last_error(s):
+    """The first error line of the sandbox's last failed run, or ''."""
+    last = s.get("last_run") or {}
+    if last.get("code") in (0, None):
+        return ""
+    for line in (last.get("output") or "").splitlines():
+        if ERROR_LINE.search(line) and line.strip():
+            return line.strip()[:200]
+    return ""
+
+
+def same_error(a, b):
+    """Two error lines say the same thing (file names and numbers aside)."""
+    key = lambda x: re.sub(r"\d+", "#", re.sub(r"\S*/\S*", "<path>", x or "")).strip().lower()
+    return bool(a) and key(a) == key(b)
+
+
 @both_tool("propose_sandbox_reset", "Empty a sandbox and copy the real project in fresh (anything installed or built "
-           "inside is thrown away). Shows a card.", {"sandbox": S})
+           "inside is thrown away). Shows a card. Only for leftovers from an earlier build: after two resets for the "
+           "same error it isn't offered again, because a reset doesn't fix that error.",
+           {"sandbox": S, "why": dict(S, description="One plain sentence: why a reset should fix the last error"),
+            "user_asked": dict(B, description="Only true if the user asked for a reset in their own words")})
 def t_sandbox_reset(st, emit, a):
     name = sandbox_name(st, a)
     s = sb(sandbox.load, name)
-    return sandbox_card(st, emit, {"action": "reset", "sandbox": name}, "Reset sandbox %s" % name,
-                        "Throw away everything built or installed in sandbox %s and copy\n%s in fresh." % (
-                            name, s["source"]), "Reset it", "Your real project isn't touched.")
+    err = last_error(s)
+    before = [x for x in s.get("reset_log") or [] if same_error(x.get("error"), err)]
+    if err and len(before) >= RESETS_MAX and not a.get("user_asked"):
+        raise ToolError("Not shown: sandbox %s was already reset %d times for this same error, and it came back "
+                        "every time, so a reset doesn't fix it: %s\nStop offering resets. Find the real cause (read "
+                        "the failing script, look the error up with web_search in generic words), and tell the user "
+                        "in plain words what it is." % (name, len(before), err))
+    why = (a.get("why") or "").strip()[:300]
+    diff = ("Throw away everything built or installed in sandbox %s and copy\n%s in fresh." % (name, s["source"]))
+    if err:
+        diff += "\n\nThe last run failed with:\n  %s" % err
+    if why:
+        diff += "\nWhy a reset should help: %s" % why
+    if before:
+        diff += ("\n\nThis sandbox was already reset %d time%s for this same error. If it comes back again, PatchBay "
+                 "stops offering resets for it." % (len(before), "" if len(before) == 1 else "s"))
+    return sandbox_card(st, emit, {"action": "reset", "sandbox": name, "error": err}, "Reset sandbox %s" % name,
+                        diff, "Reset it", "Your real project isn't touched.")
 
 
 @both_tool("sandbox_usage", "Show what the sandboxes really use right now: memory and CPU of each sandbox container, "
@@ -4569,7 +4684,7 @@ the build made (its result). A sandbox starts like a fresh download: what the pr
 output, caches, downloaded dependencies) is left out and the build makes it again. A Linux sandbox is Ubuntu on ARM \
 (arm64), in Colima's Linux machine, so files built on the Mac don't fit. If a build fails because of leftovers from \
 an earlier build ("config.h in source dir", an old CMakeCache.txt, a cache that "belongs to another checkout"), \
-delete those files inside the sandbox with sandbox_run, or propose_sandbox_reset; never change the project's own \
+delete those files inside the sandbox with sandbox_run, or propose_sandbox_reset (never more than twice for the same error: if it comes back, it is not a leftover); never change the project's own \
 scripts for that. Copying a changed script or source file out to the real project is a last resort, only when the \
 project's own code is really wrong, with a plain reason (why) on the card. When the sandbox's own tools are the \
 problem (a program can't read the files, a library for the target is missing), fix the TOOLS with sandbox_fix (a \
