@@ -233,6 +233,10 @@ new, the AI researches it and saves what it learned, so next time it already kno
   what must not be touched. The AI reads it before every question about that project. PatchBay has its own
   `PATCHBAY.md` too.
 - Searching code is fast: the AI can search with patterns, only some file types, and lines around each match.
+- **It knows your Mac:** PatchBay checks your Mac by itself (macOS version, chip, memory, free disk, Homebrew,
+  and the real names of your build tools, like `/opt/homebrew/opt/llvm@18/bin/clang` instead of `clang-18`) and tells
+  the AI before every question. It never goes to Claude. If a project is made for Linux (an Ubuntu-only Makefile or
+  CI), the AI says so before building and suggests a Linux sandbox instead of changing your Mac.
 
 ## Sandboxes for building and testing
 
