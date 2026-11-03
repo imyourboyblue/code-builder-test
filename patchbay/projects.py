@@ -56,7 +56,12 @@ def folder_of(pr):
 def inside(pr, rel):
     """A path inside the project folder. Refuses anything that points outside it."""
     root = folder_of(pr)
-    p = (root / (rel or "").lstrip("/")).resolve()
+    rel = os.path.expanduser(rel or "")
+    full = Path(rel).resolve() if rel.startswith("/") else None
+    if full is not None and (full == root or root in full.parents):
+        p = full           # a full Mac path inside the project (e.g. /Users/me/project/Makefile): fine
+    else:
+        p = (root / rel.lstrip("/")).resolve()
     if p != root and root not in p.parents:
         raise ProjectError("%s is outside the project folder." % rel)
     return root, p
