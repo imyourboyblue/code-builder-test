@@ -1907,6 +1907,9 @@ def t_command(st, emit, a):
                         "commands in Terminal.")
     if re.match(r"^(\S*/)?(brew|dkp-pacman|pacman)\s+(install|upgrade|-S)", cmd):
         raise ToolError("Use propose_install_packages to install packages (it handles the password).")
+    if re.search(r"(^|[;&|/]\s*)(colima\s+(start|stop|restart)|docker\s+info)\b", cmd):
+        raise ToolError("Use sandbox_preflight instead: it checks Docker and Colima and starts Colima sized for "
+                        "this Mac (plain colima start makes a machine too small for builds).")
     root = pe(projects.folder_of, pr)
     return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
                        "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
@@ -2681,6 +2684,9 @@ def sandbox_where(change):
     if change.get("action") == "network_on":
         return where.mac_only(computer_name(), "Only sandbox %s: it can reach the internet. Nothing on your devices"
                                                % name, runs=runs)
+    if change.get("action") in ("colima_start", "colima_resize"):
+        return where.mac_only(computer_name(), "Colima's Linux machine on this Mac (Docker sandboxes restart). "
+                                               "Nothing on your devices")
     return where.mac_only(computer_name(), "Only sandbox %s. Nothing else on this Mac or your devices" % name,
                           runs=runs)
 
@@ -2711,6 +2717,10 @@ def confirm_sandbox(st, p, emit):
         result = sb(sandbox.copy_out, ch)
     elif a == "undo":
         result = sb(sandbox.undo_copy, ch["number"])
+    elif a in ("colima_start", "colima_resize"):
+        result = sb(sandbox.start_colima, emit, a == "colima_resize")
+        if ch.get("sandbox"):
+            result += " Next: sandbox_build step setup for sandbox %s." % ch["sandbox"]
     else:
         raise ToolError("Unknown sandbox change.")
     emit({"type": "answer", "text": result})
@@ -2767,11 +2777,14 @@ def t_sandbox_create(st, emit, a):
     kind = a.get("kind") or "linux"
     recipe = sandbox_recipe_for(src, a) if kind == "linux" else None
     s = sb(sandbox.create, name, str(src), kind, a.get("image") or None, emit, recipe)
-    return ("Made sandbox %s with a copy of %s. Nothing in the real folder changes. %s\n%s%s\n%s" % (
+    made = ("Made sandbox %s with a copy of %s. Nothing in the real folder changes. %s\n%s%s\n%s" % (
         s["name"], src, sandbox.summary(s), sandbox.recipe_text(s), memory_warning(s),
-        "Next: sandbox_build step setup (it asks for the internet first), then sandbox_build step build. Change "
-        "anything with propose_sandbox_settings." if s.get("setup_command") or s.get("build_command") else
-        "Run commands in it with sandbox_run."))
+        "Next: sandbox_build step setup (it asks for the internet first), then sandbox_build step build. Keep the "
+        "setup it worked out (don't write your own); add to it with propose_sandbox_settings." if
+        s.get("setup_command") or s.get("build_command") else "Run commands in it with sandbox_run."))
+    if kind == "linux":
+        made += "\n\n" + sandbox_preflight(st, emit, s)
+    return made
 
 
 def sandbox_recipe_for(src, a):
@@ -2812,6 +2825,11 @@ def t_sandbox_build(st, emit, a):
     s = sb(sandbox.load, name)
     step = a.get("step") or "build"
     cmd = sandbox.step_command(s, step)
+    filled = ""
+    if not cmd and s["kind"] == "linux":
+        # Older sandboxes (or ones made before the project's files were read) get the project's preset now.
+        s, filled = fill_from_preset(s)
+        cmd = sandbox.step_command(s, step)
     if not cmd:
         raise ToolError("Sandbox %s has no %s command. Set one with propose_sandbox_settings (%s_command)."
                         % (name, step, step))
@@ -2821,7 +2839,74 @@ def t_sandbox_build(st, emit, a):
             "Sandbox %s will be able to reach the internet, to download what the %s step needs.\n"
             "It still can't see your real files, passwords or Keychain." % (name, step), "Turn network on",
             "After you press it, PatchBay runs the %s step." % step))
-    return t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
+    if s["kind"] == "linux":
+        pf = sb(sandbox.preflight, s)
+        if not pf["ok"]:
+            return filled + sandbox_preflight(st, emit, s, pf)
+    return filled + t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
+
+
+def project_preset(s):
+    """The setup the project's own files ask for (sandboxrecipe.suggest on the real folder), or {}."""
+    try:
+        return sandboxrecipe.suggest(s["source"], mac_memory_gb=mac_memory_gb())
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def fill_from_preset(s):
+    """Give a sandbox the project's preset setup/build commands where it has none. Returns (sandbox, words)."""
+    r = project_preset(s)
+    add = {k: r[k] for k in ("setup_command", "build_command", "output", "upload_hint", "recipe_notes",
+                             "recipe_from", "blocked") if r.get(k) and not s.get(k)}
+    if not add:
+        return s, ""
+    s = sb(sandbox.set_recipe, s["name"], add)
+    return s, ("Sandbox %s had no %s, so PatchBay used the project's own preset (from %s). "
+               % (s["name"], " or ".join(k.replace("_command", " command") for k in add if k.endswith("_command"))
+                  or "recipe", ", ".join(r.get("recipe_from") or []) or "its build files"))
+
+
+def sandbox_preflight(st, emit, s=None, pf=None):
+    """Check everything a Linux sandbox needs on the Mac in one go, and show ONE card for what's missing."""
+    pf = pf or sb(sandbox.preflight, s)
+    lines = "\n".join("- %s **%s**: %s" % ("✓" if ok else "✗", n, w) for ok, n, w in pf["rows"])
+    emit({"type": "note", "text": "**Sandbox check** (on %s):\n%s" % (APP.computer if APP else "the Mac", lines)})
+    name = (s or {}).get("name") or ""
+    if pf["brew"]:
+        if not projects.find_brew():
+            return ("Checklist:\n%s\n\nHomebrew isn't installed, so Colima and Docker can't go on a card. Tell the "
+                    "user: Homebrew is a one-time setup in Terminal, the command is on https://brew.sh" % lines)
+        rows = [preflight.Row(name=x, found=False, where="", via="brew", package=x, how="") for x in pf["brew"]]
+        return ("Checklist:\n%s\n\n" % lines) + tools_card(
+            st, emit, rows, ["brew:" + x for x in pf["brew"]],
+            "Linux sandboxes need these to run. After installing, run sandbox_preflight again: it starts Colima "
+            "at the right size.")
+    if pf["colima"]:
+        cpus, mem, disk = sandbox.colima_size()
+        resize = pf["colima"] == "resize"
+        title = ("Restart Colima bigger (%d CPUs, %d GB)" if resize else "Start Colima (%d CPUs, %d GB)") % (cpus, mem)
+        diff = ("%sColima runs the Linux machine Docker sandboxes live in. It gets %d CPUs, %d GB of memory and up to "
+                "%d GB of disk, sized for this Mac.\n\nCommands:\n%s  colima start --cpu %d --memory %d --disk %d"
+                % ("Running sandboxes stop while it restarts.\n\n" if resize else "", cpus, mem, disk,
+                   "  colima stop\n" if resize else "", cpus, mem, disk))
+        return ("Checklist:\n%s\n\n" % lines) + sandbox_card(
+            st, emit, {"action": "colima_resize" if resize else "colima_start", "sandbox": name}, title, diff,
+            "Restart Colima" if resize else "Start Colima", "Nothing outside this Mac changes.")
+    return "Checklist:\n%s\n\nEverything sandboxes need is ready." % lines
+
+
+@both_tool("sandbox_preflight", "Check everything Linux sandboxes need on the Mac BEFORE starting one: the container "
+           "tool (Docker command-line tool and Colima, or Apple's container tool), whether it runs, and whether its "
+           "Linux machine is big enough. Shows the checklist, then ONE card: install what's missing (Homebrew names "
+           "colima and docker), or start/restart Colima sized for this Mac. Use this instead of installing or "
+           "starting Docker/Colima yourself.", {"sandbox": S})
+def t_sandbox_preflight(st, emit, a):
+    s = None
+    have = sb(sandbox.all_sandboxes)
+    if a.get("sandbox") or len(have) == 1:
+        s = sb(sandbox.load, sandbox_name(st, a))
+    return sandbox_preflight(st, emit, s)
 
 
 @both_tool("sandbox_run", "Run a shell command inside a sandbox, in its copy of the project (e.g. make, cmake ... , "
@@ -2868,6 +2953,21 @@ def sandbox_hints(s, code, out, step):
     if code != 0 and re.search(r"\bKilled\b|out of memory|signal 9|c\+\+: fatal error: Killed", out):
         tips += (" The build ran out of memory (%d GB). Raise memory_gb (up to %s) or lower the jobs in the build "
                  "command." % (s["memory_gb"], s.get("memory_max") or 28))
+    if code != 0 and s["kind"] == "linux":
+        pk, unknown = sandboxrecipe.packages_for(sandboxrecipe.missing_commands(out))
+        if pk:
+            try:
+                new = sandboxrecipe.add_packages(s.get("setup_command") or "", pk)
+                if new != (s.get("setup_command") or ""):
+                    sandbox.set_recipe(s["name"], {"setup_command": new})
+                tips += (" Missing program%s inside: PatchBay added the Linux package%s %s to the sandbox's setup. "
+                         "Next: sandbox_build step setup, then build again." % (
+                             "s" if len(pk) > 1 else "", "s" if len(pk) > 1 else "", ", ".join(pk)))
+            except sandbox.SandboxError:
+                tips += " Missing inside: install %s (apt-get install -y %s)." % (", ".join(pk), " ".join(pk))
+        if unknown:
+            tips += (" Not found inside: %s. Find which Ubuntu package has it (generic search), then add it with "
+                     "propose_sandbox_settings setup_command \"apt-get install -y <package>\"." % ", ".join(unknown))
     if code == 0 and step == "setup":
         tips += " Setup is done. Next: sandbox_build step build."
     if code == 0 and step == "build" and s.get("output"):
@@ -2937,12 +3037,14 @@ def t_sandbox_copy_out(st, emit, a):
 
 @both_tool("propose_sandbox_settings", "Change a sandbox: network (true needs a card the user confirms; false is "
            "immediate), cpus, memory_gb, timeout_min (per command), disk_gb, image (Linux), arch (native = ARM, "
-           "amd64 = x86 through Rosetta), and its recipe: setup_command, build_command, output (file or folder to "
+           "amd64 = x86 through Rosetta), and its recipe: setup_command (ADDED to the project's own setup; don't "
+           "rewrite it), build_command, output (file or folder to "
            "copy out), upload_hint (what to run on the Mac afterwards), never_run (a command that must never run "
            "inside, like one that sends to a device; can only be added).",
            {"sandbox": S, "network": B, "cpus": I, "memory_gb": I, "timeout_min": I, "disk_gb": I, "image": S,
             "arch": {"type": "string", "enum": ["native", "amd64"]}, "setup_command": S, "build_command": S,
-            "output": S, "upload_hint": S, "never_run": S})
+            "output": S, "upload_hint": S, "never_run": S,
+            "replace_setup": dict(B, description="Only if the user asked: replace the setup instead of adding to it")})
 def t_sandbox_settings(st, emit, a):
     name = sandbox_name(st, a)
     s = sb(sandbox.load, name)
@@ -2955,6 +3057,13 @@ def t_sandbox_settings(st, emit, a):
         s = sb(sandbox.set_options, name, **opts)
         msg = "Changed: %s. %s" % (", ".join("%s=%s" % kv for kv in opts.items()), memory_warning(s))
     recipe = {k: a[k] for k in ("setup_command", "build_command", "output", "upload_hint") if a.get(k)}
+    if recipe.get("setup_command") and s["kind"] == "linux" and not a.get("replace_setup"):
+        # Keep the project's preset: the AI's own command is added to it, never instead of it.
+        base = s.get("setup_command") or project_preset(s).get("setup_command") or ""
+        merged = sandboxrecipe.merge_setup(base, recipe["setup_command"])
+        if merged != recipe["setup_command"]:
+            msg += "Kept the project's setup and added yours to it. "
+        recipe["setup_command"] = merged
     if a.get("never_run"):
         recipe["blocked"] = [{"pattern": re.escape(a["never_run"].strip()),
                               "why": "%s must not run inside the sandbox." % a["never_run"].strip()}]
@@ -3270,7 +3379,9 @@ details into an address.
 - To try things out freely (run tests, try build commands, install Linux packages) without cards, use a sandbox: \
 sandbox_create (a copy of the project; kind linux for Linux/Ubuntu projects). Make whatever sandbox the job needs: \
 PatchBay reads the project's build files and sets it up (Linux version, packages, setup, build, memory); then \
-sandbox_build step setup, sandbox_build step build, and sandbox_run as often as needed. Its internet is off; it is \
+sandbox_build step setup, sandbox_build step build, and sandbox_run as often as needed. Never write your own \
+setup command or install/start Docker or Colima yourself: sandbox_preflight checks and installs what sandboxes \
+need (one card), and the project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
 asked for with a card when a download is needed. When it works, propose_sandbox_copy_out the file or folder that \
 should go back into the real project. Anything that sends to a device (make install, FTP upload) runs on the Mac \
 with propose_command after copying out, never inside the sandbox.
@@ -3591,7 +3702,7 @@ PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
                   "propose_device_command", "private_build", "sandbox_create", "sandbox_run",
-                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build"}
+                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build", "sandbox_preflight"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -4269,10 +4380,10 @@ HOME_GROUPS = {
 }
 SANDBOX_GROUP = ("sandboxes: a throwaway copy of a project to build and test in (Linux container or locked-down Mac), "
                  "network off by default, results copied out only with a card",
-                 ["sandbox_list", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read",
+                 ["sandbox_list", "sandbox_preflight", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read",
                   "propose_sandbox_copy_out", "propose_sandbox_settings", "propose_sandbox_reset",
                   "propose_sandbox_delete", "propose_sandbox_undo"],
-                 r"sandbox|container|docker|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests|"
+                 r"sandbox|container|docker|colima|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests|"
                  r"rosetta|x86|amd64|arm64")
 DEVICE_GROUPS["sandbox"] = SANDBOX_GROUP
 HOME_GROUPS["sandbox"] = SANDBOX_GROUP
@@ -4741,7 +4852,7 @@ STEP_WORDS = {
     "patchbay_search": "Searching PatchBay for {text}", "propose_patchbay_change": "Preparing a change to PatchBay's {path}",
     "propose_patchbay_restart": "Preparing a restart", "set_steps": "Writing the plan", "step_done": "Step {step} checked",
     "sandbox_run": "Running {command} in sandbox {sandbox}", "sandbox_create": "Making a sandbox",
-    "sandbox_list": "Listing the sandboxes", "sandbox_files": "Listing sandbox files", "sandbox_read": "Reading {path} in the sandbox",
+    "sandbox_list": "Listing the sandboxes", "sandbox_preflight": "Checking what sandboxes need", "sandbox_files": "Listing sandbox files", "sandbox_read": "Reading {path} in the sandbox",
     "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
     "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",

@@ -507,6 +507,12 @@ def needed_packages(folder):
     return console, needed, missing
 
 
+# Names that sound right but aren't Homebrew formulas -> the real formula. (brew install docker-cli fails: the
+# Docker command-line tool is just "docker".)
+BREW_RENAMES = {"docker-cli": "docker", "docker-ce": "docker", "docker-ce-cli": "docker", "docker-engine": "docker",
+                "docker.io": "docker", "colima-cli": "colima"}
+
+
 def install_plan(manager, packages, update_all=False):
     """What installing packages will do, as (commands, needs_password, words for the card). Raises ProjectError."""
     pkgs = [str(x).strip() for x in (packages or []) if str(x).strip()]
@@ -519,6 +525,7 @@ def install_plan(manager, packages, update_all=False):
     if not pkgs and not update_all:
         raise ProjectError("Say which packages to install (e.g. switch-dev, switch-zlib), or update_all.")
     if manager == "homebrew":
+        pkgs = list(dict.fromkeys(BREW_RENAMES.get(x.lower(), x) for x in pkgs))
         brew = find_brew()
         if not brew:
             raise ProjectError("Homebrew isn't installed on this Mac. It's a one-time setup the user does in Terminal: "

@@ -286,3 +286,86 @@ def suggest(source, cores=None, mac_memory_gb=None):
     r["recipe_notes"] = notes
     r["recipe_from"] = read
     return r
+
+
+# ---------------------------------------------------------------- keeping the setup complete
+
+# A command a build says is missing -> the Ubuntu/Debian package that has it.
+APT_FOR = {"gcc": "build-essential", "g++": "build-essential", "cc": "build-essential", "c++": "build-essential",
+           "make": "make", "git": "git", "curl": "curl", "wget": "wget", "cmake": "cmake", "ninja": "ninja-build",
+           "meson": "meson", "pkg-config": "pkgconf", "pkgconf": "pkgconf", "python": "python3", "python3": "python3",
+           "pip": "python3-pip", "pip3": "python3-pip", "clang": "clang", "clang++": "clang", "lld": "lld",
+           "ld.lld": "lld", "llvm-config": "llvm", "llvm-ar": "llvm", "unzip": "unzip", "zip": "zip", "xz": "xz-utils",
+           "file": "file", "bison": "bison", "flex": "flex", "autoconf": "autoconf", "automake": "automake",
+           "libtool": "libtool", "libtoolize": "libtool", "nasm": "nasm", "yasm": "yasm", "patch": "patch",
+           "rsync": "rsync", "bc": "bc", "gettext": "gettext", "msgfmt": "gettext", "xxd": "xxd",
+           "glslangValidator": "glslang-tools", "zstd": "zstd", "lz4": "lz4", "sudo": "sudo", "node": "nodejs",
+           "npm": "npm", "cargo": "cargo", "rustc": "rustc", "go": "golang-go", "java": "default-jdk-headless",
+           "perl": "perl", "m4": "m4", "gperf": "gperf", "help2man": "help2man", "texinfo": "texinfo",
+           "makeinfo": "texinfo", "ccache": "ccache", "jq": "jq", "openssl": "openssl", "7z": "p7zip-full"}
+NOT_FOUND = re.compile(r"command not found:\s+([A-Za-z0-9][A-Za-z0-9_.+-]{0,40})|"
+                       r"(?:^|[\s:])(?![0-9]+:)([A-Za-z0-9][A-Za-z0-9_.+-]{0,40}):\s+(?:command\s+)?not found", re.M)
+APT_INSTALL = re.compile(r"apt(?:-get)?\s+install\s+(?:-y\s+|--yes\s+|--no-install-recommends\s+|-q+\s+)*")
+
+
+def missing_commands(output):
+    """Programs a build said weren't there ('git: command not found', 'sh: 1: make: not found'), in order."""
+    out = []
+    for m in NOT_FOUND.finditer(output or ""):
+        name = m.group(1) or m.group(2)
+        if name in ("sh", "bash", "zsh", "line") or name.isdigit() or name in out:
+            continue
+        out.append(name)
+    return out[:8]
+
+
+def packages_for(commands):
+    """(apt packages for the known ones, commands PatchBay doesn't know a package for)."""
+    pk, unknown = [], []
+    for c in commands:
+        p = APT_FOR.get(c)
+        if p:
+            if p not in pk:
+                pk.append(p)
+        else:
+            unknown.append(c)
+    return pk, unknown
+
+
+def apt_packages(cmd):
+    """The packages an apt-get install in a setup command installs."""
+    return _apt_lines(cmd or "")
+
+
+def add_packages(setup, packages):
+    """The setup command with these apt packages added (to its apt-get install, or as a new first step)."""
+    have = set(apt_packages(setup))
+    new = [p for p in packages if p not in have]
+    if not new:
+        return setup or ""
+    m = APT_INSTALL.search(setup or "")
+    if m:
+        return setup[:m.end()] + " ".join(new) + " " + setup[m.end():]
+    first = "export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -y --no-install-recommends " \
+            + " ".join(new)
+    return first + (" && " + setup if setup else "")
+
+
+def merge_setup(preset, mine):
+    """The AI's own setup command joined onto the project's preset, so nothing the preset installs is lost (a
+    hand-written 'apt-get install make gcc' used to replace it and the build then had no git). Its apt packages go
+    into the preset's install line; its other steps run after the preset."""
+    preset, mine = (preset or "").strip(), (mine or "").strip()
+    if not preset or preset == mine or preset in mine:
+        return mine or preset
+    if not mine:
+        return preset
+    merged = add_packages(preset, apt_packages(mine))
+    extra = []
+    for part in re.split(r"\s*&&\s*", mine):
+        p = part.strip()
+        if not p or re.match(r"^(sudo\s+)?(export\s+DEBIAN_FRONTEND=\S+|apt(-get)?\s+(update|install)\b)", p):
+            continue
+        if p not in merged:
+            extra.append(p)
+    return merged + ("".join(" && " + p for p in extra))

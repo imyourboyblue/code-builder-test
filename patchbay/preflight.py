@@ -44,14 +44,15 @@ TOOLS = {
     "rust": {"bins": ["cargo"], "brew": "rust"},
     "go": {"bins": ["go"], "brew": "go"},
     "node": {"bins": ["node", "npm"], "brew": "node"},
-    "docker": {"bins": ["docker"], "manual": "Docker Desktop, from docker.com (an app you install yourself)."},
+    "docker": {"bins": ["docker"], "brew": "docker"},          # the command-line tool; Colima runs its Linux machine
+    "colima": {"bins": ["colima"], "brew": "colima"},
     "homebrew": {"bins": [], "manual": "Homebrew: a one-time setup in Terminal, the command is on https://brew.sh"},
 }
 ALIASES = {"cmake3": "cmake", "gmake": "make", "pkgconf": "pkg-config", "pkgconfig": "pkg-config",
            "magick": "imagemagick", "convert": "imagemagick", "python": "python3", "cargo": "rust",
            "rustc": "rust", "golang": "go", "npm": "node", "nodejs": "node", "7z": "7zip", "7zz": "7zip",
            "sevenzip": "7zip", "glibtool": "libtool", "xcode": "xcode-tools", "command-line-tools": "xcode-tools",
-           "clt": "xcode-tools", "brew": "homebrew", "dkp": "devkitpro", "devkitpro-pacman": "devkitpro"}
+           "clt": "xcode-tools", "brew": "homebrew", "docker-cli": "docker", "docker-ce": "docker", "dkp": "devkitpro", "devkitpro-pacman": "devkitpro"}
 
 # A devkitPro "group" (like switch-dev) isn't one package, so check a package that always comes with it.
 DKP_GROUPS = {"switch-dev": ["libnx", "devkitA64"], "3ds-dev": ["libctru", "devkitARM"],
