@@ -233,9 +233,10 @@ def memory_for(st):
     return m
 
 
-def view(st, messages, budget, compact):
+def view(st, messages, budget, compact, excerpts=True):
     """What the AI is sent instead of the whole chat. compact(messages, budget) shortens long step results, as
-    before. Returns the messages to send (without the system message)."""
+    before. Returns the messages to send (without the system message). excerpts=False leaves out the search
+    results, for warming up the start of the next prompt."""
     has_memory = bool(st.chat_id) and (st.chats_dir() / (st.chat_id + ".memory")).exists()
     if size(messages) <= budget and not has_memory:
         return compact(messages, budget)
@@ -260,7 +261,7 @@ def view(st, messages, budget, compact):
                 mem.save()
             recent = messages[mem.cut:]
         question = next((str(m.get("content")) for m in reversed(recent) if is_question(m)), "")
-        found = mem.search(question, int(budget * EXCERPT_SHARE))
+        found = mem.search(question, int(budget * EXCERPT_SHARE)) if excerpts else []
         notes = mem.notes_text(int(budget * NOTE_SHARE))
     out = []
     if notes:
@@ -278,29 +279,47 @@ def view(st, messages, budget, compact):
     return out + recent
 
 
-def after_answer(st, ask):
-    """Write notes for messages that moved out, in the background, so the next question doesn't wait."""
+def after_answer(st, ask, then=None):
+    """In the background, so the next question doesn't wait: write notes for messages that moved out, then run
+    then() (warming up the next prompt). Notes come first, because on some engines any other request to the model
+    replaces the prompt it has kept."""
     mem = getattr(st, "memory", None)
-    if not mem or not mem.pending_notes() or mem.lock.locked():
-        return
-    if mem.pending_notes() < FOLD_EVERY and mem.noted:
+    due = bool(mem and mem.pending_notes() and not mem.lock.locked()
+               and (mem.pending_notes() >= FOLD_EVERY or not mem.noted))
+    if not due and not then:
         return
 
     def run():
-        try:
-            mem.write_notes(ask)
-        except Exception as e:      # notes are a bonus: the search still works without them
-            print("Memory notes failed: %s" % e)
+        if due:
+            try:
+                mem.write_notes(ask)
+            except Exception as e:      # notes are a bonus: the search still works without them
+                print("Memory notes failed: %s" % e)
+        if then:
+            try:
+                then()
+            except Exception as e:
+                print("Warm-up failed: %s" % e)
     threading.Thread(target=run, daemon=True).start()
 
 
-def ollama_ask(url, model, timeout=600):
-    """A plain question to the AI on this Mac (never Claude), for writing notes."""
+def strip_thinking(text):
+    """Drop reasoning a model wrote into its answer anyway (some packagings ignore think: false)."""
+    text = text or ""
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    return text.replace("<think>", "").strip()
+
+
+def ollama_ask(url, model, num_ctx, timeout=600):
+    """A plain question to the AI on this Mac (never Claude), for writing notes. Same context size as the chat,
+    or Ollama reloads the model."""
     def ask(prompt):
         body = {"model": model, "stream": False, "keep_alive": -1, "think": False,
-                "messages": [{"role": "user", "content": prompt}], "options": {"temperature": 0}}
+                "messages": [{"role": "user", "content": prompt}],
+                "options": {"temperature": 0, "num_ctx": int(num_ctx)}}
         req = urllib.request.Request(url.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return (json.loads(r.read()).get("message") or {}).get("content", "")
+            return strip_thinking((json.loads(r.read()).get("message") or {}).get("content", ""))
     return ask

@@ -3807,7 +3807,7 @@ def compact_history(messages, keep=8, short=500, budget=None):
     return out
 
 
-def history_view(st, cfg, system, tools):
+def history_view(st, cfg, system, tools, excerpts=True):
     """What the AI is sent of the chat. A long chat keeps its older part in a memory file (notes + search, see
     memory.py) instead of shortening old messages until they're useless. "chat_memory": false in config.json turns
     that off."""
@@ -3815,23 +3815,59 @@ def history_view(st, cfg, system, tools):
     if cfg.get("chat_memory", True) is False:
         return compact_history(st.messages, budget=budget)
     try:
-        return memory.view(st, st.messages, budget, lambda ms, b: compact_history(ms, budget=b))
+        return memory.view(st, st.messages, budget, lambda ms, b: compact_history(ms, budget=b), excerpts)
     except (OSError, ValueError) as e:
         print("Chat memory: %s" % e)
         return compact_history(st.messages, budget=budget)
 
 
-def write_memory_notes(st, cfg):
-    """After an answer: notes for the older messages, written by the AI on this Mac in the background."""
-    if cfg.get("chat_memory", True) is False or not getattr(st, "memory", None):
+def with_time(messages, stamp):
+    """The time the question was asked, added to the newest question as it's sent (not kept in the chat), at the
+    end of the prompt where it doesn't stop Ollama reusing the start."""
+    i = max((i for i, m in enumerate(messages) if m.get("role") == "user"
+             and not str(m.get("content") or "").startswith("[")), default=None)
+    if i is None or not isinstance(messages[i].get("content"), str):
+        return messages
+    return messages[:i] + [dict(messages[i], content=messages[i]["content"] + stamp)] + messages[i + 1:]
+
+
+def after_answer(st, cfg):
+    """After an answer, in the background: notes for older messages (memory.py), then a warm-up. The warm-up sends
+    the start of the next prompt (instructions, notes, the chat so far) with a 1-word answer, so Ollama has it ready
+    and the next reply starts in seconds. On Ollama's llama.cpp engine it otherwise reads the whole prompt again for
+    every message (about 13 s instead of 3 s at 13K tokens, measured on a 36GB Mac). The AI on this Mac only."""
+    if cfg.get("chat_memory", True) is False or (APP and APP.claude.mode() == "always"):
         return
+    last = getattr(st, "last_ask", None)
     try:
         url = ollama_url(cfg)
         model = model_labels.active(loaded_names(cfg))
-        if model:
-            memory.after_answer(st, memory.ollama_ask(url, model))
-    except Exception as e:      # notes are a bonus: search works without them
-        print("Chat memory notes: %s" % e)
+    except Exception as e:
+        print("After answer: %s" % e)
+        return
+    if not model:
+        return
+    num_ctx = int(cfg.get("chat_context", 32768))
+
+    def warm():
+        if not last or BUSY.locked() or memory.size(st.messages) < WARM_MIN:
+            return          # a new question already started, or the chat is short enough to read quickly
+        system, tools = last
+        body = {"model": model, "stream": False, "keep_alive": -1,
+                "messages": [{"role": "system", "content": system}] + history_view(st, cfg, system, tools, False),
+                "options": {"num_ctx": num_ctx, "num_predict": 1}}
+        if model_labels.can_think(url, model) is not False:
+            body["think"] = False
+        if tools and model_labels.can_use_tools(url, model) is not False:
+            body["tools"] = tools
+        req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as r:
+            r.read()
+    memory.after_answer(st, memory.ollama_ask(url, model, num_ctx), warm)
+
+
+WARM_MIN = 6000     # characters of chat before a warm-up is worth it
 
 
 def history_budget(cfg, system, tools):
@@ -3889,9 +3925,9 @@ def chat_turn(st, user_text, emit, user_msg=None):
     system += project_rules(st, names)
     if self_ask:
         system += SELF_HINT
-    # At the end, so the unchanging start of the prompt can be reused by Ollama from one question to the next.
-    system += "\n\nRight now it is %s (%s, this Mac's time zone)." % (
-        time.strftime("%A %Y-%m-%d %H:%M"), time.strftime("%Z") or "local time")
+    # The date only: the time changes every minute and would make Ollama read the whole chat again. The time goes
+    # with the question instead (with_time).
+    system += "\n\nToday is %s (this Mac's time zone)." % time.strftime("%A %Y-%m-%d")
     tools = claude_tools(tools) + [use_tools_spec(groups, st.tool_groups)]
     st.tool_ctx = {"all": all_tools, "groups": groups, "list": tools, "system": SYSTEM if not getattr(st, "home", False)
                    else home_system(), "all_names": all_names}
@@ -3928,7 +3964,7 @@ def chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
             (last_question(st) or "")[:60])
         TIMINGS.append(line)
         print("Timing: " + line)
-        write_memory_notes(st, cfg)
+        after_answer(st, cfg)
 
 
 def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None):
@@ -3940,6 +3976,7 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
         system += ("\n\nThe user approved this plan. Carry it out now, step by step, without stopping to ask. "
                    "Say in one short line what each step does.\n" + "\n".join(
                        "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
+    stamp = "\n\n[Sent %s, %s.]" % (time.strftime("%H:%M"), time.strftime("%Z") or "local time")
     fails, nudges, tried, idle = {}, 0, [], 0
     idle_limit = 15 if st.plan else 8
     base = PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS
@@ -3957,8 +3994,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                                                                "far. Its advice, to weigh and use if it helps:\n%s]"
                                                                % advice})
         t0 = time.time()
-        msg = ask_model(cfg, [{"role": "system", "content": system}] + history_view(st, cfg, system, tools),
-                        tools, emit)
+        st.last_ask = (system, tools)
+        msg = ask_model(cfg, [{"role": "system", "content": system}]
+                        + with_time(history_view(st, cfg, system, tools), stamp), tools, emit)
         st.timing.append(("AI", time.time() - t0))
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
