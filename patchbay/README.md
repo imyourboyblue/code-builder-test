@@ -286,8 +286,13 @@ for EglantinePS5 and run its tests").
 - **Never sends to a device from inside.** Commands like `make install` that upload to a console are blocked in the
   sandbox. Copy the result out (**Copy result back…** copies a whole app folder, with backup and Undo), then the
   chat sends it from the Mac on a card.
-- **ARM or x86.** Sandboxes run ARM Linux (fast on Apple silicon). If a tool only exists for Intel/AMD (an
-  "Exec format error"), **Use x86 (Rosetta)** runs it as x86 Linux instead: it works, but builds are slower.
+- **ARM or x86.** Sandboxes run ARM Linux (fast on Apple silicon). Some projects build little programs for the build
+  machine itself that only work on Intel/AMD (errors like "this header is for x86 only", `REG_RIP`, or an "Exec
+  format error"). No package fixes that, so PatchBay looks for it in the project's files before the first build, and
+  in the errors after one, and shows one card: **Build sandbox … as x86 Linux (through Rosetta)**. It works, but
+  builds are slower than ARM (often 1.5 to 2 times as long). Colima then runs with Apple's Rosetta translator
+  (`--vm-type vz --vz-rosetta`) instead of QEMU, which is many times slower; the card shows that step too (and installs
+  Rosetta if it's missing). **Use x86 (Rosetta)** in the Sandbox tab does the same by hand.
 - **Fixes stick.** When the sandbox's own tools are the problem, PatchBay fixes the tools, not your project, and
   saves the fix so it holds after `make clean`, a new container and a **Reset**. Example: on ARM Linux, GNU
   `objcopy`/`nm` can't read x86 (PS5) files, so PatchBay makes them mean the LLVM versions in every command (a

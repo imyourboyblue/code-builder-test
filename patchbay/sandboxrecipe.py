@@ -572,3 +572,83 @@ def add_found_packages(setup, packages):
     else:
         parts.insert(at + 1, step)
     return " && ".join(parts)
+
+
+# ---------------------------------------------------------------- x86-only code (needs an x86 sandbox)
+# Some projects build and run small programs for the BUILD machine itself as part of the build (tests, checks, code
+# generators), written only for x86 Linux. On Apple silicon the sandbox is ARM Linux, so those fail ("this header is for
+# x86 only", gregs[REG_RIP]) after a long build. A cross-compile (clang --target x86_64-...) is fine on ARM: only code
+# built for the sandbox's own processor counts.
+X86_LINUX_ONLY = re.compile(r"\bgregs\s*\[\s*REG_(RIP|RSP|RAX|RBP)\b|\bREG_RIP\b")
+X86_FLAG = re.compile(r"-DARCHITECTURE_x86_64\b|-march=(x86-64(-v\d)?|haswell|skylake\w*|znver\d|core2|nehalem)\b|"
+                      r"(?<![\w-])-m(sse[\d.]*|ssse3|avx\d*|avx512\w*|popcnt|bmi2?|pclmul|aes|fma|f16c)\b|"
+                      r"(?<![\w-])-m32\b")
+HOST_CC = re.compile(r"(?<![\w/.-])(clang\+\+|clang|g\+\+|gcc|cc|c\+\+)(-\d+)?(?![\w.-])")
+CROSS_MARK = re.compile(r"--?target\b|x86_64-[a-z0-9]+-[a-z0-9]+|-isysroot\b|--sysroot\b|_COMPILER_TARGET|"
+                        r"\$\{?(TARGET|CROSS|SYSROOT)", re.I)
+AMD64_PLATFORM = re.compile(r"--platform[= ](linux/)?(amd64|x86_64)\b|runs-on:\s*\[?\s*ubuntu-\S*x64", re.I)
+SKIP_WALK = {".git", ".deps", "build", "out", "dist", "node_modules", "third_party", "thirdparty", "external", "vendor",
+             "externals", "subprojects", ".cache", "__pycache__", "target"}
+SOURCE_ENDS = (".h", ".hpp", ".hh", ".c", ".cc", ".cpp", ".cxx", ".inl")
+SOURCE_MAX = 3000
+DIR_MAX = 4000
+
+
+def _source_files(top):
+    """Up to SOURCE_MAX of the project's own C/C++ files (not fetched or vendored code), stopping early on huge
+    folders."""
+    found, dirs = [], 0
+    for root, names, files in os.walk(top):
+        names[:] = sorted(n for n in names if n not in SKIP_WALK and not n.startswith("."))
+        dirs += 1
+        if dirs > DIR_MAX:
+            break
+        for f in sorted(files):
+            if f.endswith(SOURCE_ENDS):
+                found.append(Path(root) / f)
+                if len(found) >= SOURCE_MAX:
+                    return found
+    return found
+
+
+def x86_signs(source):
+    """Signs that the project's build needs an x86-64 (Intel/AMD) Linux machine, read from its files in a second or
+    two: build scripts that compile x86-only code for the build machine itself (an x86 flag with no cross target),
+    source that uses x86 Linux's own registers (gregs[REG_RIP]), or Docker/CI files that ask for linux/amd64.
+    Returns up to 6 plain lines like "tools/check.py:98: compiles with -DARCHITECTURE_x86_64 for the build machine"."""
+    top = Path(os.path.expanduser(str(source))).resolve()
+    if not top.is_dir():
+        return []
+    signs = []
+    files = _scan_files(top) + sorted(top.glob("*.py")) + sorted(top.glob("tools/*.mk")) + \
+        [p for p in (top / "Dockerfile", top / ".devcontainer" / "Dockerfile", top / "docker" / "Dockerfile")
+         if p.is_file()]
+    seen = set()
+    for p in files:
+        if p in seen:
+            continue
+        seen.add(p)
+        lines = _read(p).splitlines()
+        for i, line in enumerate(lines):
+            if AMD64_PLATFORM.search(line):
+                signs.append("%s:%d: asks for an x86 (amd64) Linux machine" % (_rel(top, p), i + 1))
+                break
+            m = X86_FLAG.search(line)
+            if not m:
+                continue
+            near = "\n".join(lines[max(0, i - 3):i + 4])
+            if HOST_CC.search(near) and not CROSS_MARK.search(near):
+                signs.append("%s:%d: compiles with %s for the build machine itself (x86 only)"
+                             % (_rel(top, p), i + 1, m.group(0)))
+                break
+        if len(signs) >= 3:
+            break
+    for p in _source_files(top):
+        t = _read(p)
+        m = X86_LINUX_ONLY.search(t) if t else None
+        if m:
+            n = t.count("\n", 0, m.start()) + 1
+            signs.append("%s:%d: reads x86 processor registers (REG_%s), which only exist on x86 Linux"
+                         % (_rel(top, p), n, m.group(1) or "RIP"))
+            break
+    return signs[:6]
