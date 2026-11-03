@@ -72,6 +72,7 @@ import githubpush
 import research
 import macaccess
 import namestrip
+import sandbox
 import stopper
 import codereview
 import codetools
@@ -2451,6 +2452,254 @@ def t_mac_undo(st, emit, a):
     return access_card(st, emit, {"action": "undo", "number": e["id"], "path": e["path"]}, words, words, "")
 
 
+# ---- sandboxes: a throwaway copy of a project to build and test in (see sandbox.py)
+# Making a sandbox and running commands in it never touches the real project, so no card is needed. Turning its
+# network on, resetting or deleting it, and copying a file back out into the real project each show a card first.
+
+SANDBOX_STOPS = {}      # sandbox name -> Stop event for a run started from the Sandbox tab
+SANDBOX_LIVE = {}       # sandbox name -> {"running", "lines", "code", "command"} for the Sandbox tab
+
+
+def sb_ready():
+    cfg = access_cfg()
+    sandbox.ROOT = Path(os.path.expanduser(cfg.get("data_folder") or "~/PatchBay-data")) / "sandboxes"
+
+
+def sb(fn, *args, **kw):
+    sb_ready()
+    try:
+        return fn(*args, **kw)
+    except sandbox.SandboxError as e:
+        raise ToolError(str(e))
+    except OSError as e:
+        raise ToolError("The Mac said: %s" % e)
+
+
+def sandbox_sources():
+    """Folders a sandbox may copy: every device's project folders and the Mac folders approved in Setup."""
+    out = []
+    if APP:
+        for _, cfg in APP.registry.all():
+            for pr in projects.all_projects(cfg):
+                out.append({"label": "%s (project for %s)" % (pr["name"], cfg["device_name"]),
+                            "path": str(Path(os.path.expanduser(pr["folder"])).resolve()), "name": pr["name"]})
+    for f in macaccess.folders(access_cfg()):
+        out.append({"label": "%s (approved Mac folder)" % f.name, "path": str(f.resolve()), "name": f.name})
+    return out
+
+
+def sandbox_source_ok(path):
+    """A folder may be copied into a sandbox if it is a project folder, or inside a folder approved in Setup → Mac."""
+    p = Path(os.path.expanduser(str(path or ""))).resolve()
+    for s in sandbox_sources():
+        root = Path(s["path"])
+        if p == root or root in p.parents:
+            return p
+    raise ToolError("PatchBay can only copy a project folder, or a folder inside one approved in 🩺 Setup → Mac, "
+                    "into a sandbox. %s is neither." % p)
+
+
+def sandbox_card(st, emit, change, title, diff, label, what):
+    pid = uuid.uuid4().hex[:8]
+    st.pending[pid] = {"kind": "sandbox", "remote": change.get("sandbox") or "", "source": "", "note": what,
+                       "change": change}
+    emit({"type": "confirm", "id": pid, "kind": "sandbox", "title": title, "diff": clip(diff, 20000),
+          "label": label, "what": what, "computer": APP.computer if APP else "the Mac", "device": "this Mac"})
+    return ("A card showing this is on the page. Nothing has happened yet; the user presses the button on it. Tell "
+            "them in one plain sentence what it does.")
+
+
+def confirm_sandbox(st, p, emit):
+    ch = p["change"]
+    a = ch["action"]
+    if a == "network_on":
+        s = sb(sandbox.set_options, ch["sandbox"], network=True)
+        result = "Network is ON for sandbox %s. Turn it off again when the downloads are done." % s["name"]
+    elif a == "reset":
+        sb(sandbox.reset, ch["sandbox"], emit)
+        result = "Sandbox %s was emptied and the project copied in fresh." % ch["sandbox"]
+    elif a == "delete":
+        result = sb(sandbox.delete, ch["sandbox"])
+    elif a == "copy_out":
+        result = sb(sandbox.copy_out, ch)
+    elif a == "undo":
+        result = sb(sandbox.undo_copy, ch["number"])
+    else:
+        raise ToolError("Unknown sandbox change.")
+    emit({"type": "answer", "text": result})
+    st.messages.append({"role": "user", "content": "[I confirmed the sandbox card. Result: %s]" % result})
+
+
+def sandbox_name(st, a):
+    name = (a.get("sandbox") or "").strip()
+    if name:
+        return name
+    have = sb(sandbox.all_sandboxes)
+    if len(have) == 1:
+        return have[0]["name"]
+    raise ToolError("Say which sandbox: %s." % (", ".join(x["name"] for x in have) or "there are none yet; make one "
+                                                "with sandbox_create"))
+
+
+@both_tool("sandbox_list", "List the sandboxes (throwaway copies of projects to build and test in) and whether the "
+           "Linux container tool is ready.")
+def t_sandbox_list(st, emit, a):
+    eng = sb(sandbox.engine_status)
+    rows = [sandbox.summary(x) for x in sb(sandbox.all_sandboxes)]
+    head = ("Linux sandboxes run with %s (%s)." % (eng["engine"], "running" if eng["running"] else "not running: " +
+                                                   eng["help"]) if eng["engine"] else
+            "No Linux container tool yet. " + eng["help"])
+    return head + "\n" + ("\n".join(rows) if rows else "No sandboxes yet. Make one with sandbox_create.")
+
+
+@both_tool("sandbox_create", "Make a sandbox: a COPY of a project where you can build and run tests freely without "
+           "touching the real files, passwords or Keychain. kind linux = a Linux container (default image ubuntu:24.04; "
+           "for projects that build on Linux/Ubuntu); kind mac = on this Mac, locked down (for devkitPro/Xcode builds). "
+           "Network starts OFF. Give project (a saved project) or folder (an approved Mac folder).",
+           {"project": S, "folder": S, "name": dict(S, description="Short name; default the project's name"),
+            "kind": {"type": "string", "enum": ["linux", "mac"]},
+            "image": dict(S, description="Linux image, e.g. ubuntu:24.04 or debian:12")})
+def t_sandbox_create(st, emit, a):
+    if a.get("folder"):
+        src = sandbox_source_ok(a["folder"])
+        name = a.get("name") or src.name
+    else:
+        if getattr(st, "home", False):
+            raise ToolError("From this chat, give the folder (a project folder or an approved Mac folder).")
+        pr = project(st, a.get("project"))
+        src, name = pe(projects.folder_of, pr), a.get("name") or pr["name"]
+    name = re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:40].strip("-.") or "sandbox"
+    s = sb(sandbox.create, name, str(src), a.get("kind") or "linux", a.get("image") or None, emit)
+    return ("Made sandbox %s with a copy of %s. Nothing in the real folder changes. Run commands in it with "
+            "sandbox_run. %s" % (s["name"], src, sandbox.summary(s)))
+
+
+@both_tool("sandbox_run", "Run a shell command inside a sandbox, in its copy of the project (e.g. make, cmake ... , "
+           "./configure, pytest, ./run-tests.sh, apt-get install -y X when the network is on). Runs straight away (no "
+           "card): it can't touch the real project. You get the output.",
+           {"sandbox": S, "command": S}, ["command"])
+def t_sandbox_run(st, emit, a):
+    name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
+    if SANDBOX_LIVE.get(name, {}).get("running"):
+        raise ToolError("Something is already running in sandbox %s (from the Sandbox tab). Wait for it." % name)
+    emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
+    base = projects.build_env()["PATH"]
+    code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
+    where = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
+    result = "In %s %s, %s %s (exit code %d)." % (where, name, a.get("command", "")[:80],
+                                                  "worked" if code == 0 else "failed", code)
+    if code != 0 and not s["network"] and re.search(r"(Temporary failure resolving|Could not resolve|Network is "
+                                                     r"unreachable|network is unreachable|Operation not permitted.*"
+                                                     r"(connect|socket))", out or ""):
+        result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
+    summary, detail = show_output(emit, result, code, out, a.get("command") or "")
+    return detail
+
+
+@both_tool("sandbox_files", "List files in a sandbox's copy of the project. changed=true lists only files that are "
+           "new or different from the real project (what a build made).",
+           {"sandbox": S, "path": S, "changed": B})
+def t_sandbox_files(st, emit, a):
+    name = sandbox_name(st, a)
+    if a.get("changed"):
+        rows = sb(sandbox.changed_files, name)
+        return "\n".join("%s  %s  (%s)" % (k, rel, sandbox.human(n)) for k, rel, n in rows) or \
+            "Nothing in sandbox %s differs from the real project." % name
+    return clip(sb(sandbox.listing, name, a.get("path") or ""))
+
+
+@both_tool("sandbox_read", "Read a text file inside a sandbox (a log, a test report, a changed source file).",
+           {"sandbox": S, "path": S}, ["path"])
+def t_sandbox_read(st, emit, a):
+    name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
+    p = sb(sandbox.inside_work, s, a.get("path"))
+    if not p.is_file():
+        raise ToolError("%s isn't a file in sandbox %s." % (a.get("path"), name))
+    data = p.read_bytes()[:400000]
+    if b"\0" in data[:8000]:
+        return "%s is a binary file (%s)." % (a.get("path"), sandbox.human(p.stat().st_size))
+    return clip(data.decode("utf-8", "replace"))
+
+
+@both_tool("propose_sandbox_copy_out", "Copy a file (e.g. the built program, or a fixed source file) out of a "
+           "sandbox into the real project. Does NOT copy: shows a card. The file it replaces is backed up and it can "
+           "be undone. 'to' is a path inside the project; default the same place.",
+           {"sandbox": S, "path": S, "to": S}, ["path"])
+def t_sandbox_copy_out(st, emit, a):
+    name = sandbox_name(st, a)
+    change, words = sb(sandbox.plan_copy_out, name, a.get("path"), a.get("to") or None)
+    change["action"] = "copy_out"
+    diff = words
+    src, dest = Path(change["from"]), Path(change["to"])
+    if dest.is_file() and src.stat().st_size < 400000 and dest.stat().st_size < 400000:
+        try:
+            old, new = dest.read_text("utf-8"), src.read_text("utf-8")
+            diff += "\n\n" + "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
+                                                          "before: " + dest.name, "after: " + dest.name, n=3))
+        except UnicodeDecodeError:
+            pass
+    return sandbox_card(st, emit, change, "Copy %s out of sandbox %s" % (Path(change["rel"]).name, name), diff,
+                        "Copy it out", "This copies one file from the sandbox into your real project. The file "
+                        "there now is backed up first, and it can be undone.")
+
+
+@both_tool("propose_sandbox_settings", "Change a sandbox: network (true needs a card the user confirms; false is "
+           "immediate), cpus, memory_gb, timeout_min (per command), disk_gb, image (Linux).",
+           {"sandbox": S, "network": B, "cpus": I, "memory_gb": I, "timeout_min": I, "disk_gb": I, "image": S})
+def t_sandbox_settings(st, emit, a):
+    name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
+    opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image") if a.get(k) is not None}
+    if a.get("network") is False:
+        opts["network"] = False
+    msg = ""
+    if opts:
+        s = sb(sandbox.set_options, name, **opts)
+        msg = "Changed: %s. " % ", ".join("%s=%s" % kv for kv in opts.items())
+    if a.get("network") and not s["network"]:
+        return msg + sandbox_card(
+            st, emit, {"action": "network_on", "sandbox": name}, "Turn on the network for sandbox %s" % name,
+            "Sandbox %s will be able to reach the internet (for downloads like apt-get install or git clone).\n"
+            "It still can't see your real files, passwords or Keychain." % name, "Turn network on",
+            "Programs in the sandbox can then download things. Turn it off again when done.")
+    return msg + sandbox.summary(s)
+
+
+@both_tool("propose_sandbox_reset", "Empty a sandbox and copy the real project in fresh (anything installed or built "
+           "inside is thrown away). Shows a card.", {"sandbox": S})
+def t_sandbox_reset(st, emit, a):
+    name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
+    return sandbox_card(st, emit, {"action": "reset", "sandbox": name}, "Reset sandbox %s" % name,
+                        "Throw away everything built or installed in sandbox %s and copy\n%s in fresh." % (
+                            name, s["source"]), "Reset it", "Your real project isn't touched.")
+
+
+@both_tool("propose_sandbox_delete", "Delete a sandbox completely. Shows a card. The real project isn't touched.",
+           {"sandbox": S})
+def t_sandbox_delete(st, emit, a):
+    name = sandbox_name(st, a)
+    sb(sandbox.load, name)
+    return sandbox_card(st, emit, {"action": "delete", "sandbox": name}, "Delete sandbox %s" % name,
+                        "Delete sandbox %s and everything in it." % name, "Delete it",
+                        "Only the sandbox goes. Your real project isn't touched.")
+
+
+@both_tool("propose_sandbox_undo", "Undo a file copied out of a sandbox, by its number (sandbox_list shows recent "
+           "copies). Shows a card.", {"number": I}, ["number"])
+def t_sandbox_undo(st, emit, a):
+    rows = sb(sandbox.recent_copies, 50)
+    e = next((x for x in rows if x["id"] == int(a.get("number") or 0) and not x.get("undone")), None)
+    if not e:
+        raise ToolError("There's no copy #%s to undo. Recent: %s" % (a.get("number"), ", ".join(
+            "#%d %s" % (x["id"], x["file"]) for x in rows[:8]) or "none"))
+    return sandbox_card(st, emit, {"action": "undo", "number": e["id"], "sandbox": e["sandbox"]},
+                        "Undo copy #%d" % e["id"], "Put %s back the way it was before copy #%d." % (e["to"], e["id"]),
+                        "Undo it", "")
+
+
 def run_review(st, emit, source, focus):
     cfg = st.cfg() if not getattr(st, "home", False) else APP.home.cfg()
     folder = Path(os.path.expanduser(cfg["data_folder"])) / "reviews"
@@ -2715,6 +2964,10 @@ and builds, and when it builds cleanly offer propose_install to put the new file
 usually built with devkitPro and libnx; firmware updates usually mean building with the newest libnx and fixing code \
 where its functions changed. read_web_page can fetch public release notes; never put the user's code or device \
 details into an address.
+- To try things out freely (run tests, try build commands, install Linux packages) without cards, use a sandbox: \
+sandbox_create (a copy of the project; kind linux for Linux/Ubuntu projects), then sandbox_run as often as needed. \
+Its internet is off; ask with propose_sandbox_settings network true only when a download is needed. When it works, \
+propose_sandbox_copy_out the files that should go back into the real project.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
 """ + SELF_EDIT_RULES + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
@@ -3028,7 +3281,8 @@ LOOKUP_TOOLS = {"latest_release", "find_github_repo", "read_repo_file", "web_sea
 PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "propose_build", "propose_install",
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
-                  "propose_device_command", "private_build"}
+                  "propose_device_command", "private_build", "sandbox_create", "sandbox_run",
+                  "propose_sandbox_settings", "propose_sandbox_copy_out"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -3689,6 +3943,14 @@ HOME_GROUPS = {
                  r"setting|\bmodel\b|password|writing|change"),
     "mac": DEVICE_GROUPS["mac"],
 }
+SANDBOX_GROUP = ("sandboxes: a throwaway copy of a project to build and test in (Linux container or locked-down Mac), "
+                 "network off by default, results copied out only with a card",
+                 ["sandbox_list", "sandbox_create", "sandbox_run", "sandbox_files", "sandbox_read",
+                  "propose_sandbox_copy_out", "propose_sandbox_settings", "propose_sandbox_reset",
+                  "propose_sandbox_delete", "propose_sandbox_undo"],
+                 r"sandbox|container|docker|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests")
+DEVICE_GROUPS["sandbox"] = SANDBOX_GROUP
+HOME_GROUPS["sandbox"] = SANDBOX_GROUP
 PRIVATE_BUILD_GROUP = ("the private builder: the user's idea becomes a generic spec on this Mac, then Claude writes "
                        "the code", ["private_build"], r"private build|spec|privacy|private|anonym|firewall")
 DEVICE_GROUPS["private"] = PRIVATE_BUILD_GROUP
@@ -4133,6 +4395,8 @@ STEP_WORDS = {
     "patchbay_files": "Listing PatchBay's own files", "patchbay_read": "Reading PatchBay's {path}",
     "patchbay_search": "Searching PatchBay for {text}", "propose_patchbay_change": "Preparing a change to PatchBay's {path}",
     "propose_patchbay_restart": "Preparing a restart", "set_steps": "Writing the plan", "step_done": "Step {step} checked",
+    "sandbox_run": "Running {command} in sandbox {sandbox}", "sandbox_create": "Making a sandbox",
+    "sandbox_list": "Listing the sandboxes", "sandbox_files": "Listing sandbox files", "sandbox_read": "Reading {path} in the sandbox",
     "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
     "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
     "check_address": "Checking {host} port {port}", "add_device": "Adding a device",
@@ -4197,6 +4461,9 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
     if p["kind"] in ("spec_claude", "spec_files"):
         del st.pending[pid]
         return confirm_spec(st, p, emit)
+    if p["kind"] == "sandbox":
+        del st.pending[pid]
+        return confirm_sandbox(st, p, emit)
     if p["kind"] in ("self_edit", "self_restart"):
         if p.get("word") and typed.strip().lower() != p["word"].lower():
             raise ToolError("This change touches one of PatchBay's safety rules, so type %s to confirm it." % p["word"])
@@ -4619,6 +4886,72 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_port
         return self.headers.get("Host") in ("127.0.0.1:%d" % port, "localhost:%d" % port, "[::1]:%d" % port)
 
+    def sandbox_api(self, data):
+        """The Sandbox tab's buttons. Pressing a button there (and OK on its question) is the user's confirm."""
+        a, name = data.get("action"), data.get("name") or ""
+        if not self.from_this_mac() and a not in ("stop", "changed"):
+            raise ToolError("Sandboxes can only be changed on the Mac itself.")
+        if a == "create":
+            src = sandbox_source_ok(data.get("folder"))
+            nm = re.sub(r"[^A-Za-z0-9_.-]", "-", name or src.name)[:40].strip("-.") or "sandbox"
+            s = sb(sandbox.create, nm, str(src), data.get("kind") or "linux", data.get("image") or None)
+            return {"text": "Made sandbox %s." % s["name"]}
+        if a == "reset":
+            sb(sandbox.reset, name)
+            return {"text": "Sandbox %s was emptied and the project copied in fresh." % name}
+        if a == "delete":
+            if SANDBOX_LIVE.get(name, {}).get("running"):
+                raise ToolError("Something is still running in it. Press Stop first.")
+            SANDBOX_LIVE.pop(name, None)
+            return {"text": sb(sandbox.delete, name)}
+        if a == "set":
+            opts = {k: data.get(k) for k in ("network", "cpus", "memory_gb", "timeout_min", "disk_gb", "image")
+                    if data.get(k) not in (None, "")}
+            sb(sandbox.set_options, name, **opts)
+            return {"text": "Saved."}
+        if a == "changed":
+            return {"files": [{"state": k, "path": r, "size": sandbox.human(n)}
+                              for k, r, n in sb(sandbox.changed_files, name)]}
+        if a == "copy_out":
+            change, words = sb(sandbox.plan_copy_out, name, data.get("path"), None)
+            return {"text": sb(sandbox.copy_out, change)}
+        if a == "undo":
+            return {"text": sb(sandbox.undo_copy, data.get("id"))}
+        if a == "stop":
+            ev = SANDBOX_STOPS.get(name)
+            if ev:
+                ev.set()
+            return {"text": "Stopping..."}
+        if a == "run":
+            cmd = (data.get("command") or "").strip()
+            sb(sandbox.load, name)
+            if not cmd:
+                raise ToolError("Type a command to run.")
+            if SANDBOX_LIVE.get(name, {}).get("running"):
+                raise ToolError("Something is already running in this sandbox.")
+            live = {"running": True, "lines": [], "code": None, "command": cmd}
+            SANDBOX_LIVE[name] = live
+            stop = SANDBOX_STOPS[name] = threading.Event()
+
+            def emit(ev):
+                if ev.get("type") in ("progress", "status"):
+                    live["lines"].append(ev.get("text", ""))
+                    del live["lines"][:-400]
+
+            def work():
+                try:
+                    code, out = sb(sandbox.run, name, cmd, emit, stop, projects.build_env()["PATH"])
+                    live["lines"] = out.splitlines()[-400:]
+                    live["code"] = code
+                except ToolError as e:
+                    live["lines"].append(str(e))
+                    live["code"] = -1
+                finally:
+                    live["running"] = False
+            threading.Thread(target=work, daemon=True).start()
+            return {"text": "Running."}
+        raise ToolError("Unknown sandbox action.")
+
     def from_this_mac(self):
         # Refuse requests that reach us under another name (a trick some websites use).
         return self.client_address[0] in LOOPBACK and self.host_is_local()
@@ -4893,6 +5226,17 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 self.json({"loaded": rows, "gb": round(sum(m["gb"] for m in rows), 1), "memory_gb": mac_memory_gb()})
             except (OSError, ValueError) as e:
                 self.json({"loaded": [], "gb": 0, "error": "Couldn't ask Ollama: %s" % e})
+        elif path == "/api/sandbox":
+            sb_ready()
+            rows = []
+            for x in sandbox.all_sandboxes():
+                live = SANDBOX_LIVE.get(x["name"]) or {}
+                rows.append(dict(x, summary=sandbox.summary(x), running=bool(live.get("running")),
+                                 live="\n".join(live.get("lines", [])[-200:]), live_command=live.get("command", ""),
+                                 live_code=live.get("code")))
+            self.json({"engine": sandbox.engine_status(), "sandboxes": rows, "sources": sandbox_sources(),
+                       "copies": sandbox.recent_copies(15), "here": self.from_this_mac(),
+                       "mac_sandbox": Path("/usr/bin/sandbox-exec").exists()})
         elif path == "/api/mac":
             cfg = APP.home.cfg()
             self.json({"folders": [str(f) for f in macaccess.folders(cfg)], "calendar": bool(cfg.get("calendar_access")),
@@ -5375,6 +5719,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             self.json({"on": on})
         elif path.startswith("/api/names/"):
             self.names_api(path, data)
+        elif path == "/api/sandbox":
+            self.json(self.sandbox_api(data))
         elif path == "/api/mac/undo":
             try:
                 self.json({"text": macaccess.undo(data.get("id")), "recent": macaccess.recent(15)})

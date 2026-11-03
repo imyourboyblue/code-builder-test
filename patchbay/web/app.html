@@ -963,6 +963,7 @@ function setSend(running){send.textContent=running?'Stop':'Send';send.classList.
   send.onclick=running?async e=>{e.preventDefault();send.textContent='Stopping…';try{await postJSON('/api/stop',{device:cur})}catch(x){}}:null}
 function card(ev,closed){
   if(ev.kind==='mac_access')return accessCard(ev,closed);
+  if(ev.kind==='sandbox')return sandboxCard(ev,closed);
   if(ev.self)return selfCard(ev,closed);
   if(ev.on_mac)return macCard(ev,closed);
   const c=add('card','<h3>'+esc(ev.title)+'</h3>'+
@@ -1103,7 +1104,7 @@ async function openSetup(msg){
       (c.advice&&c.level!=='ok'?'<div style="font-size:12.5px;color:var(--mute)">'+esc(c.advice)+'</div>':'')+'</div>'+
       (c.fix?'<button class="sc-fix" data-id="'+esc(c.fix_id)+'">'+esc(c.fix)+'</button>':'')+'</div>';
   const pane=(id,html)=>'<div class="sc-pane" data-pane="'+id+'">'+html+'</div>';
-  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App'],['mac','Mac'],['look','Look'],['data','Updates']];
+  const tabs=[['health','Health'+(bad.length?' <span class="sc-n">'+bad.length+'</span>':'')],['ai','AI'],['app','App'],['mac','Mac'],['sandbox','Sandbox'],['look','Look'],['data','Updates']];
   $('sc-body').innerHTML=(msg?'<div style="margin-bottom:8px"><b>'+esc(msg)+'</b></div>':'')+
     '<div class="sc-tabs">'+tabs.map(t=>'<button class="sc-tab" data-tab="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
     pane('health',(bad.length?bad.map(chk).join(''):'<div style="padding:6px 0">Everything is working.</div>')+
@@ -1122,6 +1123,7 @@ async function openSetup(msg){
       (a.build_error?'<details style="margin-top:6px"><summary style="cursor:pointer;font-size:13px">What went wrong building the window version</summary><pre style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow:auto">'+esc(a.build_error)+'</pre></details>':''):'')+
       '<div id="sc-lap" style="font-size:13.5px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">Checking…</div>')+
     pane('mac','<div id="sc-mac" style="font-size:13.5px">Checking…</div>')+
+    pane('sandbox','<div id="sc-sb" style="font-size:13.5px">Checking…</div>')+
     pane('look','<div id="sc-look"></div>')+
     pane('data','<h4 style="margin:0 0 4px">Updates</h4><div id="sc-upd" style="font-size:13.5px">Checking for updates…</div>'+
       '<h4 style="margin:16px 0 4px">Send PatchBay\'s changes to GitHub</h4><div id="sc-gh" style="font-size:13.5px">Checking…</div>'+
@@ -1144,7 +1146,7 @@ async function openSetup(msg){
   const be=$('sc-berr');if(be)be.onclick=async()=>{say((await copyText(a.build_error))?'Copied. Paste it into your message to me.':'Couldn\'t copy automatically. Open the box below and copy the text.')};
   const lg=$('sc-login');if(lg)lg.onchange=async()=>{try{const r=await postJSON('/api/macapp',{action:lg.checked?'login_on':'login_off'});lg.checked=!!r.login;
     say(lg.checked?'PatchBay will now start by itself when you log in.':'PatchBay won\'t start by itself any more. If it still opens after a restart, untick <b>Reopen windows when logging back in</b> in the Mac\'s Restart or Shut Down box.')}catch(e){lg.checked=!lg.checked;say(esc(e.message))}};
-  drawLook();drawAiComputer();drawLaptop();drawModels();drawGithub();drawMac();
+  drawLook();drawAiComputer();drawLaptop();drawModels();drawGithub();drawMac();drawSandbox();
   $('sc-again').onclick=()=>openSetup();
   checkUpdate();
   $('sc-report').onclick=async()=>{try{const r=await getJSON('/api/report');const okc=await copyText(r.text);
@@ -1256,6 +1258,68 @@ async function drawMac(note){const box=$('sc-mac');if(!box)return;let j;
   const cal=$('mac-cal');if(cal)cal.onchange=async()=>{cal.disabled=true;if(cal.checked)m('Asking Calendar… if macOS shows a box, choose OK.');
     try{const r=await postJSON('/api/mac/calendar',{on:cal.checked});drawMac(r.calendar?'Calendar is on ('+r.calendars.length+' calendar'+(r.calendars.length===1?'':'s')+' found).':'Calendar is off.')}catch(e){cal.checked=!cal.checked;cal.disabled=false;err(e)}};
   box.querySelectorAll('.mac-undo').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await postJSON('/api/mac/undo',{id:+b.dataset.id});drawMac(esc(r.text))}catch(e){b.disabled=false;err(e)}});}
+
+// ---- Sandboxes: throwaway copies of a project to build and test in (sandbox.py)
+let SB_POLL=null;
+async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
+  try{j=await getJSON('/api/sandbox')}catch(e){box.textContent=e.message;return}
+  const e=j.engine,here=j.here;
+  let h=(note?'<div class="md-note">'+note+'</div>':'')+
+    '<div class="md-why">A sandbox is a <b>copy</b> of a project where PatchBay can build and run tests by itself, with no cards, because it can\'t touch your real files, passwords or Keychain. The internet is off unless you switch it on. Results only go back into the real project when you press <b>Copy back</b> (the old file is backed up, with Undo).</div>'+
+    '<div class="md-why" style="margin-top:6px"><b>Linux sandboxes:</b> '+(e.engine?esc(e.engine)+(e.running?' is ready.':' is installed but not running. '+esc(e.help)+' (PatchBay also tries to start it by itself.)'):esc(e.help))+'</div>';
+  h+=j.sandboxes.length?j.sandboxes.map(s=>{
+    const lim=s.kind==='linux'?s.cpus+' CPUs · '+s.memory_gb+' GB memory · ':'';
+    return '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)" data-sb="'+esc(s.name)+'">'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1">'+esc(s.name)+'</b><span class="md-chip">'+(s.kind==='linux'?'Linux · '+esc(s.image_in_use||s.image):'Mac, locked down')+'</span>'+
+      '<span class="md-chip'+(s.network?' warn':'')+'">internet '+(s.network?'ON':'off')+'</span></div>'+
+      '<div class="md-why">Copy of <code>'+esc(s.source)+'</code> · '+lim+s.timeout_min+' min per command · '+s.disk_gb+' GB disk'+(s.skipped&&s.skipped.length?' · left out as secrets: '+esc(s.skipped.slice(0,6).join(', ')):'')+'</div>'+
+      (here?'<div style="display:flex;gap:6px;margin-top:6px"><input class="sb-cmd" placeholder="'+(s.kind==='linux'?'e.g. apt-get update && apt-get install -y build-essential, or make':'e.g. make')+'" style="flex:1"'+(s.running?' disabled':'')+'>'+
+        (s.running?'<button class="sb-stop">Stop</button>':'<button class="sb-run primary">Run</button>')+'</div>':'')+
+      ((s.running||s.live)?'<pre class="sb-out" style="white-space:pre-wrap;font-size:11.5px;max-height:260px;overflow:auto;margin-top:6px">'+esc((s.live_command?'$ '+s.live_command+'\n':'')+(s.live||'')+(s.running?'\n…running':s.live_code!==null&&s.live_code!==undefined?'\n(exit code '+s.live_code+')':''))+'</pre>':
+        (s.last_run?'<div class="md-why" style="margin-top:4px">Last run: <code>'+esc(s.last_run.command)+'</code> → exit '+s.last_run.code+' ('+esc(s.last_run.time)+')</div>':''))+
+      (here?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button class="sb-net">'+(s.network?'Turn internet off':'Turn internet on…')+'</button><button class="sb-files">Copy results back…</button>'+
+        '<button class="sb-reset">Reset…</button><button class="sb-del danger">Delete…</button></div><div class="sb-changed"></div>':'')+'</div>'}).join('')
+    :'<div style="margin-top:10px">No sandboxes yet.</div>';
+  if(here){const src=j.sources.map(x=>'<option value="'+esc(x.path)+'" data-n="'+esc(x.name)+'">'+esc(x.label)+'</option>').join('');
+    h+='<details style="margin-top:14px"'+(j.sandboxes.length?'':' open')+'><summary style="cursor:pointer"><b>Make a sandbox</b></summary>'+
+      (src?'<label>Copy this folder<select id="sb-src">'+src+'</select></label>'+
+        '<label>Kind<select id="sb-kind"><option value="linux">Linux container (for projects that build on Linux/Ubuntu)</option>'+(j.mac_sandbox?'<option value="mac">On this Mac, locked down (for devkitPro / Xcode builds)</option>':'')+'</select></label>'+
+        '<label>Linux image <input id="sb-img" placeholder="ubuntu:24.04"></label><label>Name <input id="sb-name" placeholder="same as the folder"></label>'+
+        '<div style="margin-top:6px"><button id="sb-make" class="primary">Make sandbox</button></div>'
+        :'<div class="md-why">First save a project for a device, or approve a folder in the Mac tab.</div>')+'</details>';}
+  if(j.copies.length)h+='<h4 style="margin:16px 0 4px">Copied back</h4><div class="md-list">'+j.copies.map(c=>'<div class="md-row dl" style="padding:5px 10px"><div style="flex:1"><code>'+esc(c.file)+'</code> from '+esc(c.sandbox)+
+    '<div class="md-why">#'+c.id+' · '+esc(c.time)+' → '+esc(c.to)+'</div></div>'+(c.undone?'<span class="md-why">undone</span>':here?'<button class="sb-undo" data-id="'+c.id+'">Undo</button>':'')+'</div>').join('')+'</div>';
+  box.innerHTML=h+'<div id="sb-msg" style="font-size:13px;margin-top:6px"></div>';
+  const m=t=>$('sb-msg').innerHTML=t,err=x=>m('<span style="color:var(--bad)">'+esc(x.message)+'</span>');
+  const act=async(body,done,btn)=>{if(btn)btn.disabled=true;try{const r=await postJSON('/api/sandbox',body);drawSandbox(done||esc(r.text||''))}catch(x){if(btn)btn.disabled=false;err(x)}};
+  const pre=box.querySelector('.sb-out');if(pre)pre.scrollTop=pre.scrollHeight;
+  box.querySelectorAll('[data-sb]').forEach(row=>{const n=row.dataset.sb,s=j.sandboxes.find(x=>x.name===n),q=c=>row.querySelector(c);
+    const run=q('.sb-run'),inp=q('.sb-cmd');
+    if(run){const go=()=>{if(inp.value.trim())act({action:'run',name:n,command:inp.value},null,run)};run.onclick=go;inp.onkeydown=ev=>{if(ev.key==='Enter')go()}}
+    if(q('.sb-stop'))q('.sb-stop').onclick=()=>act({action:'stop',name:n});
+    if(q('.sb-net'))q('.sb-net').onclick=()=>{if(!s.network&&!confirm('Let sandbox '+n+' reach the internet?\n\nPrograms in it can then download things (like apt-get install). It still can\'t see your real files, passwords or Keychain. Turn it off again when done.'))return;
+      act({action:'set',name:n,network:!s.network},s.network?'Internet is off for '+esc(n)+'.':'Internet is ON for '+esc(n)+'.',q('.sb-net'))};
+    if(q('.sb-reset'))q('.sb-reset').onclick=()=>{if(confirm('Reset sandbox '+n+'?\n\nEverything built or installed in it is thrown away and the project is copied in fresh. Your real project isn\'t touched.'))act({action:'reset',name:n},null,q('.sb-reset'))};
+    if(q('.sb-del'))q('.sb-del').onclick=()=>{if(confirm('Delete sandbox '+n+'?\n\nOnly the sandbox goes. Your real project isn\'t touched.'))act({action:'delete',name:n},null,q('.sb-del'))};
+    if(q('.sb-files'))q('.sb-files').onclick=async()=>{const out=q('.sb-changed');out.textContent='Looking…';
+      try{const r=await postJSON('/api/sandbox',{action:'changed',name:n});
+        out.innerHTML=r.files.length?'<div class="md-why" style="margin-top:6px">New or changed in the sandbox:</div><div class="md-list">'+r.files.map(f=>'<div class="md-row dl" style="padding:4px 10px"><div style="flex:1"><code>'+esc(f.path)+'</code> <span class="md-chip">'+esc(f.state)+' · '+esc(f.size)+'</span></div><button class="sb-copy" data-p="'+esc(f.path)+'">Copy back</button></div>').join('')+'</div>'
+          :'<div class="md-why">Nothing differs from the real project.</div>';
+        out.querySelectorAll('.sb-copy').forEach(b=>b.onclick=()=>{if(confirm('Copy '+b.dataset.p+' from the sandbox into your real project?\n\nThe file there now is backed up first, and you can undo it below.'))act({action:'copy_out',name:n,path:b.dataset.p},null,b)})}catch(x){out.textContent='';err(x)}};
+  });
+  box.querySelectorAll('.sb-undo').forEach(b=>b.onclick=()=>act({action:'undo',id:+b.dataset.id},null,b));
+  const mk=$('sb-make');if(mk)mk.onclick=()=>{m('Copying the folder…');act({action:'create',folder:$('sb-src').value,kind:$('sb-kind').value,image:$('sb-img').value.trim(),name:$('sb-name').value.trim()},null,mk)};
+  clearTimeout(SB_POLL);if(j.sandboxes.some(s=>s.running))SB_POLL=setTimeout(()=>{if($('sc-sb'))drawSandbox()},1500)}
+
+function sandboxCard(ev,closed){ // a sandbox step that needs the user: internet on, copy back, reset, delete, undo
+  const c=add('card','<h3>'+esc(ev.title)+'</h3><div>'+esc(ev.what||'')+'</div>'+
+    (ev.diff?'<details open><summary>What happens</summary>'+(/^(---|@@)/m.test(ev.diff)?'<pre style="white-space:pre-wrap">'+diffHtml(ev.diff)+'</pre>':'<pre style="white-space:pre-wrap">'+esc(ev.diff)+'</pre>')+'</details>':'')+
+    '<div class="row"><button class="primary">'+esc(ev.label||'Confirm')+'</button><button>Cancel</button></div>');
+  const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
+  if(closed){close('Already handled.');return}
+  const [ok,no]=row.querySelectorAll('button');
+  ok.onclick=async()=>{if(busy)return;close('Confirmed.');await chatStream('/api/confirm',{id:ev.id,typed:''})};
+  no.onclick=async()=>{if(busy)return;close('Cancelled.');await chatStream('/api/cancel',{id:ev.id})}}
 
 // ---- Laptop access: open PatchBay from another computer at home
 async function drawLaptop(note){const box=$('sc-lap');if(!box)return;let j;
