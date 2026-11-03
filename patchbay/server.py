@@ -76,6 +76,7 @@ import macaccess
 import namestrip
 import where
 import sandbox
+import sandboxrecipe
 import stopper
 import codereview
 import codetools
@@ -2739,12 +2740,20 @@ def t_sandbox_list(st, emit, a):
 
 
 @both_tool("sandbox_create", "Make a sandbox: a COPY of a project where you can build and run tests freely without "
-           "touching the real files, passwords or Keychain. kind linux = a Linux container (default image ubuntu:24.04; "
-           "for projects that build on Linux/Ubuntu); kind mac = on this Mac, locked down (for devkitPro/Xcode builds). "
-           "Network starts OFF. Give project (a saved project) or folder (an approved Mac folder).",
+           "touching the real files, passwords or Keychain. kind linux = a Linux container; kind mac = on this Mac, "
+           "locked down (for devkitPro/Xcode builds). For linux, PatchBay reads the project's build files (docs, "
+           "Makefile, CI, Dockerfile) and sets the sandbox up to match: which Linux, packages, setup and build "
+           "commands, memory, what comes out, and commands never to run inside (like make install to a console). "
+           "Anything given here wins over what it worked out. Network starts OFF. Give project (a saved project) "
+           "or folder (an approved Mac folder).",
            {"project": S, "folder": S, "name": dict(S, description="Short name; default the project's name"),
             "kind": {"type": "string", "enum": ["linux", "mac"]},
-            "image": dict(S, description="Linux image, e.g. ubuntu:24.04 or debian:12")})
+            "image": dict(S, description="Linux image, e.g. ubuntu:24.04 or debian:12; default: what the project uses"),
+            "arch": {"type": "string", "enum": ["native", "amd64"],
+                     "description": "native = ARM Linux (fast, default); amd64 = x86 Linux through Rosetta (slower)"},
+            "setup_command": S, "build_command": S,
+            "output": dict(S, description="The built file or folder to copy out, a path in the project"),
+            "memory_gb": I, "cpus": I})
 def t_sandbox_create(st, emit, a):
     if a.get("folder"):
         src = sandbox_source_ok(a["folder"])
@@ -2755,9 +2764,64 @@ def t_sandbox_create(st, emit, a):
         pr = project(st, a.get("project"))
         src, name = pe(projects.folder_of, pr), a.get("name") or pr["name"]
     name = re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:40].strip("-.") or "sandbox"
-    s = sb(sandbox.create, name, str(src), a.get("kind") or "linux", a.get("image") or None, emit)
-    return ("Made sandbox %s with a copy of %s. Nothing in the real folder changes. Run commands in it with "
-            "sandbox_run. %s" % (s["name"], src, sandbox.summary(s)))
+    kind = a.get("kind") or "linux"
+    recipe = sandbox_recipe_for(src, a) if kind == "linux" else None
+    s = sb(sandbox.create, name, str(src), kind, a.get("image") or None, emit, recipe)
+    return ("Made sandbox %s with a copy of %s. Nothing in the real folder changes. %s\n%s%s\n%s" % (
+        s["name"], src, sandbox.summary(s), sandbox.recipe_text(s), memory_warning(s),
+        "Next: sandbox_build step setup (it asks for the internet first), then sandbox_build step build. Change "
+        "anything with propose_sandbox_settings." if s.get("setup_command") or s.get("build_command") else
+        "Run commands in it with sandbox_run."))
+
+
+def sandbox_recipe_for(src, a):
+    """What the project needs, read from its build files, with anything the AI or user gave on top."""
+    try:
+        r = sandboxrecipe.suggest(src, mac_memory_gb=mac_memory_gb())
+    except (OSError, ValueError) as e:
+        r = {"recipe_notes": ["Couldn't read the project's build files: %s" % e]}
+    for k in ("setup_command", "build_command", "output", "arch", "memory_gb", "cpus", "image"):
+        if a.get(k) not in (None, ""):
+            r[k] = a[k]
+    if a.get("memory_gb") and int(a["memory_gb"]) > int(r.get("memory_max") or 28):
+        r["memory_max"] = min(28, int(a["memory_gb"]))
+    return r
+
+
+def memory_warning(s):
+    """A plain warning when the sandbox's memory plus macOS and a loaded AI model won't fit in the Mac."""
+    total = mac_memory_gb()
+    if s.get("kind") != "linux" or not total:
+        return ""
+    if int(s["memory_gb"]) > total - 8:
+        return ("\nWarning: %d GB for the sandbox leaves too little for macOS on this %d GB Mac. Use %d GB or less."
+                % (s["memory_gb"], total, max(2, total - 8)))
+    if int(s["memory_gb"]) >= 12:
+        return ("\nIt uses %d GB of this Mac's %d GB while it builds. If the Mac gets slow, press Free up memory "
+                "(unloads the AI model) or lower memory_gb." % (s["memory_gb"], total))
+    return ""
+
+
+@both_tool("sandbox_build", "Run the sandbox's recipe: step setup (once: installs the Linux packages and runs the "
+           "project's own setup script; needs the internet) or step build (the build command). If the internet is "
+           "off it shows the card to turn it on. When the build works, it says how to copy the result out and send "
+           "it to the device from the Mac.",
+           {"sandbox": S, "step": {"type": "string", "enum": ["setup", "build"]}}, ["step"])
+def t_sandbox_build(st, emit, a):
+    name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
+    step = a.get("step") or "build"
+    cmd = sandbox.step_command(s, step)
+    if not cmd:
+        raise ToolError("Sandbox %s has no %s command. Set one with propose_sandbox_settings (%s_command)."
+                        % (name, step, step))
+    if not s["network"] and s["kind"] == "linux":
+        return ("The %s step downloads things, and sandbox %s's internet is off. " % (step, name) + sandbox_card(
+            st, emit, {"action": "network_on", "sandbox": name}, "Turn on the network for sandbox %s" % name,
+            "Sandbox %s will be able to reach the internet, to download what the %s step needs.\n"
+            "It still can't see your real files, passwords or Keychain." % (name, step), "Turn network on",
+            "After you press it, PatchBay runs the %s step." % step))
+    return t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
 
 
 @both_tool("sandbox_run", "Run a shell command inside a sandbox, in its copy of the project (e.g. make, cmake ... , "
@@ -2784,8 +2848,42 @@ def t_sandbox_run(st, emit, a):
                                                      r"unreachable|network is unreachable|Operation not permitted.*"
                                                      r"(connect|socket))", out or ""):
         result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
+    result += sandbox_hints(s, code, out, a.get("_step"))
     summary, detail = show_output(emit, result, code, out, a.get("command") or "")
     return detail
+
+
+def sandbox_hints(s, code, out, step):
+    """Plain next steps after a sandbox run: ARM problems, and what to do once the build worked."""
+    out = out or ""
+    tips = ""
+    if code != 0 and re.search(r"Exec format error|cannot execute binary file", out) and s.get("arch") != "amd64":
+        tips += (" A program in it is built for x86 (Intel) only, and this sandbox runs ARM Linux. Switch it with "
+                 "propose_sandbox_settings arch amd64 (x86 through Rosetta: works, but slower), then run the setup "
+                 "step again.")
+    if code != 0 and re.search(r"Unable to locate package|has no installation candidate", out) and \
+            s.get("arch") != "amd64":
+        tips += (" A package may not exist for ARM Linux. If it's a needed one, switch to arch amd64 with "
+                 "propose_sandbox_settings.")
+    if code != 0 and re.search(r"\bKilled\b|out of memory|signal 9|c\+\+: fatal error: Killed", out):
+        tips += (" The build ran out of memory (%d GB). Raise memory_gb (up to %s) or lower the jobs in the build "
+                 "command." % (s["memory_gb"], s.get("memory_max") or 28))
+    if code == 0 and step == "setup":
+        tips += " Setup is done. Next: sandbox_build step build."
+    if code == 0 and step == "build" and s.get("output"):
+        try:
+            made = sandbox.inside_work(s, s["output"]).exists()
+        except sandbox.SandboxError:
+            made = False
+        if made:
+            tips += (" The result is at %s in the sandbox. Next: propose_sandbox_copy_out path %s (a card)."
+                     % (s["output"], s["output"]))
+            if s.get("upload_hint"):
+                tips += (" Then send it to the device FROM THE MAC (never from the sandbox) with propose_command: %s"
+                         % s["upload_hint"])
+        else:
+            tips += " The build said it worked, but %s isn't there. Look with sandbox_files." % s["output"]
+    return tips
 
 
 @both_tool("sandbox_files", "List files in a sandbox's copy of the project. changed=true lists only files that are "
@@ -2832,23 +2930,37 @@ def t_sandbox_copy_out(st, emit, a):
         except UnicodeDecodeError:
             pass
     return sandbox_card(st, emit, change, "Copy %s out of sandbox %s" % (Path(change["rel"]).name, name), diff,
-                        "Copy it out", "This copies one file from the sandbox into your real project. The file "
-                        "there now is backed up first, and it can be undone.")
+                        "Copy it out", "This copies %s from the sandbox into your real project. What is "
+                        "there now is backed up first, and it can be undone." % (
+                            "the whole folder (%d files)" % change["files"] if change.get("folder") else "one file"))
 
 
 @both_tool("propose_sandbox_settings", "Change a sandbox: network (true needs a card the user confirms; false is "
-           "immediate), cpus, memory_gb, timeout_min (per command), disk_gb, image (Linux).",
-           {"sandbox": S, "network": B, "cpus": I, "memory_gb": I, "timeout_min": I, "disk_gb": I, "image": S})
+           "immediate), cpus, memory_gb, timeout_min (per command), disk_gb, image (Linux), arch (native = ARM, "
+           "amd64 = x86 through Rosetta), and its recipe: setup_command, build_command, output (file or folder to "
+           "copy out), upload_hint (what to run on the Mac afterwards), never_run (a command that must never run "
+           "inside, like one that sends to a device; can only be added).",
+           {"sandbox": S, "network": B, "cpus": I, "memory_gb": I, "timeout_min": I, "disk_gb": I, "image": S,
+            "arch": {"type": "string", "enum": ["native", "amd64"]}, "setup_command": S, "build_command": S,
+            "output": S, "upload_hint": S, "never_run": S})
 def t_sandbox_settings(st, emit, a):
     name = sandbox_name(st, a)
     s = sb(sandbox.load, name)
-    opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image") if a.get(k) is not None}
+    opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch")
+            if a.get(k) is not None}
     if a.get("network") is False:
         opts["network"] = False
     msg = ""
     if opts:
         s = sb(sandbox.set_options, name, **opts)
-        msg = "Changed: %s. " % ", ".join("%s=%s" % kv for kv in opts.items())
+        msg = "Changed: %s. %s" % (", ".join("%s=%s" % kv for kv in opts.items()), memory_warning(s))
+    recipe = {k: a[k] for k in ("setup_command", "build_command", "output", "upload_hint") if a.get(k)}
+    if a.get("never_run"):
+        recipe["blocked"] = [{"pattern": re.escape(a["never_run"].strip()),
+                              "why": "%s must not run inside the sandbox." % a["never_run"].strip()}]
+    if recipe:
+        s = sb(sandbox.set_recipe, name, recipe)
+        msg += "Recipe changed: %s. " % ", ".join(recipe)
     if a.get("network") and not s["network"]:
         return msg + sandbox_card(
             st, emit, {"action": "network_on", "sandbox": name}, "Turn on the network for sandbox %s" % name,
@@ -3156,9 +3268,12 @@ usually built with devkitPro and libnx; firmware updates usually mean building w
 where its functions changed. read_web_page can fetch public release notes; never put the user's code or device \
 details into an address.
 - To try things out freely (run tests, try build commands, install Linux packages) without cards, use a sandbox: \
-sandbox_create (a copy of the project; kind linux for Linux/Ubuntu projects), then sandbox_run as often as needed. \
-Its internet is off; ask with propose_sandbox_settings network true only when a download is needed. When it works, \
-propose_sandbox_copy_out the files that should go back into the real project.
+sandbox_create (a copy of the project; kind linux for Linux/Ubuntu projects). Make whatever sandbox the job needs: \
+PatchBay reads the project's build files and sets it up (Linux version, packages, setup, build, memory); then \
+sandbox_build step setup, sandbox_build step build, and sandbox_run as often as needed. Its internet is off; it is \
+asked for with a card when a download is needed. When it works, propose_sandbox_copy_out the file or folder that \
+should go back into the real project. Anything that sends to a device (make install, FTP upload) runs on the Mac \
+with propose_command after copying out, never inside the sandbox.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
 """ + SELF_EDIT_RULES + "- " + where.rule_text() + "\n" + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
@@ -3476,7 +3591,7 @@ PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
                   "propose_device_command", "private_build", "sandbox_create", "sandbox_run",
-                  "propose_sandbox_settings", "propose_sandbox_copy_out"}
+                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build"}
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -4154,10 +4269,11 @@ HOME_GROUPS = {
 }
 SANDBOX_GROUP = ("sandboxes: a throwaway copy of a project to build and test in (Linux container or locked-down Mac), "
                  "network off by default, results copied out only with a card",
-                 ["sandbox_list", "sandbox_create", "sandbox_run", "sandbox_files", "sandbox_read",
+                 ["sandbox_list", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read",
                   "propose_sandbox_copy_out", "propose_sandbox_settings", "propose_sandbox_reset",
                   "propose_sandbox_delete", "propose_sandbox_undo"],
-                 r"sandbox|container|docker|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests")
+                 r"sandbox|container|docker|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests|"
+                 r"rosetta|x86|amd64|arm64")
 DEVICE_GROUPS["sandbox"] = SANDBOX_GROUP
 HOME_GROUPS["sandbox"] = SANDBOX_GROUP
 PRIVATE_BUILD_GROUP = ("the private builder: the user's idea becomes a generic spec on this Mac, then Claude writes "
@@ -5126,8 +5242,10 @@ class Handler(BaseHTTPRequestHandler):
         if a == "create":
             src = sandbox_source_ok(data.get("folder"))
             nm = re.sub(r"[^A-Za-z0-9_.-]", "-", name or src.name)[:40].strip("-.") or "sandbox"
-            s = sb(sandbox.create, nm, str(src), data.get("kind") or "linux", data.get("image") or None)
-            return {"text": "Made sandbox %s." % s["name"]}
+            kind = data.get("kind") or "linux"
+            recipe = sandbox_recipe_for(src, {}) if kind == "linux" and data.get("recipe", True) else None
+            s = sb(sandbox.create, nm, str(src), kind, data.get("image") or None, None, recipe)
+            return {"text": "Made sandbox %s.%s" % (s["name"], memory_warning(s))}
         if a == "reset":
             sb(sandbox.reset, name)
             return {"text": "Sandbox %s was emptied and the project copied in fresh." % name}
@@ -5137,10 +5255,10 @@ class Handler(BaseHTTPRequestHandler):
             SANDBOX_LIVE.pop(name, None)
             return {"text": sb(sandbox.delete, name)}
         if a == "set":
-            opts = {k: data.get(k) for k in ("network", "cpus", "memory_gb", "timeout_min", "disk_gb", "image")
+            opts = {k: data.get(k) for k in ("network", "cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch")
                     if data.get(k) not in (None, "")}
-            sb(sandbox.set_options, name, **opts)
-            return {"text": "Saved."}
+            s = sb(sandbox.set_options, name, **opts)
+            return {"text": "Saved." + memory_warning(s)}
         if a == "changed":
             return {"files": [{"state": k, "path": r, "size": sandbox.human(n)}
                               for k, r, n in sb(sandbox.changed_files, name)]}
@@ -5154,6 +5272,14 @@ class Handler(BaseHTTPRequestHandler):
             if ev:
                 ev.set()
             return {"text": "Stopping..."}
+        if a in ("setup", "build"):
+            s = sb(sandbox.load, name)
+            data = dict(data, command=sandbox.step_command(s, a))
+            if not data["command"]:
+                raise ToolError("This sandbox has no %s command yet." % a)
+            if s["kind"] == "linux" and not s["network"]:
+                raise ToolError("The %s step needs the internet. Turn it on first." % a)
+            a = "run"
         if a == "run":
             cmd = (data.get("command") or "").strip()
             sb(sandbox.load, name)

@@ -41,7 +41,12 @@ SECRET_NAMES = {"config.json", "access.json", "claude.json", "claude-aliases.jso
 SECRET_ENDS = (".pem", ".key", ".p12", ".keychain", ".keychain-db", ".mobileprovision")
 COPY_LIMIT = 20 * 1024 ** 3          # projects bigger than this aren't copied in
 DEFAULTS = {"kind": "linux", "image": "ubuntu:24.04", "network": False, "cpus": 4, "memory_gb": 8,
-            "timeout_min": 60, "disk_gb": 20}
+            "timeout_min": 60, "disk_gb": 20, "arch": "native", "memory_max": 28,
+            # The recipe: how this project is set up and built inside (see sandboxrecipe.py). Empty = none yet.
+            "setup_command": "", "build_command": "", "output": "", "blocked": [], "upload_hint": "",
+            "recipe_notes": [], "recipe_from": []}
+RECIPE_KEYS = ("setup_command", "build_command", "output", "upload_hint", "recipe_notes", "recipe_from")
+ARCHES = ("native", "amd64")         # native = arm64 on Apple silicon (fast); amd64 = x86 Linux through Rosetta
 OFFLINE_NET = "patchbay-offline"     # Apple container: a host-only network (macOS 26+), used when network is off
 EXTRA_PATHS = ["/usr/local/bin", "/opt/homebrew/bin", str(HOME / ".orbstack/bin"),
                "/Applications/Docker.app/Contents/Resources/bin"]
@@ -271,6 +276,14 @@ def _offline_network(exe):
                            "network on, or use Docker (Colima) which can switch it off on older macOS." % out[-300:])
 
 
+def arch_args(kind, sb):
+    """amd64 mode: x86 Linux on Apple silicon. Apple's tool translates it with Rosetta; Docker uses Rosetta too when
+    Docker Desktop/OrbStack/Colima have it switched on (otherwise QEMU, which is many times slower)."""
+    if sb.get("arch") != "amd64":
+        return []
+    return ["--arch", "amd64"] if kind == "apple" else ["--platform", "linux/amd64"]
+
+
 def create_args(kind, exe, sb):
     """The command that starts the sandbox's container: only the work folder is visible, with limits."""
     name, image = container_name(sb["name"]), sb.get("image_in_use") or sb["image"]
@@ -279,13 +292,14 @@ def create_args(kind, exe, sb):
     vol = "%s:/work" % work(sb)
     if kind == "apple":
         argv = [exe, "run", "-d", "--name", name, "-c", cpus, "-m", mem, "-v", vol, "-w", "/work"]
+        argv += arch_args(kind, sb)
         if not sb["network"]:
             _offline_network(exe)
             argv += ["--network", OFFLINE_NET]
     else:
         argv = [exe, "run", "-d", "--name", name, "--cpus", cpus, "--memory", mem, "--pids-limit", "2048",
                 "--security-opt", "no-new-privileges", "-v", vol, "-w", "/work",
-                "--network", "bridge" if sb["network"] else "none"]
+                "--network", "bridge" if sb["network"] else "none"] + arch_args(kind, sb)
     return argv + ["-e", "HOME=/root", "-e", "PATCHBAY_SANDBOX=1", image, "sleep", "infinity"]
 
 
@@ -304,7 +318,8 @@ def ensure_container(sb, emit=None):
     image = sb.get("image_in_use") or sb["image"]
     if not _exists(kind, exe, image, image=True):
         # The Mac downloads the image (the starting Linux system); the sandbox itself stays offline.
-        code, out = _quiet([exe, "image", "pull", image] if kind == "apple" else [exe, "pull", image], 1800)
+        pull = [exe, "image", "pull"] if kind == "apple" else [exe, "pull"]
+        code, out = _quiet(pull + arch_args(kind, sb) + [image], 1800)
         if code != 0:
             raise SandboxError("Couldn't download the Linux image %s: %s" % (image, out[-400:]))
     code, out = _quiet(create_args(kind, exe, sb), 900)
@@ -391,8 +406,9 @@ def mac_argv(sb, command):
 
 # ---------------------------------------------------------------- create / reset / delete / settings
 
-def create(name, source, kind="linux", image=None, emit=None):
-    """Make a new sandbox with a copy of the source folder. Nothing outside PatchBay's data folder is changed."""
+def create(name, source, kind="linux", image=None, emit=None, recipe=None):
+    """Make a new sandbox with a copy of the source folder. Nothing outside PatchBay's data folder is changed.
+    recipe: settings worked out from the project (sandboxrecipe.suggest), applied before `image`."""
     check_name(name)
     if kind not in ("linux", "mac"):
         raise SandboxError("A sandbox is either linux (a Linux container) or mac (runs on the Mac, locked down).")
@@ -419,6 +435,8 @@ def create(name, source, kind="linux", image=None, emit=None):
         raise
     sb = dict(DEFAULTS, name=name, source=str(src), kind=kind, created=time.strftime("%Y-%m-%d %H:%M:%S"),
               skipped=skipped[:50])
+    if recipe:
+        sb = apply_recipe(sb, recipe)
     if image:
         sb["image"] = image
     save(sb)
@@ -459,7 +477,8 @@ def set_options(name, **opts):
         if k == "network":
             sb["network"] = bool(v)
         elif k in ("cpus", "memory_gb", "timeout_min", "disk_gb"):
-            lim = {"cpus": (1, 14), "memory_gb": (1, 28), "timeout_min": (1, 600), "disk_gb": (1, 500)}[k]
+            lim = {"cpus": (1, 14), "memory_gb": (1, int(sb.get("memory_max") or 28)), "timeout_min": (1, 600),
+                   "disk_gb": (1, 500)}[k]
             try:
                 n = int(v)
             except (TypeError, ValueError):
@@ -467,6 +486,12 @@ def set_options(name, **opts):
             if not lim[0] <= n <= lim[1]:
                 raise SandboxError("%s must be between %d and %d." % (k, lim[0], lim[1]))
             sb[k] = n
+        elif k == "arch":
+            if v not in ARCHES:
+                raise SandboxError("arch is native (fast, arm64) or amd64 (x86 Linux through Rosetta).")
+            if v != sb.get("arch"):
+                sb["arch"] = v
+                sb.pop("image_in_use", None)      # what was installed is for the other kind of processor
         elif k == "image":
             if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,199}$", str(v)):
                 raise SandboxError("That doesn't look like an image name (e.g. ubuntu:24.04).")
@@ -474,11 +499,67 @@ def set_options(name, **opts):
             sb.pop("image_in_use", None)
         else:
             raise SandboxError("Unknown sandbox setting %s." % k)
-    if sb["kind"] == "linux" and any(k in opts and opts[k] is not None for k in ("cpus", "memory_gb", "image")):
-        remove_container(sb, image_too="image" in opts and opts["image"] is not None)
+    if sb["kind"] == "linux" and any(k in opts and opts[k] is not None for k in ("cpus", "memory_gb", "image", "arch")):
+        remove_container(sb, image_too=any(opts.get(k) is not None for k in ("image", "arch")))
         sb["container_network"] = None
     save(sb)
     return sb
+
+
+def apply_recipe(sb, recipe):
+    """Put a recipe's settings on a sandbox (checked like set_options). Blocked commands are only ever added to:
+    taking one away means deleting the sandbox and making it again."""
+    sb = dict(sb)
+    for k in RECIPE_KEYS:
+        if recipe.get(k) not in (None, ""):
+            v = recipe[k]
+            if k in ("recipe_notes", "recipe_from"):
+                v = [str(x)[:300] for x in (v if isinstance(v, list) else [v])][:20]
+            else:
+                v = str(v)[:4000]
+            sb[k] = v
+    if sb.get("output"):
+        out = str(sb["output"]).strip().lstrip("/")
+        if ".." in Path(out).parts:
+            raise SandboxError("The build output must be a path inside the project.")
+        sb["output"] = out
+    have = {r["pattern"] for r in sb.get("blocked") or []}
+    for rule in recipe.get("blocked") or []:
+        try:
+            re.compile(rule["pattern"])
+        except (re.error, KeyError, TypeError):
+            raise SandboxError("A blocked command pattern isn't valid: %r" % (rule,))
+        if rule["pattern"] not in have:
+            sb["blocked"] = list(sb.get("blocked") or []) + [{"pattern": rule["pattern"],
+                                                               "why": str(rule.get("why") or "")[:300]}]
+    if recipe.get("memory_max"):
+        sb["memory_max"] = max(1, min(28, int(recipe["memory_max"])))
+    for k, lim in (("cpus", (1, 14)), ("memory_gb", (1, int(sb.get("memory_max") or 28))), ("timeout_min", (1, 600)),
+                   ("disk_gb", (1, 500))):
+        if recipe.get(k) is not None:
+            sb[k] = max(lim[0], min(lim[1], int(recipe[k])))
+    if recipe.get("image"):
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,199}$", str(recipe["image"])):
+            raise SandboxError("That doesn't look like an image name (e.g. ubuntu:24.04).")
+        sb["image"] = str(recipe["image"])
+    if recipe.get("arch"):
+        if recipe["arch"] not in ARCHES:
+            raise SandboxError("arch is native (fast, arm64) or amd64 (x86 Linux through Rosetta).")
+        sb["arch"] = recipe["arch"]
+    return sb
+
+
+def set_recipe(name, recipe):
+    """Change a sandbox's recipe (setup/build commands, output, limits...). Returns the sandbox."""
+    sb = load(name)
+    new = apply_recipe(sb, recipe)
+    if sb["kind"] == "linux" and any(new.get(k) != sb.get(k) for k in ("cpus", "memory_gb", "image", "arch")):
+        remove_container(sb, image_too=any(new.get(k) != sb.get(k) for k in ("image", "arch")))
+        if new.get("image") != sb.get("image") or new.get("arch") != sb.get("arch"):
+            new.pop("image_in_use", None)
+        new["container_network"] = None
+    save(new)
+    return new
 
 
 # ---------------------------------------------------------------- running a command inside
@@ -538,6 +619,9 @@ def run(name, command, emit=None, stop=None, base_path=None):
     command = (command or "").strip()
     if not command:
         raise SandboxError("Give a command to run, like make or ./run-tests.sh.")
+    for rule in sb.get("blocked") or []:
+        if re.search(rule["pattern"], command):
+            raise SandboxError("Not run inside the sandbox: %s" % rule["why"])
     timeout = int(sb["timeout_min"]) * 60
     w = work(sb)
     if not w.is_dir():
@@ -632,14 +716,16 @@ def _save_history(h):
 
 
 def plan_copy_out(name, rel, to=None):
-    """What copy_out would do, for the card. The file goes back to the same place in the real project unless `to`
-    (a path inside the project) is given."""
+    """What copy_out would do, for the card. The file (or whole folder, like a built app folder) goes back to the
+    same place in the real project unless `to` (a path inside the project) is given."""
     sb = load(name)
     src = inside_work(sb, rel)
-    if not src.is_file():
-        raise SandboxError("%s isn't a file in the sandbox." % rel)
     if src.is_symlink():
         raise SandboxError("%s is a link; copy the real file instead." % rel)
+    if src.is_dir():
+        return _plan_folder_out(sb, name, src, rel, to)
+    if not src.is_file():
+        raise SandboxError("%s isn't a file or folder in the sandbox." % rel)
     dest_root = Path(sb["source"]).resolve()
     dest = (dest_root / str(to or rel).lstrip("/")).resolve()
     if dest != dest_root and dest_root not in dest.parents:
@@ -654,11 +740,90 @@ def plan_copy_out(name, rel, to=None):
     return change, words
 
 
+def _folder_files(top):
+    """(relative path, size) of every plain file in a folder; links and secret-named files are left out."""
+    rows, left_out = [], []
+    for dirpath, dirnames, filenames in os.walk(top):
+        for d in list(dirnames):
+            if os.path.islink(os.path.join(dirpath, d)) or d in SKIP_DIRS:
+                left_out.append(os.path.relpath(os.path.join(dirpath, d), top))
+                dirnames.remove(d)
+        for n in filenames:
+            p = Path(dirpath) / n
+            if p.is_symlink() or is_secret(p) or not p.is_file():
+                left_out.append(str(p.relative_to(top)))
+                continue
+            rows.append((str(p.relative_to(top)), p.stat().st_size))
+    return sorted(rows), left_out
+
+
+def _plan_folder_out(sb, name, src, rel, to):
+    dest_root = Path(sb["source"]).resolve()
+    dest = (dest_root / str(to or rel).lstrip("/")).resolve()
+    if dest == dest_root or dest_root not in dest.parents:
+        raise SandboxError("%s must be a folder inside the project (not the project itself)." % (to or rel))
+    if dest.exists() and not dest.is_dir():
+        raise SandboxError("%s is a file in the real project, not a folder." % dest)
+    files, left_out = _folder_files(src)
+    if not files:
+        raise SandboxError("%s is empty in the sandbox. Has it been built?" % rel)
+    total = sum(n for _, n in files)
+    change = {"sandbox": name, "from": str(src), "rel": str(src.relative_to(work(sb).resolve())), "to": str(dest),
+              "to_rel": str(dest.relative_to(dest_root)), "size": total, "folder": True, "files": len(files)}
+    words = "Copy the folder %s (%d files, %s) out of sandbox %s\n  to %s%s" % (
+        change["rel"], len(files), human(total), name, dest,
+        "\n  (the folder there now is backed up first, then replaced)" if dest.exists() else "\n  (new folder)")
+    words += "\n\n" + "\n".join("  %s  (%s)" % (r, human(n)) for r, n in files[:40])
+    if len(files) > 40:
+        words += "\n  ... and %d more" % (len(files) - 40)
+    if left_out:
+        words += "\nLeft out (links or secret-looking names): %s" % ", ".join(left_out[:10])
+    return change, words
+
+
+def _copy_folder_out(change, entry):
+    src, dest = Path(change["from"]), Path(change["to"])
+    if dest.exists():
+        bk = root() / "_backups" / time.strftime("%Y%m%d-%H%M%S") / ("%d-%s" % (entry["id"], dest.name))
+        bk.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(dest), str(bk), symlinks=True)
+        entry["backup"] = str(bk)
+    tmp = dest.with_name(dest.name + ".patchbay-tmp")
+    if tmp.exists():
+        shutil.rmtree(str(tmp))
+    files, _ = _folder_files(src)
+    for r, _n in files:
+        (tmp / r).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src / r), str(tmp / r))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        old = dest.with_name(dest.name + ".patchbay-old")
+        if old.exists():
+            shutil.rmtree(str(old))
+        dest.replace(old)
+        tmp.replace(dest)
+        shutil.rmtree(str(old), ignore_errors=True)
+    else:
+        tmp.replace(dest)
+    entry["folder"] = True
+
+
 def copy_out(change):
-    """Do a planned copy (checked again first). The file it replaces is backed up. Returns a plain result."""
+    """Do a planned copy (checked again first). The file or folder it replaces is backed up. Returns a plain result."""
     again, _ = plan_copy_out(change["sandbox"], change["rel"], change["to_rel"])
-    if again["to"] != change["to"]:
+    if again["to"] != change["to"] or bool(again.get("folder")) != bool(change.get("folder")):
         raise SandboxError("The sandbox changed since the card was shown. Ask again.")
+    if change.get("folder"):
+        with LOCK:
+            h = _history()
+            entry = {"id": (h[-1]["id"] + 1) if h else 1, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                     "sandbox": change["sandbox"], "file": change["rel"] + "/", "to": change["to"]}
+            _copy_folder_out(again, entry)
+            h.append(entry)
+            _save_history(h)
+        return "Copied the folder %s (%d files) to %s%s. (Copy #%d: it can be undone.)" % (
+            change["rel"], again["files"], change["to"], " (the old one is backed up)" if entry.get("backup") else "",
+            entry["id"])
     with LOCK:
         h = _history()
         entry = {"id": (h[-1]["id"] + 1) if h else 1, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -690,7 +855,14 @@ def undo_copy(n):
         if not e or e.get("undone"):
             raise SandboxError("There's no copy #%s to undo." % n)
         dest = Path(e["to"])
-        if e.get("backup"):
+        if e.get("folder"):
+            gone = root() / "_backups" / time.strftime("%Y%m%d-%H%M%S") / ("undo-%d-%s" % (e["id"], dest.name))
+            gone.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                shutil.move(str(dest), str(gone))       # what the copy put there is kept, not deleted
+            if e.get("backup"):
+                shutil.copytree(e["backup"], str(dest), symlinks=True)
+        elif e.get("backup"):
             shutil.copy2(e["backup"], str(dest))
         elif dest.exists():
             bk = root() / "_backups" / time.strftime("%Y%m%d-%H%M%S") / ("undo-%d-%s" % (e["id"], dest.name))
@@ -701,12 +873,37 @@ def undo_copy(n):
     return "Undid copy #%d: %s is back the way it was." % (e["id"], dest)
 
 
+def step_command(sb, step):
+    """The setup or build command, with {cpus} filled in (containers don't always tell programs their CPU limit)."""
+    cmd = sb.get("setup_command" if step == "setup" else "build_command") or ""
+    return cmd.replace("{cpus}", str(int(sb["cpus"])))
+
+
+def recipe_text(sb):
+    """The sandbox's recipe in plain lines, for the chat."""
+    rows = []
+    if sb.get("setup_command"):
+        rows.append("Setup (once, needs the internet): %s" % sb["setup_command"])
+    if sb.get("build_command"):
+        rows.append("Build: %s" % sb["build_command"])
+    if sb.get("output"):
+        rows.append("Result: %s" % sb["output"])
+    for r in sb.get("blocked") or []:
+        rows.append("Never run inside: %s" % r["why"])
+    if sb.get("upload_hint"):
+        rows.append("After copying the result out: %s" % sb["upload_hint"])
+    rows += ["Note: %s" % n for n in sb.get("recipe_notes") or []]
+    if sb.get("recipe_from"):
+        rows.append("Worked out from: %s" % ", ".join(sb["recipe_from"][:8]))
+    return "\n".join(rows)
+
+
 def summary(sb):
     """One plain paragraph about a sandbox, for the chat."""
     last = sb.get("last_run") or {}
     return ("Sandbox %s (%s%s): copy of %s. Network %s. Limits: %s, %d min per command, %d GB disk.%s%s" % (
         sb["name"], "Linux, " + (sb.get("image_in_use") or sb["image"]) if sb["kind"] == "linux" else "Mac, locked down",
-        "", sb["source"], "ON" if sb["network"] else "off",
+        " (x86 through Rosetta)" if sb["kind"] == "linux" and sb.get("arch") == "amd64" else "", sb["source"], "ON" if sb["network"] else "off",
         "%d CPUs, %d GB memory" % (sb["cpus"], sb["memory_gb"]) if sb["kind"] == "linux" else
         "CPU time %d min" % (sb["timeout_min"] * sb["cpus"]),
         sb["timeout_min"], sb["disk_gb"],
