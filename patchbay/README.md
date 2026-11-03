@@ -288,6 +288,11 @@ for EglantinePS5 and run its tests").
   alongside macOS and a loaded AI model; **Free up memory** unloads the model.
 - **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it.
   Neither touches the real project.
+- **Starts clean.** The copy leaves out build leftovers: everything the project's `.gitignore` marks (like `build/`,
+  `dist/`, `.deps/`, `.local/` caches), so an old Mac build can't break the Linux one. The build makes them again
+  (with the internet on). If a build still fails on leftovers (for example FFmpeg's "config.h in source dir"), the AI
+  deletes them inside the sandbox or offers **Reset**. It never edits your project's own scripts for that: copying a
+  changed script back is a last resort, and its card says why.
 - Password and key files (`config.json`, `.env`, `id_rsa`, `.ssh` …) are never copied in. Links that point outside
   the project are left out too.
 - **One-time setup for Linux sandboxes:** install Apple's free `container` tool (the `.pkg` from

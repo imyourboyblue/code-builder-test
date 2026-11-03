@@ -1202,6 +1202,17 @@ def copied_from_sandbox(pr, path):
     return False
 
 
+def own_project_file(s, change):
+    """Whether a copy out would replace one of the project's own files (not the build's result)."""
+    if change.get("folder") or not Path(change.get("to") or "").is_file():
+        return False
+    out = (s.get("output") or "").strip("/")
+    rel = change.get("to_rel") or ""
+    if out and (rel == out or rel.startswith(out + "/")):
+        return False
+    return not sandbox.is_left_out(s["source"], rel)      # gitignored = made by a build, not the project's own
+
+
 def sandbox_route_text(pr, reason):
     sbs = linux_sandboxes_for(pr)
     first = ("sandbox_build sandbox %s step setup (once), then step build" % sbs[0]["name"] if sbs else
@@ -2910,8 +2921,10 @@ def confirm_sandbox(st, p, emit):
         s = sb(sandbox.set_options, ch["sandbox"], network=True)
         result = "Network is ON for sandbox %s. Turn it off again when the downloads are done." % s["name"]
     elif a == "reset":
-        sb(sandbox.reset, ch["sandbox"], emit)
-        result = "Sandbox %s was emptied and the project copied in fresh." % ch["sandbox"]
+        fresh = sb(sandbox.reset, ch["sandbox"], emit)
+        LEFTOVERS.pop(ch["sandbox"], None)
+        result = "Sandbox %s was emptied and the project copied in fresh.%s" % (ch["sandbox"],
+                                                                              sandbox.left_out_words(fresh))
     elif a == "delete":
         result = sb(sandbox.delete, ch["sandbox"])
     elif a == "copy_out":
@@ -3240,6 +3253,7 @@ def t_sandbox_run(st, emit, a):
             return ("Not run yet: Docker isn't answering. " + sandbox_preflight(st, emit, s, pf) +
                     "\nAfter Colima is running, PatchBay carries on by itself: run the same command again then.")
     emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
+    started = time.time()
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
     place = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
@@ -3249,7 +3263,7 @@ def t_sandbox_run(st, emit, a):
                                                      r"unreachable|network is unreachable|Operation not permitted.*"
                                                      r"(connect|socket))", out or ""):
         result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
-    result += sandbox_hints(s, code, out, a.get("_step"))
+    result += sandbox_hints(s, code, out, a.get("_step"), started)
     summary, detail = show_output(emit, result, code, out, a.get("command") or "")
     return detail
 
@@ -3270,10 +3284,47 @@ def script_needs(s, out):
     return pk, ", ".join(scripts[:3])
 
 
-def sandbox_hints(s, code, out, step):
-    """Plain next steps after a sandbox run: ARM problems, and what to do once the build worked."""
+# Errors that mean "an earlier build left files here", not "the project's code is wrong". In a sandbox they come from
+# a copy of the Mac folder that still held build output (made on macOS, or for another machine) or from an older run.
+LEFTOVER_RE = re.compile(
+    r"Out of tree builds are impossible with config\.h in source dir|"
+    r"source directory already configured|"
+    r"CMakeCache\.txt directory .{0,300}is different than the directory|"
+    r"does not match the generator used previously|"
+    r"belongs to another checkout|"
+    r"run [\"'`]?make distclean[\"'`]?|"
+    r"file format not recognized|is not an object file|wrong ELF class|"
+    r"file was built for archive which is not the architecture|Mach-O", re.I)
+LEFTOVERS = {}       # sandbox name -> True after a leftover error, until a build works or it's reset
+
+
+def leftover_tip(s):
+    """What to do about leftovers from an earlier build: clean them out INSIDE the sandbox, never edit the project."""
+    old_copy = "left_out_count" not in s and not s.get("copy_ignored")
+    tip = (" This looks like leftovers from an earlier build (files made on the Mac, or by an older run), not a "
+           "problem in the project's own code. This sandbox is %s, so files built anywhere else don't fit. "
+           % sandbox.platform_words(s))
+    if old_copy:
+        tip += ("This sandbox was copied in before PatchBay left build leftovers out, so the simplest fix is "
+                "propose_sandbox_reset (a card): it copies the project in fresh without anything its .gitignore marks "
+                "as build output, and the build makes those again. ")
+    else:
+        tip += ("Fix it inside the sandbox only: delete the stale generated files with sandbox_run (for example a "
+                "config.h or CMakeCache.txt in the source folder the error is about, or the cache or build folder it "
+                "names; read the failing script first to find the real path), or run the project's own clean target "
+                "(make clean / make distclean) if it has one, then build again. If that doesn't do it, "
+                "propose_sandbox_reset copies the project in fresh. ")
+    return tip + ("Don't edit the project's own scripts for this, and don't copy any script or source file out to "
+                  "the real project.")
+
+
+def sandbox_hints(s, code, out, step, started=None):
+    """Plain next steps after a sandbox run: ARM problems, build leftovers, and what to do once the build worked."""
     out = out or ""
     tips = ""
+    if code != 0 and LEFTOVER_RE.search(out):
+        LEFTOVERS[s["name"]] = True
+        tips += leftover_tip(s)
     if code != 0 and re.search(r"Exec format error|cannot execute binary file", out) and s.get("arch") != "amd64":
         tips += (" A program in it is built for x86 (Intel) only, and this sandbox runs ARM Linux. Switch it with "
                  "propose_sandbox_settings arch amd64 (x86 through Rosetta: works, but slower), then run the setup "
@@ -3309,6 +3360,16 @@ def sandbox_hints(s, code, out, step):
                      "propose_sandbox_settings setup_command \"apt-get install -y <package>\"." % ", ".join(unknown))
     if code == 0 and step == "setup":
         tips += " Setup is done. Next: sandbox_build step build."
+    if code == 0 and step != "build" and started and s.get("output"):
+        # A plain sandbox_run (e.g. "rm -f stale/config.h && make") can be the build that worked: say so.
+        try:
+            p = sandbox.inside_work(s, s["output"])
+            if p.exists() and p.stat().st_mtime >= started - 2:
+                step = "build"
+        except (sandbox.SandboxError, OSError):
+            pass
+    if code == 0 and step == "build":
+        LEFTOVERS.pop(s["name"], None)
     if code == 0 and step == "build" and not s.get("built_ok"):
         try:
             done = sandbox.load(s["name"])
@@ -3358,15 +3419,33 @@ def t_sandbox_read(st, emit, a):
     return clip(data.decode("utf-8", "replace"))
 
 
-@both_tool("propose_sandbox_copy_out", "Copy a file (e.g. the built program, or a fixed source file) out of a "
-           "sandbox into the real project. Does NOT copy: shows a card. The file it replaces is backed up and it can "
-           "be undone. 'to' is a path inside the project; default the same place.",
-           {"sandbox": S, "path": S, "to": S}, ["path"])
+@both_tool("propose_sandbox_copy_out", "Copy the built result (a file or folder) out of a sandbox into the real "
+           "project. Does NOT copy: shows a card. The file it replaces is backed up and it can be undone. 'to' is a "
+           "path inside the project; default the same place. Changing one of the project's OWN files (a script or "
+           "source file) this way is a last resort: only when its code is really wrong on the Mac too, never for "
+           "build leftovers, and then 'why' must say so in one plain sentence for the user.",
+           {"sandbox": S, "path": S, "to": S,
+            "why": dict(S, description="Only for the project's own files: one plain sentence on why it must change")},
+           ["path"])
 def t_sandbox_copy_out(st, emit, a):
     name = sandbox_name(st, a)
+    s = sb(sandbox.load, name)
     change, words = sb(sandbox.plan_copy_out, name, a.get("path"), a.get("to") or None)
     change["action"] = "copy_out"
+    own = own_project_file(s, change)
+    if own and LEFTOVERS.get(name):
+        raise ToolError("Not shown: %s is one of the project's own files, and the last build failed because of "
+                        "leftovers from an earlier build, which editing the project doesn't fix.%s"
+                        % (change["to_rel"], leftover_tip(s)))
+    if own and not (a.get("why") or "").strip():
+        raise ToolError("Not shown: this would change %s, one of the project's own files on the Mac (not a build "
+                        "result). That is a last resort. First try fixing the problem inside the sandbox (delete "
+                        "stale generated files, or propose_sandbox_reset). Only if the project's own code is really "
+                        "wrong, call again with why: one plain sentence the user reads on the card." % change["to_rel"])
     diff = words
+    if own:
+        diff = ("This changes your project's own file %s, not a build result. PatchBay only suggests this when the "
+                "project itself needs fixing.\nWhy: %s\n\n%s" % (change["to_rel"], a["why"].strip()[:300], words))
     src, dest = Path(change["from"]), Path(change["to"])
     if dest.is_file() and src.stat().st_size < 400000 and dest.stat().st_size < 400000:
         try:
@@ -3390,11 +3469,14 @@ def t_sandbox_copy_out(st, emit, a):
            {"sandbox": S, "network": B, "cpus": I, "memory_gb": I, "timeout_min": I, "disk_gb": I, "image": S,
             "arch": {"type": "string", "enum": ["native", "amd64"]}, "setup_command": S, "build_command": S,
             "output": S, "upload_hint": S, "never_run": S,
+            "copy_ignored": dict(B, description="Only if the build needs a file the project's .gitignore marks: "
+                                 "true copies those in too at the next reset (normally they're left out as build "
+                                 "leftovers)"),
             "replace_setup": dict(B, description="Only if the user asked: replace the setup instead of adding to it")})
 def t_sandbox_settings(st, emit, a):
     name = sandbox_name(st, a)
     s = sb(sandbox.load, name)
-    opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch")
+    opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch", "copy_ignored")
             if a.get(k) is not None}
     if a.get("network") is False:
         opts["network"] = False
@@ -3745,7 +3827,13 @@ sandbox_preflight straight away (it shows the Start Colima card, or Repair/Reset
 PatchBay waits and carries on); never wait on, poll or retry Docker yourself, and never tell the user to type colima \
 commands. The project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
 asked for with a card when a download is needed. When it works, propose_sandbox_copy_out the file or folder that \
-should go back into the real project. Anything that sends to a device (make install, FTP upload) runs on the Mac \
+the build made (its result). A sandbox starts like a fresh download: what the project's .gitignore marks (build \
+output, caches, downloaded dependencies) is left out and the build makes it again. A Linux sandbox is Ubuntu on ARM \
+(arm64), in Colima's Linux machine, so files built on the Mac don't fit. If a build fails because of leftovers from \
+an earlier build ("config.h in source dir", an old CMakeCache.txt, a cache that "belongs to another checkout"), \
+delete those files inside the sandbox with sandbox_run, or propose_sandbox_reset; never change the project's own \
+scripts for that. Copying a changed script or source file out to the real project is a last resort, only when the \
+project's own code is really wrong, with a plain reason (why) on the card. Anything that sends to a device (make install, FTP upload) runs on the Mac \
 with propose_command after copying out, never inside the sandbox.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
@@ -5855,8 +5943,10 @@ class Handler(BaseHTTPRequestHandler):
             s = sb(sandbox.create, nm, str(src), kind, data.get("image") or None, None, recipe)
             return {"text": "Made sandbox %s.%s" % (s["name"], memory_warning(s))}
         if a == "reset":
-            sb(sandbox.reset, name)
-            return {"text": "Sandbox %s was emptied and the project copied in fresh." % name}
+            fresh = sb(sandbox.reset, name)
+            LEFTOVERS.pop(name, None)
+            return {"text": "Sandbox %s was emptied and the project copied in fresh.%s" % (
+                name, sandbox.left_out_words(fresh))}
         if a == "delete":
             if SANDBOX_LIVE.get(name, {}).get("running"):
                 raise ToolError("Something is still running in it. Press Stop first.")
