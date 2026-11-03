@@ -249,6 +249,33 @@ your code.
 
 The free-model list is set in `model_labels.py` (CATALOG).
 
+**Long chats.** Once a chat no longer fits the AI's memory, older messages move into notes plus search (see
+`chat_memory` under Settings). After each answer, PatchBay quietly sends the AI the start of the next prompt, so the
+next reply starts in a few seconds even on models Ollama runs with llama.cpp instead of MLX.
+
+**Models from ollama.com uploaders.** Some community uploads of Qwen 3.6 come with an older prompt template that
+ignores "don't think". Replies then start late and their hidden reasoning can end up in the chat's notes. Make a
+fixed copy (same weights, no download) with a file named `Modelfile` containing:
+
+```
+FROM eriktonon/qwen3.6-moe-uncensored:35b-a3b
+TEMPLATE {{ .Prompt }}
+RENDERER qwen3.5
+PARSER qwen3.5
+SYSTEM ""
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0
+PARAMETER presence_penalty 1.5
+PARAMETER repeat_penalty 1
+PARAMETER num_ctx 32768
+PARAMETER num_batch 2048
+```
+
+Then run `ollama create qwen36-uncensored-fixed -f Modelfile` and load `qwen36-uncensored-fixed`. On a 36GB Mac
+that took one such model from 48 to 55 right out of 60 memory questions (the official Qwen 3.6 35B got 56).
+
 **🔎 Deep research.** Press 🔎 next to the message box (it turns dark), type a question and Send. PatchBay splits
 the question into smaller ones, searches the web, reads the pages, takes notes with numbered sources, looks again
 for anything missing, and writes a report with a sources list. It takes a few minutes and runs on your Mac's AI;
