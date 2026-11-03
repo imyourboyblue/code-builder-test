@@ -3382,9 +3382,14 @@ def t_sandbox_run(st, emit, a):
         if caught:
             emit({"type": "note", "text": caught})
         if s["kind"] == "linux" and s.get("needs_setup") and sandbox.is_buildish(a.get("command")):
-            raise ToolError("Not run yet: sandbox %s needs its setup step first (its container is new, or a tool or "
-                            "fix was just added, and the build would fail the old way without it). Call sandbox_build "
-                            "step build: it runs the setup, then the build." % name)
+            # Run the setup first by itself (a refusal here made the AI ask again and again), then the command.
+            emit({"type": "note", "text": "Sandbox %s needs its setup step first (its container is new, or a tool or "
+                                          "fix was just added), so PatchBay runs it, then your command." % name})
+            done = t_sandbox_build(st, emit, {"sandbox": name, "step": "setup"})
+            if sb(sandbox.load, name).get("needs_setup"):
+                return ("The command wasn't run yet: the setup step had to run first and didn't finish (see below). "
+                        "Once it's done, run the same command again.\n" + done)
+            s = sb(sandbox.load, name)
     if SANDBOX_LIVE.get(name, {}).get("running"):
         raise ToolError("Something is already running in sandbox %s (from the Sandbox tab). Wait for it." % name)
     sends = where.describe(a.get("command") or "", known_devices(), computer_name())
@@ -3554,39 +3559,57 @@ def toolchain_fixes(s, code, out, command):
         return tips
     name = s["name"]
     if code != 0 and s.get("arch") != "amd64" and CROSS_TOOL.search(out):
+        had = all((s.get("tool_aliases") or {}).get(t) == "llvm-" + t for t in LLVM_SWAPS)
         try:
+            changed = False
             for t in LLVM_SWAPS:
                 if (s.get("tool_aliases") or {}).get(t) != "llvm-" + t:
                     sandbox.set_alias(name, t, "llvm-" + t, "GNU's ARM version can't read x86 files")
+                    changed = True
             cur = sandbox.load(name).get("setup_command") or ""
             new = sandboxrecipe.add_packages(cur, ["llvm"])
             if new != cur:
                 sandbox.set_recipe(name, {"setup_command": new})
-            setup_again(name)
-            sandbox.add_note(name, "objcopy/nm/ranlib couldn't read the x86 (PS5) object files: this sandbox is ARM "
-                                   "Linux and GNU's tools only read ARM files. Fixed in the sandbox's tools (LLVM "
-                                   "versions), not in the project's scripts.", "patchbay")
+                changed = True
+            if changed:
+                # Only when something new needs installing: the same error again must not send it round the setup
+                # step forever.
+                setup_again(name)
+                sandbox.add_note(name, "objcopy/nm/ranlib couldn't read the x86 (PS5) object files: this sandbox is "
+                                       "ARM Linux and GNU's tools only read ARM files. Fixed in the sandbox's tools "
+                                       "(LLVM versions), not in the project's scripts.", "patchbay")
         except sandbox.SandboxError:
             return tips
-        tips += (" Cause: this sandbox is ARM Linux, and GNU's objcopy/nm/ranlib here only read ARM files, so they "
-                 "can't change the x86 (PS5) object files. PatchBay fixed the sandbox's tools for good: from now on "
-                 "objcopy, nm, ranlib, ar, strip, objdump and readelf mean the LLVM versions (they read every "
-                 "processor's files) in EVERY run, after make clean and after a reset, and llvm is in the setup. "
-                 "Don't edit the project's scripts for this. Next: sandbox_build step build (it runs the setup "
-                 "first, which installs llvm).")
+        if had:
+            tips += (" The LLVM tool swap is already saved and linked in %s (before /usr/bin in any PATH), yet this run "
+                     "still used GNU's tool. So the project calls it another way, likely by its full path "
+                     "(/usr/bin/objcopy) or through a variable like OBJCOPY. Find where with sandbox_run (grep -rn "
+                     "objcopy in the failing script) and tell the user what you found. Don't run the same build again "
+                     "and don't edit the project's scripts." % sandbox.ALIAS_DIR)
+        else:
+            tips += (" Cause: this sandbox is ARM Linux, and GNU's objcopy/nm/ranlib here only read ARM files, so they "
+                     "can't change the x86 (PS5) object files. PatchBay fixed the sandbox's tools for good: from now "
+                     "on objcopy, nm, ranlib, ar, strip, objdump and readelf mean the LLVM versions (they read every "
+                     "processor's files) in EVERY run, also when a script sets its own PATH, after make clean and "
+                     "after a reset, and llvm is in the setup. Don't edit the project's scripts for this. Next: "
+                     "sandbox_build step build (it runs the setup first, which installs llvm and checks the swap).")
     m = RT_MISSING.search(out) if code != 0 and s.get("arch") != "amd64" else None
     if m and re.search(r"missing|No such file|cannot find|unable to find|not found|cannot open", out, re.I):
         path, ver = m.group(1), m.group(2)
         try:
             cmd = rt_fix_command(path, ver)
+            changed = False
             if not any(f.get("command") == cmd for f in s.get("fixes") or []):
                 sandbox.add_fix(name, cmd, "the x86 libclang_rt.builtins (clang %s) from Ubuntu's x86 package; ARM "
                                            "Ubuntu only has the ARM one" % ver)
+                changed = True
             cur = sandbox.load(name).get("setup_command") or ""
             new = sandboxrecipe.add_packages(cur, ["curl", "libclang-rt-%s-dev" % ver])
             if new != cur:
                 sandbox.set_recipe(name, {"setup_command": new})
-            setup_again(name)
+                changed = True
+            if changed:
+                setup_again(name)
         except sandbox.SandboxError:
             return tips
         tips += (" The build needs clang's x86 runtime library (%s). ARM Ubuntu doesn't ship it, so PatchBay saved a "
@@ -3672,6 +3695,10 @@ def sandbox_hints(s, code, out, step, started=None, command=""):
                      "skip making it again. PatchBay deletes %s before the next build command (only if nothing "
                      "changed it since)." % (", ".join(half[:4]) + (" and %d more" % (len(half) - 4) if len(half) > 4
                                                                      else ""), "it" if len(half) == 1 else "them"))
+    if code != 0 and "PatchBay check FAILED" in out:
+        tips += (" PatchBay's own check after the setup found a tool swap not working (see the 'PatchBay check FAILED' "
+                 "line): the LLVM program it points to may not be installed. Tell the user that line in plain words; "
+                 "don't build until it's fixed.")
     nt = NO_TARGET.search(out) if code != 0 else None
     if nt:
         tips += (" The project has no make target called %s. The sandbox's build is: %s%s. Don't make up targets."
