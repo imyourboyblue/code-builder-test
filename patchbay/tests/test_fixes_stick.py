@@ -77,7 +77,7 @@ class ToolSwaps(Base):
         sandbox.set_alias("EglantinePS5", "objcopy", "llvm-objcopy")
         seen = {}
 
-        def fake_stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
+        def fake_stream(argv, cwd, env, emit, timeout, stop, on_kill=None, cancel=None):
             seen["cmd"] = argv[-1]
             return 0, "ok"
         with mock.patch.object(sandbox, "ensure_container", return_value=("docker", "docker", "patchbay-sb-x")), \
@@ -231,7 +231,7 @@ class HalfMadeFiles(Base):
         lib = w / "build" / "radv-isolated" / "libvulkan_radeon.ps5.a"
         lib.parent.mkdir(parents=True)
 
-        def failing(argv, cwd, env, emit, timeout, stop, on_kill=None):
+        def failing(argv, cwd, env, emit, timeout, stop, on_kill=None, cancel=None):
             lib.write_bytes(b"!<arch>\nnot renamed")
             (w / "tools" / "isolate-radv.py").write_text("print('isolate')\n")   # a project file: never removed
             return 2, OBJCOPY_FAIL

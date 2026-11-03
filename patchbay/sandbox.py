@@ -67,6 +67,7 @@ LOCK = threading.Lock()
 ALIAS_DIR = "/usr/local/bin"
 OLD_ALIAS_DIR = "/opt/patchbay/bin"
 PLAIN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+LABEL = "patchbay.sandbox"          # put on every sandbox container and saved image, so clean-up only finds PatchBay's
 TOOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,60}$")
 NOTES_MAX = 30
 FIXES_MAX = 20
@@ -903,7 +904,8 @@ def create_args(kind, exe, sb):
             _offline_network(exe)
             argv += ["--network", OFFLINE_NET]
     else:
-        argv = [exe, "run", "-d", "--name", name, "--cpus", cpus, "--memory", mem, "--pids-limit", "2048",
+        argv = [exe, "run", "-d", "--name", name, "--label", "%s=%s" % (LABEL, slug(sb["name"])),
+                "--cpus", cpus, "--memory", mem, "--pids-limit", "2048",
                 "--security-opt", "no-new-privileges", "-v", vol, "-w", "/work",
                 "--network", "bridge" if sb["network"] else "none"] + arch_args(kind, sb)
     return argv + ["-e", "HOME=/root", "-e", "PATCHBAY_SANDBOX=1", image, "sleep", "infinity"]
@@ -948,15 +950,33 @@ def ensure_container(sb, emit=None, stop=None):
     return kind, exe, name
 
 
+def _image_id(exe, ref):
+    code, out = _quiet([exe, "image", "inspect", "-f", "{{.Id}}", ref], 30)
+    return out.strip() if code == 0 and out.strip().startswith("sha256:") else ""
+
+
 def _save_and_remove(kind, exe, sb):
     name = container_name(sb["name"])
     if _exists(kind, exe, name):
-        code, out = _quiet([exe, "commit", name, saved_image(sb["name"])], 900)
+        saved = saved_image(sb["name"])
+        old = _image_id(exe, saved) if kind == "docker" else ""
+        argv = [exe, "commit"]
+        if kind == "docker":
+            argv += ["--change", "LABEL %s=%s" % (LABEL, slug(sb["name"]))]
+        code, out = _quiet(argv + [name, saved], 900)
         if code == 0:
-            sb["image_in_use"] = saved_image(sb["name"])
-        _quiet([exe, "rm", "-f", name] if kind == "docker" else [exe, "delete", "--force", name], 120)
+            sb["image_in_use"] = saved
+            if old and old != _image_id(exe, saved):
+                # The new save took the name, so the old one would sit there nameless, still taking disk space.
+                _quiet([exe, "image", "rm", old], 120)
+        _quiet(_rm_argv(kind, exe, name), 120)
     sb["container_network"] = None
     save(sb)
+
+
+def _rm_argv(kind, exe, name):
+    """Remove a container: its programs are killed first (-f), and its own scratch volumes go too (-v)."""
+    return [exe, "rm", "-f", "-v", name] if kind == "docker" else [exe, "delete", "--force", name]
 
 
 def stop_container(sb):
@@ -987,15 +1007,242 @@ def stop_engine(kind):
 
 
 def remove_container(sb, image_too=True):
+    """Kill everything running in the sandbox's container, remove the container, and (image_too) the saved images it
+    left. Checks it's really gone. Only ever touches patchbay-sb-... names and images labelled as PatchBay's."""
     kind, exe = engine()
     if not kind:
         return
     name = container_name(sb["name"])
-    _quiet([exe, "rm", "-f", name] if kind == "docker" else [exe, "delete", "--force", name], 120)
+    if kind == "docker":
+        _quiet([exe, "kill", name], 30)          # stops any build still running in it, right away
+    _quiet(_rm_argv(kind, exe, name), 120)
     services.forget("sandbox", name)
     if image_too:
         _quiet([exe, "image", "rm", saved_image(sb["name"])] if kind == "docker" else
                [exe, "image", "delete", "--force", saved_image(sb["name"])], 120)
+        if kind == "docker":
+            for iid in _dangling_ids(exe, slug(sb["name"])):
+                _quiet([exe, "image", "rm", iid], 120)
+    if _exists(kind, exe, name):
+        raise SandboxError("The old container %s is still there after removing it, so the sandbox wasn't reset. "
+                           "Docker may be stuck: try again in a minute, or restart Colima with sandbox_preflight."
+                           % name)
+
+
+def _dangling_ids(exe, which=None):
+    """Nameless old saves of sandbox `which` (None: of any sandbox). Only images carrying PatchBay's label."""
+    argv = [exe, "images", "-q", "--no-trunc", "-f", "dangling=true",
+            "-f", "label=%s=%s" % (LABEL, which) if which else "label=%s" % LABEL]
+    code, out = _quiet(argv, 30)
+    return sorted({x.strip() for x in out.splitlines() if x.strip().startswith("sha256:")}) if code == 0 else []
+
+
+# ---------------------------------------------------------------- memory and disk: what's really used, and clean-up
+#
+# Colima is a small Linux computer running inside the Mac. Two things about it look like a leak but are normal:
+#  - Memory: while Colima runs, the Mac counts the memory Linux has touched (builds, file caches) as used, up to the
+#    size Colima was started with (20 GB on a 36 GB Mac). It doesn't shrink when a build ends or a sandbox is reset;
+#    only stopping Colima gives it back.
+#  - Disk: Colima's disk file on the Mac grows when things are installed and doesn't shrink by itself when they're
+#    removed. Clean up asks Linux to hand the freed space back (fstrim).
+
+def _json_lines(out):
+    rows = []
+    for line in out.splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            rows.append(d)
+    return rows
+
+
+def _allocated(path):
+    """Space a file really takes on the Mac's disk (Colima's disk file is sparse: its listed size is its limit)."""
+    try:
+        st = os.stat(str(path))
+    except OSError:
+        return 0
+    return getattr(st, "st_blocks", 0) * 512 or st.st_size
+
+
+def colima_disk_files():
+    """Colima's disk files on the Mac (the Linux machine's hard disk)."""
+    lima = colima_home() / "_lima"
+    files = []
+    for top in (lima / "_disks", lima / "colima"):
+        if top.is_dir():
+            for p in top.rglob("*"):
+                if p.is_file() and not p.is_symlink() and "disk" in p.name.lower():
+                    files.append(p)
+    return files
+
+
+def _sandbox_slugs():
+    return {slug(x["name"]): x["name"] for x in all_sandboxes()}
+
+
+def _patchbay_containers(exe):
+    """Every PatchBay sandbox container Docker has, running or stopped: [{"name", "state", "sandbox"}]."""
+    code, out = _quiet([exe, "ps", "-a", "--filter", "name=^patchbay-sb-", "--format", "{{json .}}"], 30)
+    known = _sandbox_slugs()
+    rows = []
+    for d in _json_lines(out) if code == 0 else []:
+        n = str(d.get("Names") or "").split(",")[0]
+        if not n.startswith("patchbay-sb-"):
+            continue
+        rows.append({"name": n, "state": str(d.get("State") or d.get("Status") or "").lower(),
+                     "sandbox": known.get(n[len("patchbay-sb-"):])})
+    return rows
+
+
+def _programs_inside(exe, cname):
+    """Programs running in a container other than its idle 'sleep infinity'."""
+    code, out = _quiet([exe, "top", cname, "-eo", "pid,args"], 20)
+    if code != 0:
+        code, out = _quiet([exe, "top", cname], 20)
+    if code != 0:
+        return []
+    rows = [l.strip() for l in out.splitlines()[1:] if l.strip()]
+    return [r for r in rows if "sleep infinity" not in r]
+
+
+def usage():
+    """What the sandboxes really use right now. Only reads. Returns a dict the Sandbox tab and the chat show."""
+    kind, exe = engine()
+    u = {"engine": kind, "running": False, "containers": [], "images": [], "dangling": 0, "docker_df": [],
+         "colima": None, "words": []}
+    if kind != "docker":
+        u["words"].append("Usage details are only shown for Docker (Colima)." if kind else "No Linux sandbox tool yet.")
+        return u
+    if _quiet([exe, "info"], 20)[0] != 0:
+        u["words"].append("Docker isn't running, so the sandboxes use no memory right now.")
+    else:
+        u["running"] = True
+        stats = {}
+        code, out = _quiet([exe, "stats", "--no-stream", "--format", "{{json .}}"], 40)
+        for d in _json_lines(out) if code == 0 else []:
+            stats[str(d.get("Name") or "")] = d
+        for c in _patchbay_containers(exe):
+            st = stats.get(c["name"], {})
+            c["memory"] = str(st.get("MemUsage") or "").split("/")[0].strip() if c["state"] == "running" else ""
+            c["cpu"] = str(st.get("CPUPerc") or "") if c["state"] == "running" else ""
+            c["programs"] = _programs_inside(exe, c["name"]) if c["state"] == "running" else []
+            c["busy"] = bool(c["sandbox"] and busy(c["sandbox"]))
+            u["containers"].append(c)
+        code, out = _quiet([exe, "images", "--filter", "reference=patchbay-sb-*", "--format", "{{json .}}"], 30)
+        for d in _json_lines(out) if code == 0 else []:
+            u["images"].append({"name": "%s:%s" % (d.get("Repository"), d.get("Tag")), "size": d.get("Size") or ""})
+        u["dangling"] = len(_dangling_ids(exe))
+        code, out = _quiet([exe, "system", "df", "--format", "{{json .}}"], 60)
+        for d in _json_lines(out) if code == 0 else []:
+            u["docker_df"].append({"type": d.get("Type"), "size": d.get("Size"), "reclaimable": d.get("Reclaimable")})
+    if _which("colima"):
+        info = colima_info()
+        files = colima_disk_files()
+        u["colima"] = {"running": info["running"], "cpus": info["cpus"], "memory_gb": info["memory_gb"],
+                       "disk_on_mac": human(sum(_allocated(f) for f in files)) if files else ""}
+        if info["running"]:
+            u["words"].append(
+                "Colima is running with %s GB of memory set aside. While it runs, the Mac shows that memory as used "
+                "(it fills up as builds run and doesn't go down after a build or a reset). That's normal. Only stopping "
+                "Colima gives it back." % _gb(info["memory_gb"]))
+    left = [c for c in u["containers"] if not c["sandbox"]]
+    extra = [c for c in u["containers"] if c["programs"] and not c["busy"]]
+    if left:
+        u["words"].append("%d container%s left from deleted sandboxes: %s." % (
+            len(left), "s are" if len(left) > 1 else " is", ", ".join(c["name"] for c in left)))
+    if extra:
+        u["words"].append("Programs are still running in %s with nothing started by PatchBay: a build that kept "
+                          "going after it was stopped." % ", ".join(c["name"] for c in extra))
+    if u["dangling"]:
+        u["words"].append("%d old saved cop%s of sandboxes without a name (taking disk space)." % (
+            u["dangling"], "ies" if u["dangling"] > 1 else "y"))
+    return u
+
+
+def usage_text(u=None):
+    u = u or usage()
+    lines = list(u["words"])
+    for c in u["containers"]:
+        lines.append("%s (%s): %s%s%s" % (c["name"], c["sandbox"] or "sandbox deleted", c["state"],
+                                          ", memory %s, CPU %s" % (c["memory"], c["cpu"]) if c.get("memory") else "",
+                                          ", %d program%s running inside" % (len(c["programs"]),
+                                                                             "s" if len(c["programs"]) != 1 else "")
+                                          if c.get("programs") else ""))
+    for i in u["images"]:
+        lines.append("Saved image %s: %s" % (i["name"], i["size"]))
+    if u.get("colima") and u["colima"].get("disk_on_mac"):
+        lines.append("Colima's disk file takes %s on the Mac." % u["colima"]["disk_on_mac"])
+    for d in u["docker_df"]:
+        lines.append("All of Docker, %s: %s (%s could be freed)" % (d["type"], d["size"], d["reclaimable"]))
+    return "\n".join(lines) or "Nothing to show."
+
+
+def cleanup(emit=None):
+    """Clean up after the sandboxes. Only ever PatchBay's own things (patchbay-sb-... containers and images with
+    PatchBay's label); other Docker containers, images and volumes are never touched. Sandboxes that are building
+    right now are left alone. What's installed in a sandbox stays (its container is only stopped)."""
+    kind, exe = engine()
+    if kind != "docker":
+        raise SandboxError("Clean up works with Docker (Colima). %s" % (
+            "Apple's container tool is in use." if kind else "No Linux sandbox tool is installed."))
+    if _quiet([exe, "info"], 20)[0] != 0:
+        raise SandboxError("Docker isn't running, so there's nothing in memory to clean up.")
+    say = (lambda t: emit({"type": "status", "text": t})) if emit else (lambda t: None)
+    done = []
+    known = _sandbox_slugs()
+    for c in _patchbay_containers(exe):
+        if not c["sandbox"]:
+            say("Removing %s (its sandbox was deleted)..." % c["name"])
+            _quiet([exe, "kill", c["name"]], 30)
+            _quiet([exe, "rm", "-f", "-v", c["name"]], 120)
+            done.append("removed %s, left from a deleted sandbox" % c["name"])
+        elif c["state"] == "running" and not busy(c["sandbox"]):
+            say("Stopping %s (nothing is building in it)..." % c["name"])
+            _quiet([exe, "stop", "-t", "3", c["name"]], 60)
+            services.forget("sandbox", c["name"])
+            done.append("stopped %s (what's installed in it stays; it starts again by itself)" % c["name"])
+    code, out = _quiet([exe, "images", "--filter", "reference=patchbay-sb-*", "--format", "{{.Repository}}:{{.Tag}}"],
+                       30)
+    for ref in out.split() if code == 0 else []:
+        m = re.match(r"^patchbay-sb-(.+):saved$", ref)
+        if m and m.group(1) not in known:
+            _quiet([exe, "image", "rm", ref], 120)
+            done.append("removed saved image %s (its sandbox was deleted)" % ref)
+    old = _dangling_ids(exe)
+    for iid in old:
+        _quiet([exe, "image", "rm", iid], 120)
+    if old:
+        done.append("removed %d old nameless sandbox save%s" % (len(old), "s" if len(old) > 1 else ""))
+    col = _which("colima")
+    if col and uses_colima(exe):
+        say("Asking Colima to give freed disk space back to the Mac...")
+        before = sum(_allocated(f) for f in colima_disk_files())
+        code, out = _quiet([col, "ssh", "--", "sudo", "fstrim", "-a"], 300)
+        after = sum(_allocated(f) for f in colima_disk_files())
+        if code == 0:
+            done.append("gave freed disk space back to the Mac%s" % (
+                " (%s)" % human(before - after) if before > after else ""))
+    if not done:
+        return "Nothing to clean up: no leftover sandbox containers, old saves or stray builds."
+    return "Cleaned up: " + "; ".join(done) + ". Nothing else in Docker was touched."
+
+
+def stop_colima_now():
+    """Stop Colima to give its memory back to the Mac. Refused while a sandbox is building."""
+    if busy():
+        raise SandboxError("A sandbox is building right now. Press Stop first, then stop Colima.")
+    col = _which("colima")
+    if not col:
+        raise SandboxError("Colima isn't installed.")
+    if not colima_info()["running"]:
+        return "Colima isn't running, so it isn't using any memory."
+    if not stop_engine("colima"):
+        raise SandboxError("Colima didn't stop. Colima says:\n%s" % colima_status_text())
+    return ("Colima is stopped and its memory is back with the Mac. The next sandbox build starts it again "
+            "(that takes about a minute).")
 
 
 # ---------------------------------------------------------------- the Mac sandbox (sandbox-exec)
@@ -1084,8 +1331,12 @@ def create(name, source, kind="linux", image=None, emit=None, recipe=None):
 
 
 def reset(name, emit=None):
-    """Throw away everything in the sandbox and copy the project in fresh. Settings are kept."""
+    """Throw away everything in the sandbox and copy the project in fresh. Settings are kept.
+    Anything still running in it (a build started from the chat or the Sandbox tab) is stopped first, so nothing keeps
+    building, writing files or using memory in the background."""
     sb = load(name)
+    if stop_runs(name) and emit:
+        emit({"type": "status", "text": "Stopped what was still running in sandbox %s." % name})
     remove_container(sb)
     sb.pop("image_in_use", None)
     sb["container_network"] = None
@@ -1108,6 +1359,7 @@ def reset(name, emit=None):
 
 def delete(name):
     sb = load(name)
+    stop_runs(name)
     remove_container(sb)
     shutil.rmtree(str(folder(name)), ignore_errors=True)
     return "Deleted sandbox %s. Your real project wasn't touched." % name
@@ -1426,7 +1678,48 @@ def notes_text(sb, limit=12):
 
 # ---------------------------------------------------------------- running a command inside
 
-def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
+# Runs going on right now: sandbox name -> list of (cancel, done) events. Reset and Delete use it to stop them first.
+_RUNS = {}
+_RUNS_LOCK = threading.Lock()
+
+
+def _begin_run(name):
+    ev = (threading.Event(), threading.Event())
+    with _RUNS_LOCK:
+        _RUNS.setdefault(name, []).append(ev)
+    return ev
+
+
+def _end_run(name, ev):
+    ev[1].set()
+    with _RUNS_LOCK:
+        rows = _RUNS.get(name) or []
+        if ev in rows:
+            rows.remove(ev)
+        if not rows:
+            _RUNS.pop(name, None)
+
+
+def busy(name=None):
+    """Whether a command is running in sandbox `name` (None: in any sandbox) right now."""
+    with _RUNS_LOCK:
+        return bool(_RUNS.get(name)) if name else any(_RUNS.values())
+
+
+def stop_runs(name, wait=20):
+    """Stop every command running in the sandbox and wait (up to `wait` seconds) until they've ended.
+    Returns how many were running."""
+    with _RUNS_LOCK:
+        rows = list(_RUNS.get(name) or [])
+    for cancel, _ in rows:
+        cancel.set()
+    end = time.time() + wait
+    for _, done in rows:
+        done.wait(max(0.1, end - time.time()))
+    return len(rows)
+
+
+def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None, cancel=None):
     started = time.time()
     # Its own process group, so Stop ends everything the command started (not just the shell).
     proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -1447,6 +1740,8 @@ def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
         while not watch_done.wait(0.5):
             if stop is not None and stop.is_set():
                 killed = "(stopped: you pressed Stop)"
+            elif cancel is not None and cancel.is_set():
+                killed = "(stopped: the sandbox was reset or deleted)"
             elif time.time() - started > timeout:
                 killed = "(stopped: it took longer than %d minutes)" % (timeout // 60)
             if killed:
@@ -1469,6 +1764,10 @@ def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
     finally:
         watch_done.set()
         if proc.poll() is None:
+            # Something went wrong while reading. Killing only the docker command would leave the build running
+            # inside the container, so the container's programs are stopped too.
+            if on_kill and not killed:
+                on_kill()
             kill()
         proc.stdout.close()
     if killed:
@@ -1497,32 +1796,42 @@ def run(name, command, emit=None, stop=None, base_path=None, record=True):
     w = work(sb)
     if not w.is_dir():
         raise SandboxError("The sandbox's copy of the project is missing. Reset the sandbox.")
-    if sb["kind"] == "mac":
-        if not Path("/usr/bin/sandbox-exec").exists():
-            raise SandboxError("This Mac has no sandbox-exec.")
-        path = base_path or "/opt/devkitpro/tools/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        code, out = _stream(mac_argv(sb, command), w, mac_env(sb, path), emit, timeout, stop)
-    else:
-        kind, exe, cname = ensure_container(sb, emit, stop)
+    ev = _begin_run(name)
+    try:
+        code, out = _run_inside(name, sb, command, emit, stop, base_path, record, timeout, w, ev[0])
+        if not record or ev[0].is_set():
+            # A reset or delete stopped it: the sandbox is being emptied, so nothing about this run is saved in it.
+            return code, out
+        if code != 0 and is_buildish(command):
+            note_suspects(name, time.time())
         sb = load(name)
-        if record and sb.get("suspect") and is_buildish(command):
-            clear_suspects(name, emit)
-        argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", PIPEFAIL_SH, "sh", prelude(sb) + command]
-        code, out = _stream(argv, w, cli_env(), emit, timeout, stop,
-                            on_kill=lambda: _quiet([exe, "stop", cname], 60))
-    if not record:
-        return code, out
-    if code != 0 and is_buildish(command):
-        note_suspects(name, time.time())
-    sb = load(name)
-    used = size_of(folder(name))
-    sb["last_run"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "command": command[:300], "code": code,
-                      "output": out[-20000:]}
-    save(sb)
+        used = size_of(folder(name))
+        sb["last_run"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "command": command[:300], "code": code,
+                          "output": out[-20000:]}
+        save(sb)
+    finally:
+        _end_run(name, ev)
     if used > int(sb["disk_gb"]) * 1024 ** 3:
         out += ("\n(Warning: the sandbox now uses %.1f GB, over its %d GB limit. Reset it or delete build files.)"
                 % (used / 1024 ** 3, sb["disk_gb"]))
     return code, out
+
+
+def _run_inside(name, sb, command, emit, stop, base_path, record, timeout, w, cancel):
+    if sb["kind"] == "mac":
+        if not Path("/usr/bin/sandbox-exec").exists():
+            raise SandboxError("This Mac has no sandbox-exec.")
+        path = base_path or "/opt/devkitpro/tools/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        return _stream(mac_argv(sb, command), w, mac_env(sb, path), emit, timeout, stop, cancel=cancel)
+    kind, exe, cname = ensure_container(sb, emit, stop)
+    sb = load(name)
+    if record and sb.get("suspect") and is_buildish(command):
+        clear_suspects(name, emit)
+    argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", PIPEFAIL_SH, "sh", prelude(sb) + command]
+    # Stopping only the docker command on the Mac would leave make/clang running inside, so the container is stopped.
+    return _stream(argv, w, cli_env(), emit, timeout, stop, cancel=cancel,
+                   on_kill=lambda: _quiet([exe, "stop", "-t", "3", cname] if kind == "docker" else [exe, "stop", cname],
+                                          60))
 
 
 def listing(name, sub="", limit=300):

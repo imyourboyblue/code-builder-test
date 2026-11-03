@@ -3022,6 +3022,9 @@ def sandbox_where(change):
     if change.get("action") in ("colima_start", "colima_resize", "colima_repair"):
         return where.mac_only(computer_name(), "Colima's Linux machine on this Mac (Docker sandboxes restart). "
                                                "Nothing on your devices")
+    if change.get("action") == "cleanup":
+        return where.mac_only(computer_name(), "Only PatchBay's own sandbox containers and saved images in Docker on "
+                                               "this Mac (nothing else in Docker). Nothing on your devices")
     return where.mac_only(computer_name(), "Only sandbox %s. Nothing else on this Mac or your devices" % name,
                           runs=runs)
 
@@ -3050,6 +3053,8 @@ def confirm_sandbox(st, p, emit):
                                                                               sandbox.left_out_words(fresh))
     elif a == "delete":
         result = sb(sandbox.delete, ch["sandbox"])
+    elif a == "cleanup":
+        result = sb(sandbox.cleanup, emit)
     elif a == "copy_out":
         result = sb(sandbox.copy_out, ch)
         proof.record(st, "copied", "sandbox %s: %s -> %s" % (ch.get("sandbox") or "", ch.get("rel") or "",
@@ -3408,6 +3413,9 @@ def t_sandbox_run(st, emit, a):
     started = time.time()
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
+    if (out or "").rstrip().endswith("(stopped: the sandbox was reset or deleted)"):
+        return ("Stopped: the user reset or deleted sandbox %s while this was running, so it was ended. Don't run it "
+                "again by yourself: tell the user it was stopped, and ask before building again." % name)
     place = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
     hidden = hidden_failure(a.get("command") or "", code, out)
     if hidden:
@@ -4010,6 +4018,30 @@ def t_sandbox_reset(st, emit, a):
     return sandbox_card(st, emit, {"action": "reset", "sandbox": name}, "Reset sandbox %s" % name,
                         "Throw away everything built or installed in sandbox %s and copy\n%s in fresh." % (
                             name, s["source"]), "Reset it", "Your real project isn't touched.")
+
+
+@both_tool("sandbox_usage", "Show what the sandboxes really use right now: memory and CPU of each sandbox container, "
+           "programs still running inside, saved images, leftovers from deleted sandboxes, Colima's memory and its disk "
+           "file on the Mac. Only reads. Use it when the user asks why memory or disk keeps growing.")
+def t_sandbox_usage(st, emit, a):
+    return sb(sandbox.usage_text) + ("\nTo tidy up PatchBay's own leftovers: propose_sandbox_cleanup (a card). Only "
+                                     "stopping Colima gives its memory back to the Mac (Setup → Sandbox).")
+
+
+@both_tool("propose_sandbox_cleanup", "Clean up after the sandboxes: stop sandbox containers nothing is building in, "
+           "remove containers and saved images left from deleted sandboxes and old nameless saves, and give freed "
+           "disk space back to the Mac. Only PatchBay's own sandbox things, never other Docker things. Shows a card.",
+           {})
+def t_sandbox_cleanup(st, emit, a):
+    u = sb(sandbox.usage)
+    if u["engine"] != "docker":
+        raise ToolError("Clean up works with Docker (Colima). " + " ".join(u["words"]))
+    return sandbox_card(st, emit, {"action": "cleanup", "sandbox": ""}, "Clean up sandboxes",
+                        "Now:\n%s\n\nClean up will:\n- stop sandbox containers nothing is building in (what's "
+                        "installed in them stays)\n- remove containers and saved images left from deleted sandboxes, "
+                        "and old nameless saves\n- ask Colima to give freed disk space back to the Mac\n\nNothing else "
+                        "in Docker is touched." % sandbox.usage_text(u), "Clean up",
+                        "Only PatchBay's own sandbox leftovers. Your projects and devices aren't touched.")
 
 
 @both_tool("propose_sandbox_delete", "Delete a sandbox completely. Shows a card. The real project isn't touched.",
@@ -5438,7 +5470,7 @@ SANDBOX_GROUP = ("sandboxes: a throwaway copy of a project to build and test in 
                  "network off by default, results copied out only with a card",
                  ["sandbox_list", "sandbox_preflight", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read", "sandbox_fix", "sandbox_note",
                   "propose_sandbox_copy_out", "propose_sandbox_settings", "propose_sandbox_reset",
-                  "propose_sandbox_delete", "propose_sandbox_undo"],
+                  "propose_sandbox_delete", "propose_sandbox_undo", "sandbox_usage", "propose_sandbox_cleanup"],
                  r"sandbox|container|docker|colima|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests|"
                  r"rosetta|x86|amd64|arm64")
 DEVICE_GROUPS["sandbox"] = SANDBOX_GROUP
@@ -6491,7 +6523,7 @@ class Handler(BaseHTTPRequestHandler):
     def sandbox_api(self, data):
         """The Sandbox tab's buttons. Pressing a button there (and OK on its question) is the user's confirm."""
         a, name = data.get("action"), data.get("name") or ""
-        if not self.from_this_mac() and a not in ("stop", "changed"):
+        if not self.from_this_mac() and a not in ("stop", "changed", "usage"):
             raise ToolError("Sandboxes can only be changed on the Mac itself.")
         if a == "create":
             src = sandbox_source_ok(data.get("folder"))
@@ -6510,6 +6542,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise ToolError("Something is still running in it. Press Stop first.")
             SANDBOX_LIVE.pop(name, None)
             return {"text": sb(sandbox.delete, name)}
+        if a == "usage":
+            return {"usage": sb(sandbox.usage)}
+        if a == "cleanup":
+            return {"text": sb(sandbox.cleanup)}
+        if a == "stop_colima":
+            return {"text": sb(sandbox.stop_colima_now)}
         if a == "set":
             opts = {k: data.get(k) for k in ("network", "cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch")
                     if data.get(k) not in (None, "")}
