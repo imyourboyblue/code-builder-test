@@ -61,7 +61,12 @@ OFFLINE_NET = "patchbay-offline"     # Apple container: a host-only network (mac
 EXTRA_PATHS = ["/usr/local/bin", "/opt/homebrew/bin", str(HOME / ".orbstack/bin"),
                "/Applications/Docker.app/Contents/Resources/bin"]
 LOCK = threading.Lock()
-ALIAS_DIR = "/opt/patchbay/bin"      # inside a Linux sandbox: tool swaps (objcopy -> llvm-objcopy), first on PATH
+# Inside a Linux sandbox: where tool swaps (objcopy -> llvm-objcopy) are linked. /usr/local/bin comes before /usr/bin in
+# every standard PATH, also the one build scripts set themselves (export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:
+# /usr/bin:/sbin:/bin), so a script that resets PATH still gets the swap. (/opt/patchbay/bin was dropped by those.)
+ALIAS_DIR = "/usr/local/bin"
+OLD_ALIAS_DIR = "/opt/patchbay/bin"
+PLAIN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 TOOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,60}$")
 NOTES_MAX = 30
 FIXES_MAX = 20
@@ -1222,7 +1227,7 @@ def add_note(name, text, by="ai"):
 
 def set_alias(name, tool, use, why=""):
     """Make `tool` mean `use` for every command in a Linux sandbox (e.g. objcopy -> llvm-objcopy, whose LLVM tools
-    read files for every processor). Done by a link in ALIAS_DIR, which is first on PATH, made again before every
+    read files for every processor). Done by a link in ALIAS_DIR (before /usr/bin in any PATH), made again before every
     run, so it holds after make clean, a new container and a reset. use '' takes the swap away."""
     sb = load(name)
     if sb["kind"] != "linux":
@@ -1275,21 +1280,42 @@ def remove_fix(name, number):
     return load(name)
 
 
+def _aliases(sb):
+    return {k: v for k, v in (sb.get("tool_aliases") or {}).items() if TOOL_RE.match(k) and TOOL_RE.match(v)}
+
+
+def link_lines(sb):
+    """Shell lines that link each tool swap into ALIAS_DIR. A swap is only linked when its program is installed
+    (llvm-objcopy, or the newest llvm-objcopy-NN), so a swap saved before the setup installed it never leaves the build
+    without objcopy at all. Only PatchBay's own links are ever replaced or removed there, never a real program."""
+    lines = []
+    for tool, use in sorted(_aliases(sb).items()):
+        dest = "%s/%s" % (ALIAS_DIR, tool)
+        lines.append('t=$(command -v %s || ls -1 /usr/bin/%s-[0-9]* 2>/dev/null | sort -V | tail -n 1); '
+                     'if [ -e %s ] && [ ! -L %s ]; then :; elif [ -n "$t" ]; then ln -sf "$t" %s; else rm -f %s; fi'
+                     % (use, use, dest, dest, dest, dest))
+    return lines
+
+
+def check_lines(sb):
+    """Shell lines that check each swap holds even under a PATH a build script sets itself; a loud failure if not."""
+    lines = []
+    for tool, use in sorted(_aliases(sb).items()):
+        lines.append('v=$(env -i PATH=%s %s --version 2>&1); case "$v" in *LLVM*|*llvm*) '
+                     'echo "PatchBay check: %s is the LLVM version (good)";; *) echo "PatchBay check FAILED: under the '
+                     'PATH build scripts use, %s is still not %s: $(echo "$v" | sed -n 1p). The tool swap did not '
+                     'take." >&2; exit 97;; esac' % (PLAIN_PATH, tool, tool, tool, use))
+    return lines
+
+
 def prelude(sb):
-    """Shell lines run before every command in a Linux sandbox: no install questions, and the tool swaps. A swap is
-    only linked when its program is installed (llvm-objcopy, or the newest llvm-objcopy-NN), so a swap saved before
-    the setup installed it never leaves the build without objcopy at all."""
+    """Shell lines run before every command in a Linux sandbox: no install questions, and the tool swaps."""
     if sb.get("kind") != "linux":
         return ""
     lines = ["export DEBIAN_FRONTEND=noninteractive"]
-    aliases = {k: v for k, v in (sb.get("tool_aliases") or {}).items() if TOOL_RE.match(k) and TOOL_RE.match(v)}
-    if aliases:
-        lines.append("mkdir -p %s 2>/dev/null" % ALIAS_DIR)
-        for tool, use in sorted(aliases.items()):
-            lines.append('t=$(command -v %s || ls -1 /usr/bin/%s-[0-9]* 2>/dev/null | sort -V | tail -n 1); '
-                         'if [ -n "$t" ]; then ln -sf "$t" %s/%s; else rm -f %s/%s; fi'
-                         % (use, use, ALIAS_DIR, tool, ALIAS_DIR, tool))
-        lines.append("export PATH=%s:$PATH" % ALIAS_DIR)
+    if _aliases(sb):
+        lines += link_lines(sb)
+        lines.append("rm -rf %s 2>/dev/null" % OLD_ALIAS_DIR)     # links from the first version of this
     return "; ".join(lines) + "; "
 
 
@@ -1732,6 +1758,10 @@ def step_command(sb, step):
     if step == "setup" and sb.get("fixes"):
         fixes = " && ".join("{ %s ; }" % f["command"].rstrip("; ") for f in sb["fixes"])
         cmd = "%s && %s" % (cmd, fixes) if cmd else fixes
+    if step == "setup" and sb.get("kind") == "linux" and _aliases(sb):
+        # The setup has just installed what the swaps point to: link them now and check they hold under a plain PATH.
+        swaps = "{ %s ; }" % "; ".join(link_lines(sb) + check_lines(sb))
+        cmd = "%s && %s" % (cmd, swaps) if cmd else swaps
     return cmd.replace("{cpus}", str(int(sb["cpus"])))
 
 

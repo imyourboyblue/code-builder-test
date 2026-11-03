@@ -84,8 +84,9 @@ class ToolSwaps(Base):
                 mock.patch.object(sandbox, "_stream", fake_stream):
             sandbox.run("EglantinePS5", "make clean; make -j8")
         self.assertTrue(seen["cmd"].endswith("make clean; make -j8"))
-        self.assertIn("ln -sf \"$t\" /opt/patchbay/bin/objcopy", seen["cmd"])
-        self.assertIn("export PATH=/opt/patchbay/bin:$PATH", seen["cmd"])
+        # Linked in /usr/local/bin: before /usr/bin even in the PATH build scripts set themselves.
+        self.assertIn("ln -sf \"$t\" /usr/local/bin/objcopy", seen["cmd"])
+        self.assertNotIn("export PATH=", seen["cmd"])
         self.assertEqual(self.sb()["last_run"]["command"], "make clean; make -j8")   # the chat sees its own command
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash")
@@ -97,10 +98,37 @@ class ToolSwaps(Base):
         (fake / "llvm-objcopy").chmod(0o755)
         s = dict(self.sb(), tool_aliases={"objcopy": "llvm-objcopy", "nm": "llvm-nm-missing"})
         pre = sandbox.prelude(s).replace(sandbox.ALIAS_DIR, str(d))
-        out = subprocess.run(["bash", "-o", "pipefail", "-c", pre + "objcopy; ls %s" % d], capture_output=True,
-                             text=True, env={"PATH": "%s:/usr/bin:/bin" % fake}).stdout
+        d.mkdir()
+        # The command resets PATH the way tools/build-package.sh does; the swap dir is in it, like /usr/local/bin.
+        out = subprocess.run(["bash", "-o", "pipefail", "-c", pre + "export PATH=%s:/usr/bin:/bin; objcopy; ls %s"
+                              % (d, d)], capture_output=True, text=True,
+                             env={"PATH": "%s:%s:/usr/bin:/bin" % (d, fake)}).stdout
         self.assertIn("llvm-objcopy", out.splitlines()[0])
         self.assertNotIn("nm", out.split("\n", 1)[1])        # not installed: no link, so GNU nm still works
+
+    def test_setup_links_the_swaps_and_checks_them_under_a_plain_path(self):
+        sandbox.set_alias("EglantinePS5", "objcopy", "llvm-objcopy")
+        setup = sandbox.step_command(self.sb(), "setup")
+        self.assertTrue(setup.startswith("apt-get update"))
+        self.assertIn("ln -sf \"$t\" /usr/local/bin/objcopy", setup)
+        self.assertIn("env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin objcopy --version", setup)
+        self.assertIn("PatchBay check FAILED", setup)
+        tips = server.sandbox_hints(self.sb(), 97, "PatchBay check FAILED: objcopy is still not llvm-objcopy", "setup")
+        self.assertIn("don't build until it's fixed", tips)
+
+    def test_a_real_program_in_usr_local_bin_is_never_replaced(self):
+        line = sandbox.link_lines(dict(self.sb(), tool_aliases={"objcopy": "llvm-objcopy"}))[0]
+        self.assertIn('[ -e /usr/local/bin/objcopy ] && [ ! -L /usr/local/bin/objcopy ]; then :', line)
+
+    def test_same_error_with_the_swap_already_set_doesnt_loop_the_setup(self):
+        server.sandbox_hints(self.sb(), 2, OBJCOPY_FAIL, "build", time.time(), "make package")
+        s = self.sb()
+        s["needs_setup"] = False          # the setup ran
+        sandbox.save(s)
+        tips = server.sandbox_hints(self.sb(), 2, OBJCOPY_FAIL, "build", time.time(), "make package")
+        self.assertFalse(self.sb()["needs_setup"])
+        self.assertIn("full path", tips)
+        self.assertNotIn("fixed the sandbox's tools for good", tips)
 
     def test_swap_checks(self):
         with self.assertRaises(sandbox.SandboxError):
@@ -255,14 +283,25 @@ class JoshuasExistingSandbox(Base):
                          "code": 2, "output": OBJCOPY_FAIL}
         s["network"] = True
         sandbox.save(s)
-        with self.assertRaises(server.ToolError) as e:        # a plain make waits for the setup (installs llvm)
+        steps = []
+
+        def fake_build(st, emit, a):
+            steps.append(a["step"])
+            cur = sandbox.load("EglantinePS5")
+            self.assertEqual(cur["tool_aliases"]["objcopy"], "llvm-objcopy")
+            self.assertEqual([x["path"] for x in cur["suspect"]], ["build/radv-isolated/libvulkan_radeon.ps5.a"])
+            cur["needs_setup"] = False
+            sandbox.save(cur)
+            return "setup done"
+        # A plain make runs the setup first by itself (it installs llvm), then the command: no refusal to loop on.
+        with mock.patch.object(server, "t_sandbox_build", fake_build), \
+                mock.patch.object(sandbox, "preflight", return_value={"brew": [], "colima": None, "stuck": None}), \
+                mock.patch.object(sandbox, "run", return_value=(0, "built")) as run, \
+                mock.patch.object(server, "show_output", return_value=("", "ok")):
             server.t_sandbox_run(types.SimpleNamespace(), self.events.append,
                                  {"sandbox": "EglantinePS5", "command": "make -j8"})
-        self.assertIn("sandbox_build step build", str(e.exception))
-        s = self.sb()
-        self.assertEqual(s["tool_aliases"]["objcopy"], "llvm-objcopy")
-        self.assertTrue(s["needs_setup"])
-        self.assertEqual([x["path"] for x in s["suspect"]], ["build/radv-isolated/libvulkan_radeon.ps5.a"])
+        self.assertEqual(steps, ["setup"])
+        self.assertEqual(run.call_args[0][1], "make -j8")
         self.assertTrue(any("From the last run" in e.get("text", "") for e in self.events))
         # Once is enough.
         _, words = server.catch_up(self.sb())
