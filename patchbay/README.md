@@ -30,6 +30,7 @@ for help when it's stuck, using your own API key.
 - [The private builder](#the-private-builder)
 - [Reviewing code projects](#reviewing-code-projects)
 - [Files on your Mac and Apple Calendar](#files-on-your-mac-and-apple-calendar)
+- [Simple names for game files](#simple-names-for-game-files)
 - [Setup, updates and looks](#setup-updates-and-looks)
 - [Clear data](#clear-data)
 - [Using it from your laptop](#using-it-from-your-laptop)
@@ -364,6 +365,36 @@ What the chat reads in your files or calendar stays on the Mac. It's never sent 
 searches that repeat it. Even when Claude answers everything (**Always**), questions about your files or calendar
 are answered by the AI on your Mac.
 
+## Simple names for game files
+
+**✂ Simple names** (top of the page) swaps long game file names for numbers, so you can share files (for example
+with Claude, for building or troubleshooting) without the real names. Made for your own games, like PS5 `.fpkg`
+files in your Virtual PS5 folder.
+
+1. Pick a folder with **Choose…** (or type its path). **Save this folder as my Virtual PS5 folder** remembers it,
+   so it opens there next time.
+2. Press **Preview**. It lists each file and its new name (`My Game - v1.02.fpkg` → `0.fpkg`) and how many names
+   it found inside each file's header. Nothing has changed yet.
+3. Type the folder's name and press **Give them simple names**.
+
+What it does: every file gets a number and keeps its extension (spaces, hyphens and other characters are fine).
+Inside the first 4 MB of each file (or 64 MB, or the whole file) every place a file name is written is swapped for
+the same number, padded with empty bytes so no file changes size and nothing inside moves. Names without their
+extension (like `eboot` in `eboot.bin`) are only swapped when they stand on their own, not inside other words.
+Hidden files are left alone. Tick **Include subfolders** to do the folders inside it too (folder names stay).
+
+The map of every original name and header byte is saved in `data-cache/name-maps/` inside the PatchBay folder,
+not in the game folder, so the real names don't travel with the files. The game folder only gets a small hidden
+`.patchbay-names` file holding the map's number.
+
+**Put the names back** puts every name and header byte back, then checks each file is exactly what it was. If a
+strip is ever cut off halfway (the Mac sleeps, a disk is unplugged), Put the names back still finishes cleanly. It
+won't overwrite anything: if a new file has taken an old name, it stops and tells you. A stripped package may not
+install or run, so put the names back before you use it.
+
+From Terminal: `python3 namestrip.py preview FOLDER`, `python3 namestrip.py strip FOLDER [--subfolders]
+[--scan-mb 4]` and `python3 namestrip.py restore FOLDER`.
+
 ## Setup, updates and looks
 
 **🩺 Setup** checks that everything works:
@@ -469,6 +500,7 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
 - **Projects** (source code): `~/Patchbay-projects/`.
 - **Device settings**: `config.json` for your first device, and one file per device in the `devices` folder.
 - **PatchBay's own data** (themes, saved prompts, caches): `data-cache/` inside the PatchBay folder.
+- **Simple names maps**: `data-cache/name-maps/` (put-back ones move to `name-maps/restored/`).
 - **Private builder**: block list in `config/redaction_list.json`; each build's spec and Claude's answer in
   `data-cache/private-builds/`; the code in `~/Patchbay-projects/private-builds/`.
 
@@ -489,6 +521,7 @@ the old and new values on a card first.
 | `allow_writes` | Must be on for any change to the device |
 | `mac_folders` | Folders on this Mac the chat may use (set in Setup → Mac) |
 | `calendar_access` | `true` lets the chat use Apple Calendar (set in Setup → Mac) |
+| `virtual_ps5_folder` | The folder ✂ Simple names opens first (set in that window) |
 | `about` | One sentence about the device, so the AI knows what it is |
 | `backup_folder` | Where backups go (set on the Backups tab) |
 | `lan_access` | `true` always lets the laptop in |

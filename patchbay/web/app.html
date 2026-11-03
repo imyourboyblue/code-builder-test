@@ -372,6 +372,7 @@ button.danger-bg{background:var(--bad);border-color:var(--bad);color:#fff}
   <nav class="tabs" id="tabs" hidden><a id="tab-chat">Chat</a><a id="tab-files">Files</a><a id="tab-backups">Backups</a><a id="tab-apps">Apps</a><a id="tab-attention">Needs attention <span id="att-n" class="att-n" hidden></span></a></nav>
   <span id="info"></span>
   <button id="clear-btn" type="button" hidden title="Delete what PatchBay keeps on this Mac for this device">🗑 Clear data</button>
+  <button id="names-btn" type="button" title="Swap long game file names for 0, 1, 2… (in file names and headers) and put them back later">✂ Simple names</button>
   <button id="activity-btn" type="button" title="Everything PatchBay did, with Undo">🕘 Activity</button>
   <button id="setup-btn" type="button" title="Check that everything works, fix problems, and copy an error report">🩺 Setup</button>
   <button id="reset" type="button" hidden>New chat</button>
@@ -1376,6 +1377,56 @@ async function openActivity(msg,dev){
   $('act-dev').onchange=draw;draw();
 }
 $('activity-btn').onclick=()=>openActivity('',(location.hash.match(/^#\/d\/([^/]+)/)||[])[1]?decodeURIComponent(location.hash.match(/^#\/d\/([^/]+)/)[1]):'');
+
+// ---- Simple names: swap game file names (on disk and inside headers) for 0, 1, 2… and put them back
+let NAMES_FOLDER='';
+async function openNames(note){
+  modal('<h3>✂ Simple names</h3><div id="nm-body">Checking…</div>');
+  let j;try{j=await getJSON('/api/names'+(NAMES_FOLDER?'?folder='+encodeURIComponent(NAMES_FOLDER):''))}catch(e){$('nm-body').textContent=e.message;return}
+  if(!NAMES_FOLDER&&j.ps5){NAMES_FOLDER=j.ps5;return openNames(note)}
+  const st=j.status||{};
+  let h=(note?'<div class="md-note">'+note+'</div>':'')+
+    '<div class="md-why">Gives every file in a folder a number (<code>My Game v1.2.fpkg</code> → <code>0.fpkg</code>) and swaps the names written inside each file\'s header for the same numbers. Sizes stay the same. The map of real names is kept in PatchBay\'s own folder, not in the game folder, so you can send the files without the names. <b>Put the names back</b> undoes it exactly.</div>';
+  if(!j.here){$('nm-body').innerHTML=h+'<div style="margin-top:8px">This only works on the Mac itself.</div><div class="row" style="margin-top:12px"><button onclick="closeModal()">Close</button></div>';return}
+  h+='<label style="margin-top:10px">Folder<div style="display:flex;gap:6px"><input id="nm-folder" value="'+esc(NAMES_FOLDER)+'" placeholder="/Users/you/Virtual PS5" style="flex:1"><button id="nm-pick">Choose…</button></div></label>'+
+    '<div class="md-why" style="margin-top:2px">Virtual PS5 folder: '+(j.ps5?'<a href="#" id="nm-useps5">'+esc(j.ps5)+'</a>':'not set')+
+      (j.ps5&&j.ps5===NAMES_FOLDER?' (this one)':' · <a href="#" id="nm-saveps5">'+(j.ps5?'change to this folder':'save this folder as my Virtual PS5 folder')+'</a>')+(j.ps5?' · <a href="#" id="nm-clearps5">forget it</a>':'')+'</div>';
+  if(st.error)h+='<div style="color:var(--bad);margin-top:6px">'+esc(st.error)+'</div>';
+  if(st.stripped){
+    h+='<div style="margin-top:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px">This folder has simple names since '+esc(st.made)+' ('+st.files+' files, '+st.header_changes+' names in headers)'+
+      (st.state!=='stripped'?'. <b>The strip was cut off partway.</b> Put the names back to finish cleanly':'')+'.'+
+      '<div style="margin-top:6px"><button id="nm-restore" class="primary">Put the names back</button></div></div>';
+  }else{
+    h+='<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:13.5px"><label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="nm-sub" style="width:auto"> Include subfolders</label>'+
+      '<label style="display:flex;gap:6px;align-items:center;margin:0">Header to check <select id="nm-scan" style="width:auto"><option value="4">first 4 MB</option><option value="64">first 64 MB</option><option value="0">whole file (slow)</option></select></label></div>'+
+      '<div style="margin-top:8px"><button id="nm-preview" class="primary">Preview</button></div><div id="nm-plan"></div>';
+  }
+  if(j.recent.length)h+='<details style="margin-top:12px"><summary class="md-why" style="cursor:pointer">Folders with simple names right now ('+j.recent.length+')</summary>'+
+    j.recent.map(r=>'<div class="md-why" style="margin-top:3px"><a href="#" class="nm-open" data-f="'+esc(r.folder)+'">'+esc(r.folder)+'</a> · '+esc(r.made)+' · '+r.files+' files</div>').join('')+'</details>';
+  h+='<div class="row" style="margin-top:12px"><button onclick="closeModal()">Close</button></div><div id="nm-msg" style="font-size:13px;margin-top:6px"></div>';
+  $('nm-body').innerHTML=h;
+  const say=t=>$('nm-msg').innerHTML=t, bad=e=>say('<span style="color:var(--bad)">'+esc(e.message)+'</span>');
+  const fld=$('nm-folder');fld.onkeydown=e=>{if(e.key==='Enter'){NAMES_FOLDER=fld.value.trim();openNames()}};
+  $('nm-pick').onclick=async()=>{try{const r=await postJSON('/api/names/choose',{});if(r.folder){NAMES_FOLDER=r.folder;openNames()}}catch(e){bad(e)}};
+  const sv=$('nm-saveps5');if(sv)sv.onclick=async e=>{e.preventDefault();try{await postJSON('/api/names/ps5',{folder:fld.value.trim()});openNames('Saved as your Virtual PS5 folder.')}catch(x){bad(x)}};
+  const cl=$('nm-clearps5');if(cl)cl.onclick=async e=>{e.preventDefault();try{await postJSON('/api/names/ps5',{folder:''});openNames('Forgot the Virtual PS5 folder.')}catch(x){bad(x)}};
+  const up=$('nm-useps5');if(up)up.onclick=e=>{e.preventDefault();NAMES_FOLDER=j.ps5;openNames()};
+  document.querySelectorAll('.nm-open').forEach(a=>a.onclick=e=>{e.preventDefault();NAMES_FOLDER=a.dataset.f;openNames()});
+  const rs=$('nm-restore');if(rs)rs.onclick=async()=>{rs.disabled=true;rs.textContent='Putting names back…';
+    try{const r=await postJSON('/api/names/restore',{folder:NAMES_FOLDER});openNames(esc(r.text))}catch(e){rs.disabled=false;rs.textContent='Put the names back';bad(e)}};
+  const pv=$('nm-preview');if(pv)pv.onclick=async()=>{pv.disabled=true;pv.textContent='Looking…';
+    NAMES_FOLDER=fld.value.trim();
+    try{const r=await postJSON('/api/names/preview',{folder:NAMES_FOLDER,subfolders:$('nm-sub').checked,scan_mb:Number($('nm-scan').value)});
+      pv.disabled=false;pv.textContent='Preview again';
+      $('nm-plan').innerHTML='<pre style="white-space:pre-wrap;font-size:11.5px;max-height:260px;overflow:auto;margin-top:8px">'+esc(r.text)+'</pre>'+
+        '<label>Type <b>'+esc(r.name)+'</b> to rename these files<input id="nm-typed" autocomplete="off"></label>'+
+        '<div style="margin-top:6px"><button id="nm-go" class="danger">Give them simple names</button></div>';
+      $('nm-go').onclick=async()=>{const g=$('nm-go');g.disabled=true;g.textContent='Working…';
+        try{const s=await postJSON('/api/names/strip',{token:r.token,typed:$('nm-typed').value});NAMES_FOLDER=r.folder;openNames(esc(s.text))}
+        catch(e){g.disabled=false;g.textContent='Give them simple names';bad(e)}}}
+    catch(e){pv.disabled=false;pv.textContent='Preview';if(/already has simple names/.test(e.message)){NAMES_FOLDER=fld.value.trim();openNames()}else bad(e)}};
+}
+$('names-btn').onclick=()=>openNames();
 
 // ---- one-button update (git pull + restart)
 async function checkUpdate(){const box=$('sc-upd');if(!box)return;let u;

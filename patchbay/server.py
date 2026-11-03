@@ -71,6 +71,7 @@ import updater
 import githubpush
 import research
 import macaccess
+import namestrip
 import stopper
 import codereview
 import codetools
@@ -2313,6 +2314,9 @@ def t_step_done(st, emit, a):
     show_steps(st, emit)
     return ("Step %d done. Next, step %d: %s" % (n, steps.index(nxt) + 1, nxt["text"]) if nxt else
             "Step %d done. Every step is done: give the user a short summary of what changed." % n)
+
+
+NAME_PLANS = {}     # the latest Simple names preview, so Strip does exactly what was shown
 
 
 def ma(fn, *args):
@@ -4893,6 +4897,17 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             cfg = APP.home.cfg()
             self.json({"folders": [str(f) for f in macaccess.folders(cfg)], "calendar": bool(cfg.get("calendar_access")),
                        "recent": macaccess.recent(15), "here": self.from_this_mac()})
+        elif path == "/api/names":
+            # Simple names for game files: the folder's state, the saved Virtual PS5 folder, recent strips.
+            cfg = APP.home.cfg()
+            st = None
+            if q.get("folder"):
+                try:
+                    st = namestrip.status(q["folder"])
+                except (namestrip.StripError, OSError, ValueError) as e:
+                    st = {"error": str(e)}
+            self.json({"ps5": cfg.get("virtual_ps5_folder") or "", "status": st, "here": self.from_this_mac(),
+                       "recent": namestrip.recent()})
         elif path == "/api/github":
             try:
                 ch = githubpush.changes()
@@ -4957,6 +4972,48 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             self.send_error(404)
 
     # ---- POST
+
+    def names_api(self, path, data):
+        """Simple names for game files (namestrip.py). Only at the Mac itself: these rename files on it."""
+        if not self.from_this_mac():
+            raise ToolError("Simple names can only be used on the Mac itself.")
+        try:
+            if path == "/api/names/choose":
+                self.json({"folder": macaccess.choose_folder() or ""})
+            elif path == "/api/names/ps5":
+                folder = str(data.get("folder") or "").strip()
+                if folder:
+                    folder = str(macaccess.check_folder(folder))
+                cfg, main = APP.home.cfg(), str(APP.registry.main)
+                old = json.loads(Path(main).read_text()).get("virtual_ps5_folder", "")
+                if old != folder:
+                    devices.apply_changes(cfg, [(main, "virtual_ps5_folder", old, folder)])
+                self.json({"ps5": folder})
+            elif path == "/api/names/preview":
+                macaccess.check_folder(data.get("folder"))
+                plan = namestrip.plan(data.get("folder"), bool(data.get("subfolders")), data.get("scan_mb", 4))
+                token = uuid.uuid4().hex[:10]
+                NAME_PLANS.clear()                      # only the newest preview can be used
+                NAME_PLANS[token] = plan
+                self.json({"token": token, "text": namestrip.preview_text(plan), "folder": plan["folder"],
+                           "name": Path(plan["folder"]).name, "files": len(plan["files"]),
+                           "header_changes": len(plan["header_changes"])})
+            elif path == "/api/names/strip":
+                plan = NAME_PLANS.get(data.get("token") or "")
+                if not plan:
+                    raise ToolError("That preview is old. Press Preview again.")
+                if str(data.get("typed") or "").strip() != Path(plan["folder"]).name:
+                    raise ToolError("Type the folder's name, %s, to go ahead." % Path(plan["folder"]).name)
+                NAME_PLANS.clear()
+                self.json(namestrip.strip(plan["folder"], plan["subfolders"], plan["scan_mb"], expect=plan))
+            elif path == "/api/names/restore":
+                self.json(namestrip.restore(data.get("folder")))
+            else:
+                raise ToolError("Unknown action.")
+        except (namestrip.StripError, macaccess.AccessError) as e:
+            raise ToolError(str(e))
+        except OSError as e:
+            raise ToolError("The Mac said: %s" % e)
 
     def do_POST(self):
         url = urlparse(self.path)
@@ -5316,6 +5373,8 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             if bool(old) != on:
                 devices.apply_changes(cfg, [(main, "auto_mac_steps", old, on)])
             self.json({"on": on})
+        elif path.startswith("/api/names/"):
+            self.names_api(path, data)
         elif path == "/api/mac/undo":
             try:
                 self.json({"text": macaccess.undo(data.get("id")), "recent": macaccess.recent(15)})
