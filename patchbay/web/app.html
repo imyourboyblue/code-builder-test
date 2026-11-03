@@ -1337,13 +1337,33 @@ async function drawMac(note){const box=$('sc-mac');if(!box)return;let j;
   box.querySelectorAll('.mac-undo').forEach(b=>b.onclick=async()=>{b.disabled=true;try{const r=await postJSON('/api/mac/undo',{id:+b.dataset.id});drawMac(esc(r.text))}catch(e){b.disabled=false;err(e)}});}
 
 // ---- Sandboxes: throwaway copies of a project to build and test in (sandbox.py)
-let SB_POLL=null;
+let SB_POLL=null,SB_USE={open:false,html:''};
+function sbUseHtml(u,here){const c=u.colima;let h='';
+  (u.words||[]).forEach(w=>h+='<div class="md-why">'+esc(w)+'</div>');
+  if(c)h+='<div class="md-why">Colima: '+(c.running?'running':'stopped')+(c.memory_gb?' · '+Math.round(c.memory_gb)+' GB memory set aside':'')+(c.cpus?' · '+c.cpus+' CPUs':'')+(c.disk_on_mac?' · its disk file takes <b>'+esc(c.disk_on_mac)+'</b> on the Mac':'')+'</div>';
+  if(u.containers.length)h+='<div class="md-list" style="margin-top:4px">'+u.containers.map(x=>'<div class="md-row dl" style="padding:4px 10px"><div style="flex:1"><code>'+esc(x.name)+'</code> <span class="md-chip">'+esc(x.state)+'</span>'+(x.sandbox?'':' <span class="md-chip warn">sandbox deleted</span>')+
+    (x.memory?' · memory '+esc(x.memory)+' · CPU '+esc(x.cpu):'')+(x.programs&&x.programs.length?'<div class="md-why">'+(x.busy?'Building now: ':'<b>Still running with nothing started by PatchBay:</b> ')+esc(x.programs.slice(0,4).join(' · '))+'</div>':'')+'</div></div>').join('')+'</div>';
+  else if(u.running)h+='<div class="md-why">No sandbox containers.</div>';
+  if(u.images.length)h+='<div class="md-why">Saved images: '+u.images.map(i=>esc(i.name)+' ('+esc(i.size)+')').join(', ')+'</div>';
+  if(u.docker_df.length)h+='<div class="md-why">All of Docker: '+u.docker_df.map(d=>esc(d.type)+' '+esc(d.size)+' ('+esc(d.reclaimable)+' could be freed)').join(' · ')+'</div>';
+  if(here)h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><button id="sb-use-again">Check again</button>'+(u.running?'<button id="sb-clean">Clean up…</button>':'')+(c&&c.running?'<button id="sb-colstop">Stop Colima (give memory back)…</button>':'')+'</div>';
+  return h}
+async function loadSbUse(here,note){const b=$('sb-use-box');if(!b)return;b.innerHTML=(note?'<div class="md-note">'+note+'</div>':'')+'Looking…';SB_USE.loading=true;
+  try{const r=await postJSON('/api/sandbox',{action:'usage'});SB_USE.html=(note?'<div class="md-note">'+note+'</div>':'')+sbUseHtml(r.usage,here)}catch(x){SB_USE.html='<span style="color:var(--bad)">'+esc(x.message)+'</span>'}
+  SB_USE.loading=false;
+  const bb=$('sb-use-box');if(bb){bb.innerHTML=SB_USE.html;wireSbUse(here)}}
+function wireSbUse(here){const again=$('sb-use-again'),cl=$('sb-clean'),cs=$('sb-colstop');
+  if(again)again.onclick=()=>loadSbUse(here);
+  const go=async(action,btn)=>{btn.disabled=true;const b=$('sb-use-box');try{const r=await postJSON('/api/sandbox',{action});loadSbUse(here,esc(r.text||''))}catch(x){btn.disabled=false;b.insertAdjacentHTML('afterbegin','<div style="color:var(--bad)">'+esc(x.message)+'</div>')}};
+  if(cl)cl.onclick=()=>{if(confirm('Clean up after the sandboxes?\n\n• Stops sandbox containers nothing is building in (what is installed in them stays)\n• Removes containers and saved images left from deleted sandboxes, and old nameless saves\n• Asks Colima to give freed disk space back to the Mac\n\nOnly PatchBay\'s own sandbox things. Nothing else in Docker is touched.'))go('cleanup',cl)};
+  if(cs)cs.onclick=()=>{if(confirm('Stop Colima?\n\nIts memory goes back to the Mac. Everything in Docker stops, including anything that isn\'t PatchBay\'s. Sandboxes keep what is installed, and the next build starts Colima again (about a minute).'))go('stop_colima',cs)}}
 async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
   try{j=await getJSON('/api/sandbox')}catch(e){box.textContent=e.message;return}
   const e=j.engine,here=j.here;
   let h=(note?'<div class="md-note">'+note+'</div>':'')+
     '<div class="md-why">A sandbox is a <b>copy</b> of a project where PatchBay can build and run tests by itself, with no cards, because it can\'t touch your real files, passwords or Keychain. The internet is off unless you switch it on. Results only go back into the real project when you press <b>Copy back</b> (the old file is backed up, with Undo).</div>'+
-    '<div class="md-why" style="margin-top:6px"><b>Linux sandboxes:</b> '+(e.engine?esc(e.engine)+(e.running?' is ready.':' is installed but not running. '+esc(e.help)+' (PatchBay also tries to start it by itself.)'):esc(e.help))+'</div>';
+    '<div class="md-why" style="margin-top:6px"><b>Linux sandboxes:</b> '+(e.engine?esc(e.engine)+(e.running?' is ready.':' is installed but not running. '+esc(e.help)+' (PatchBay also tries to start it by itself.)'):esc(e.help))+'</div>'+
+    (e.engine==='Docker'?'<details id="sb-use"'+(SB_USE.open?' open':'')+' style="margin-top:6px"><summary style="cursor:pointer"><b>Memory and disk</b> (what the sandboxes really use)</summary><div id="sb-use-box">'+(SB_USE.html||'Looking…')+'</div></details>':'');
   h+=j.sandboxes.length?j.sandboxes.map(s=>{
     const lim=s.kind==='linux'?s.cpus+' CPUs · '+s.memory_gb+' GB memory · ':'';
     return '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)" data-sb="'+esc(s.name)+'">'+
@@ -1383,8 +1403,9 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
   if(j.copies.length)h+='<h4 style="margin:16px 0 4px">Copied back</h4><div class="md-list">'+j.copies.map(c=>'<div class="md-row dl" style="padding:5px 10px"><div style="flex:1"><code>'+esc(c.file)+'</code> from '+esc(c.sandbox)+
     '<div class="md-why">#'+c.id+' · '+esc(c.time)+' → '+esc(c.to)+'</div></div>'+(c.undone?'<span class="md-why">undone</span>':here?'<button class="sb-undo" data-id="'+c.id+'">Undo</button>':'')+'</div>').join('')+'</div>';
   box.innerHTML=h+'<div id="sb-msg" style="font-size:13px;margin-top:6px"></div>';
+  const use=$('sb-use');if(use){if(SB_USE.html)wireSbUse(here);use.ontoggle=()=>{SB_USE.open=use.open;if(use.open&&!SB_USE.html&&!SB_USE.loading)loadSbUse(here)};if(use.open&&!SB_USE.html&&!SB_USE.loading)loadSbUse(here)}
   const m=t=>$('sb-msg').innerHTML=t,err=x=>m('<span style="color:var(--bad)">'+esc(x.message)+'</span>');
-  const act=async(body,done,btn)=>{if(btn)btn.disabled=true;try{const r=await postJSON('/api/sandbox',body);drawSandbox(done||esc(r.text||''))}catch(x){if(btn)btn.disabled=false;err(x)}};
+  const act=async(body,done,btn)=>{if(btn)btn.disabled=true;try{const r=await postJSON('/api/sandbox',body);if(body.action==='reset'||body.action==='delete')SB_USE.html='';drawSandbox(done||esc(r.text||''))}catch(x){if(btn)btn.disabled=false;err(x)}};
   const pre=box.querySelector('.sb-out');if(pre)pre.scrollTop=pre.scrollHeight;
   box.querySelectorAll('[data-sb]').forEach(row=>{const n=row.dataset.sb,s=j.sandboxes.find(x=>x.name===n),q=c=>row.querySelector(c);
     const run=q('.sb-run'),inp=q('.sb-cmd');
@@ -1397,7 +1418,7 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
       if(confirm(to==='amd64'?'Run sandbox '+n+' as x86 Linux through Rosetta?\n\nOnly needed if a tool is x86-only (an "Exec format error"). Builds are slower, and you need to run Set up again.':'Run sandbox '+n+' as ARM Linux again?\n\nFaster. You need to run Set up again.'))act({action:'set',name:n,arch:to},null,q('.sb-arch'))};
     if(q('.sb-net'))q('.sb-net').onclick=()=>{if(!s.network&&!confirm('Let sandbox '+n+' reach the internet?\n\nPrograms in it can then download things (like apt-get install). It still can\'t see your real files, passwords or Keychain. Turn it off again when done.'))return;
       act({action:'set',name:n,network:!s.network},s.network?'Internet is off for '+esc(n)+'.':'Internet is ON for '+esc(n)+'.',q('.sb-net'))};
-    if(q('.sb-reset'))q('.sb-reset').onclick=()=>{if(confirm('Reset sandbox '+n+'?\n\nEverything built or installed in it is thrown away and the project is copied in fresh. Your real project isn\'t touched.'))act({action:'reset',name:n},null,q('.sb-reset'))};
+    if(q('.sb-reset'))q('.sb-reset').onclick=()=>{if(confirm('Reset sandbox '+n+'?\n\nAnything still running in it is stopped, its container is removed, and the project is copied in fresh. Everything built or installed in it is thrown away. Your real project isn\'t touched.'))act({action:'reset',name:n},null,q('.sb-reset'))};
     if(q('.sb-del'))q('.sb-del').onclick=()=>{if(confirm('Delete sandbox '+n+'?\n\nOnly the sandbox goes. Your real project isn\'t touched.'))act({action:'delete',name:n},null,q('.sb-del'))};
     if(q('.sb-files'))q('.sb-files').onclick=async()=>{const out=q('.sb-changed');out.textContent='Looking…';
       try{const r=await postJSON('/api/sandbox',{action:'changed',name:n});

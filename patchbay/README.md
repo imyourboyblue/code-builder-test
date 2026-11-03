@@ -302,7 +302,13 @@ for EglantinePS5 and run its tests").
   undone.
 - **Memory.** Big builds (Mesa, LLVM, emulators) get 16 GB, up to 20 GB. PatchBay warns when that won't fit
   alongside macOS and a loaded AI model; **Free up memory** unloads the model.
-- **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it.
+- **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it. Both stop anything still building in it first and remove its container (with its
+  old saved copies), so nothing keeps running or filling the disk in the background.
+- **Memory and disk** (in the Sandbox tab) shows what the sandboxes really use: memory and CPU per sandbox, builds
+  still running inside, leftovers from deleted sandboxes, and how big Colima's disk file is on the Mac. **Clean up…**
+  stops idle sandbox containers, removes PatchBay's leftovers and gives freed disk space back (never other Docker
+  things). While Colima runs, the Mac shows its memory (about 20 GB) as used and it doesn't go down after a build or
+  a reset. That's normal for a Linux machine inside the Mac: **Stop Colima** gives it back.
   Neither touches the real project.
 - **Starts clean.** The copy leaves out build leftovers: everything the project's `.gitignore` marks (like `build/`,
   `dist/`, `.deps/`, `.local/` caches), so an old Mac build can't break the Linux one. The build makes them again
