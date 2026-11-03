@@ -418,14 +418,129 @@ def colima_size(cores=None, mem_gb=None):
     return cpus, memory, 100
 
 
-def colima_start_argv(colima, cores=None, mem_gb=None):
+def colima_start_argv(colima, cores=None, mem_gb=None, rosetta=None):
+    """colima start, sized for this Mac. rosetta (default: when an x86 sandbox wants it, or Colima already has it):
+    Apple's virtual machine with Rosetta, so x86 (amd64) sandboxes run through Rosetta instead of QEMU, which is many
+    times slower."""
     cpus, memory, disk = colima_size(cores, mem_gb)
-    return [colima, "start", "--cpu", str(cpus), "--memory", str(memory), "--disk", str(disk)]
+    argv = [colima, "start", "--cpu", str(cpus), "--memory", str(memory), "--disk", str(disk)]
+    if rosetta is None:
+        rosetta = wants_rosetta() or colima_config()["rosetta"]
+    if rosetta:
+        argv += ["--vm-type", "vz", "--vz-rosetta"]
+    return argv
 
 
 def colima_command(cores=None, mem_gb=None):
     """The Terminal line that restarts Colima with the right size (for messages)."""
     return "colima stop; " + " ".join(colima_start_argv("colima", cores, mem_gb))
+
+
+# ---------------------------------------------------------------- x86 (amd64) sandboxes through Rosetta
+
+ROSETTA_FILE = Path("/Library/Apple/usr/share/rosetta/rosetta")
+ROSETTA_INSTALL = ["/usr/sbin/softwareupdate", "--install-rosetta", "--agree-to-license"]
+
+
+def rosetta_installed():
+    """Whether Apple's Rosetta translator is on this Mac (it isn't until something asks for it)."""
+    return ROSETTA_FILE.exists()
+
+
+def colima_config():
+    """What Colima's own settings file says: {"exists", "vm_type" ("vz", "qemu" or ""), "rosetta"}. Colima writes it
+    on its first start (~/.colima/default/colima.yaml)."""
+    f = colima_home() / "default" / "colima.yaml"
+    try:
+        t = f.read_text("utf-8", errors="replace")
+    except OSError:
+        return {"exists": False, "vm_type": "", "rosetta": False}
+    vm = re.search(r"(?m)^vmType:\s*['\"]?(\w+)", t)
+    ros = re.search(r"(?m)^rosetta:\s*(true|false)\b", t)
+    return {"exists": True, "vm_type": vm.group(1).lower() if vm else "",
+            "rosetta": bool(ros and ros.group(1) == "true" and (vm and vm.group(1).lower() == "vz"))}
+
+
+def wants_rosetta():
+    """Whether any Linux sandbox here is x86 (amd64), so Colima should run with Rosetta."""
+    try:
+        return any(x.get("kind") == "linux" and x.get("arch") == "amd64" for x in all_sandboxes())
+    except (OSError, ValueError):
+        return False
+
+
+def colima_needs_new_vm():
+    """Rosetta needs Apple's virtual machine (vz). A Colima machine made with QEMU can't be switched: it has to be
+    deleted and made again."""
+    c = colima_config()
+    return c["exists"] and c["vm_type"] not in ("", "vz")
+
+
+def rosetta_plan():
+    """What turning Rosetta on in Colima takes, as plain steps and commands (for the card). {"ok": already on,
+    "steps": [words], "commands": [Terminal lines], "delete": True when Colima's machine is made again}."""
+    if colima_config()["rosetta"] and colima_info()["running"]:
+        return {"ok": True, "steps": [], "commands": [], "delete": False}
+    steps, cmds = [], []
+    if not rosetta_installed():
+        steps.append("Install Apple's Rosetta translator (free, from Apple, one time).")
+        cmds.append("softwareupdate --install-rosetta --agree-to-license")
+    delete = colima_needs_new_vm()
+    if delete:
+        steps.append("Colima's Linux machine was made the older way (QEMU), which can't use Rosetta, so it's deleted "
+                     "and made again. Sandbox folders on this Mac stay; what was installed inside sandboxes is "
+                     "downloaded again by their next setup step.")
+        cmds += ["colima stop --force", "colima delete --force"]
+    elif colima_info()["running"]:
+        steps.append("Restart Colima with Rosetta on (running sandboxes stop while it restarts).")
+        cmds.append("colima stop")
+    else:
+        steps.append("Start Colima with Rosetta on.")
+    cmds.append(" ".join(colima_start_argv("colima", rosetta=True)))
+    return {"ok": False, "steps": steps, "commands": cmds, "delete": delete}
+
+
+def enable_rosetta(emit=None, stop=None):
+    """Turn Rosetta on in Colima (only after the user confirmed the card): install Rosetta if it's missing, make
+    Colima's machine again if it was made with QEMU, restart Colima with --vm-type vz --vz-rosetta, wait for Docker."""
+    col = _which("colima")
+    if not col:
+        raise SandboxError("Colima isn't installed. Use sandbox_preflight: it shows the install card.")
+    if not rosetta_installed():
+        code, out = _run_progress(ROSETTA_INSTALL, 900, emit, "Installing Apple's Rosetta translator...", stop)
+        if code != 0 and not rosetta_installed():
+            raise SandboxError("Rosetta didn't install.\nIt said: %s\nIn Terminal, run: softwareupdate "
+                               "--install-rosetta --agree-to-license" % out.strip()[-600:])
+    if colima_needs_new_vm():
+        _run_progress([col, "stop", "--force"], 300, emit, "Stopping Colima...", stop)
+        code, out = _run_progress([col, "delete", "--force"], 300, emit, "Deleting Colima's old (QEMU) Linux "
+                                  "machine...", stop)
+        if code != 0:
+            raise SandboxError("Colima's old Linux machine couldn't be deleted.\nIt said: %s" % out.strip()[-600:])
+    elif colima_info()["running"]:
+        code, out = _run_progress([col, "stop"], 300, emit, "Stopping Colima...", stop)
+        if code != 0:
+            raise SandboxError("Colima didn't stop.\n%s\nColima says (colima status):\n%s"
+                               % (out.strip()[-600:], colima_status_text()))
+    argv = colima_start_argv(col, rosetta=True)
+    code, out = _run_progress(argv, COLIMA_START_LIMIT, emit, "Starting Colima with Rosetta (%s CPUs, %s GB)..."
+                              % (argv[3], argv[5]), stop)
+    if code != 0:
+        note_trouble()
+        raise SandboxError("Colima didn't start with Rosetta.\nIt said: %s\nColima says (colima status):\n%s\n"
+                           "Rosetta in Colima needs macOS 13 or newer and Colima 0.5.3 or newer (brew upgrade "
+                           "colima)." % (out.strip()[-600:], colima_status_text()))
+    services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
+    docker = _which("docker")
+    if docker:
+        ok, out = wait_for_docker(docker, emit, stop)
+        if not ok:
+            note_trouble()
+            raise SandboxError(colima_stuck_message(out, next_fix()))
+    clear_trouble()
+    ncpu, mem = docker_capacity(docker) if docker else (None, None)
+    return ("Colima is running with Rosetta%s, so x86 sandboxes run through Rosetta." %
+            (" (%d CPUs, %.0f GB)" % (ncpu, mem) if ncpu else ""))
 
 
 def uses_colima(exe=None):
@@ -595,6 +710,17 @@ def preflight(sb=None, emit=None, stop=None, wait=None):
                                              if small else "")))
         if small and col and uses_colima(docker):
             colima = "resize"
+    if (sb or {}).get("arch") == "amd64" and col and docker and not stuck and \
+            (colima in ("start", "resize") or (running and uses_colima(docker))):
+        # An x86 sandbox: Colima must run with Rosetta, or Docker falls back to QEMU (many times slower) or fails.
+        # A plain start/restart already adds Rosetta (colima_start_argv) when Rosetta is installed and Colima's
+        # machine can use it; otherwise one Rosetta card does all of it.
+        if not rosetta_installed() or colima_needs_new_vm() or (running and not colima_config()["rosetta"]):
+            rows.append((False, "Rosetta for x86 sandboxes", "not on in Colima yet: a card turns it on (without it, "
+                         "x86 programs run through QEMU, many times slower)"))
+            colima = "rosetta"
+        elif running:
+            rows.append((True, "Rosetta for x86 sandboxes", "on in Colima"))
     return {"rows": rows, "brew": brew, "colima": colima, "stuck": stuck, "fix": fix if stuck else None,
             "ok": not brew and not colima and not stuck and (running or not docker)}
 
@@ -891,6 +1017,18 @@ def arch_args(kind, sb):
     return ["--arch", "amd64"] if kind == "apple" else ["--platform", "linux/amd64"]
 
 
+def wrong_image_arch(exe, image, sb):
+    """Whether Docker's copy of the image is for the other processor (an ARM ubuntu:24.04 already downloaded, but this
+    sandbox is x86 now, or the other way round). Then it's downloaded again for the right one."""
+    code, out = _quiet([exe, "image", "inspect", "-f", "{{.Architecture}}", image], 30)
+    have = out.strip().lower() if code == 0 else ""
+    if not have:
+        return False
+    if sb.get("arch") == "amd64":
+        return have != "amd64"
+    return have == "amd64" and os.uname().machine in ("arm64", "aarch64")
+
+
 def create_args(kind, exe, sb):
     """The command that starts the sandbox's container: only the work folder is visible, with limits."""
     name, image = container_name(sb["name"]), sb.get("image_in_use") or sb["image"]
@@ -925,10 +1063,13 @@ def ensure_container(sb, emit=None, stop=None):
         emit({"type": "status", "text": "Starting the Linux sandbox (%s)... the first time it downloads the image"
                                         % (sb.get("image_in_use") or sb["image"])})
     image = sb.get("image_in_use") or sb["image"]
-    if not _exists(kind, exe, image, image=True):
+    if not _exists(kind, exe, image, image=True) or (kind == "docker" and not sb.get("image_in_use") and
+                                                     wrong_image_arch(exe, image, sb)):
         # The Mac downloads the image (the starting Linux system); the sandbox itself stays offline.
         pull = [exe, "image", "pull"] if kind == "apple" else [exe, "pull"]
-        code, out = _quiet(pull + arch_args(kind, sb) + [image], 1800)
+        native = ["--platform", "linux/arm64"] if kind == "docker" and sb.get("arch") != "amd64" and \
+            os.uname().machine in ("arm64", "aarch64") else []
+        code, out = _quiet(pull + (arch_args(kind, sb) or native) + [image], 1800)
         if code != 0:
             raise SandboxError("Couldn't download the Linux image %s: %s" % (image, out[-400:]))
     note = fit_to_engine(kind, exe, sb)

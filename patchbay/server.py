@@ -3019,6 +3019,12 @@ def sandbox_where(change):
         return where.mac_only(computer_name(), "Colima's Linux machine on this Mac is deleted and made again (what's "
                                                "installed inside sandboxes goes; their folders stay). Nothing on your "
                                                "devices")
+    if change.get("action") in ("arch_amd64", "colima_rosetta"):
+        return where.mac_only(computer_name(), "Sandbox %s's Linux (made again as x86) and Colima's Linux machine on "
+                                               "this Mac (Rosetta turned on; sandboxes restart). Nothing on your "
+                                               "devices" % name if change["action"] == "arch_amd64" else
+                              "Colima's Linux machine on this Mac (Rosetta turned on; sandboxes restart). Nothing on "
+                              "your devices", runs=runs)
     if change.get("action") in ("colima_start", "colima_resize", "colima_repair"):
         return where.mac_only(computer_name(), "Colima's Linux machine on this Mac (Docker sandboxes restart). "
                                                "Nothing on your devices")
@@ -3061,6 +3067,30 @@ def confirm_sandbox(st, p, emit):
                                                              ch.get("to") or ""))
     elif a == "undo":
         result = sb(sandbox.undo_copy, ch["number"])
+    elif a == "arch_amd64":
+        emit({"type": "answer", "text": "Switching sandbox %s to x86. If Colima needs Rosetta, this takes a minute "
+                                        "or two. I'll carry on by myself." % ch["sandbox"]})
+        try:
+            result = sb(switch_to_x86, ch["sandbox"], emit)
+        except ToolError as e:
+            emit({"type": "answer", "text": str(e)})
+            st.messages.append({"role": "user", "content": "[I confirmed the x86 card, but it didn't finish: %s\n"
+                                "Don't carry on with the job by yourself. Tell me in plain words what happened.]" % e})
+            return
+        result += " Next: sandbox_build step build for sandbox %s (it runs the setup first)." % ch["sandbox"]
+    elif a == "colima_rosetta":
+        emit({"type": "answer", "text": "Turning on Rosetta in Colima, this can take a minute or two. I'll carry on by "
+                                        "myself when Docker is ready."})
+        try:
+            result = sb(sandbox.enable_rosetta, emit, check_stop)
+        except ToolError as e:
+            emit({"type": "answer", "text": str(e)})
+            st.messages.append({"role": "user", "content": "[I confirmed the Rosetta card, but Docker didn't come "
+                                "up: %s\nDon't offer the same card again, and don't carry on with the job by "
+                                "yourself. Tell me in plain words what happened.]" % e})
+            return
+        if ch.get("sandbox"):
+            result += " Next: sandbox_build step build for sandbox %s (it runs the setup first)." % ch["sandbox"]
     elif a in ("colima_start", "colima_resize", "colima_repair", "colima_reset"):
         emit({"type": "answer", "text": "%s Colima, this can take a minute or two. I'll carry on by myself "
                                         "when Docker is ready." % {"colima_repair": "Repairing",
@@ -3092,7 +3122,8 @@ def confirm_sandbox(st, p, emit):
 
 
 # Cards after which the AI keeps going with the job by itself (the others finish something the user asked for).
-CARRY_ON_AFTER = ("colima_start", "colima_resize", "colima_repair", "colima_reset", "network_on", "reset")
+CARRY_ON_AFTER = ("colima_start", "colima_resize", "colima_repair", "colima_reset", "colima_rosetta", "arch_amd64",
+                  "network_on", "reset")
 
 
 def sandbox_name(st, a):
@@ -3199,6 +3230,9 @@ def t_sandbox_build(st, emit, a):
     if caught:
         emit({"type": "note", "text": caught})
     step = a.get("step") or "build"
+    early = x86_early_check(st, emit, s)
+    if early:
+        return early
     if step == "build" and s["kind"] == "linux" and s.get("needs_setup") and not a.get("_after_setup"):
         # A new container (after a reset, a settings change, or the first time) has none of the setup's packages or
         # the saved fixes: run the setup first, so a fix found once is there again instead of failing the old way.
@@ -3232,6 +3266,31 @@ def t_sandbox_build(st, emit, a):
         if not pf["ok"]:
             return filled + sandbox_preflight(st, emit, s, pf)
     return filled + t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
+
+
+def x86_early_check(st, emit, s):
+    """Once per sandbox, before its first setup or build: a second or two reading the project's files for code that
+    only builds on an x86 machine, so it's found before a 10-minute build fails on it. Returns the card's words or ''."""
+    if s["kind"] != "linux" or s.get("arch") == "amd64" or s.get("x86_checked") or s.get("x86_declined") or \
+            s.get("built_ok"):
+        return ""
+    try:
+        signs = sandboxrecipe.x86_signs(sandbox.work(s))
+    except (OSError, ValueError, sandbox.SandboxError):
+        signs = []
+    try:
+        cur = sandbox.load(s["name"])
+        cur["x86_checked"] = True
+        if signs:
+            cur["x86_needed"] = signs
+        sandbox.save(cur)
+    except sandbox.SandboxError:
+        return ""
+    if not signs:
+        return ""
+    return ("Not built yet. Before building, PatchBay read the project's files: part of the build only works on an "
+            "x86 machine, and sandbox %s is ARM Linux, so it would fail after a long wait. " % s["name"] +
+            x86_card(st, emit, s["name"], signs, "the project's files"))
 
 
 APT_STEP = re.compile(r"^\{?\s*(sudo\s+)?(export\s+DEBIAN_FRONTEND=\S+|apt(-get)?\s+(update|install)\b)")
@@ -3320,7 +3379,10 @@ def sandbox_preflight(st, emit, s=None, pf=None):
         fix = pf.get("fix")
         if fix:
             cpus, mem, disk = sandbox.colima_size()
-            start = "  colima start --cpu %d --memory %d --disk %d" % (cpus, mem, disk)
+            start = "  " + " ".join(sandbox.colima_start_argv("colima"))
+            if "--vz-rosetta" in start:
+                start += ("\n\nRosetta stays on, because an x86 sandbox needs it (x86 programs run through Apple's "
+                          "translator: slower than ARM, much faster than without it).")
             if fix == "repair":
                 title, label = "Repair Colima (force stop, start again)", "Repair Colima"
                 diff = ("Colima is running, but Docker inside it isn't answering. This force-stops Colima and starts "
@@ -3347,14 +3409,28 @@ def sandbox_preflight(st, emit, s=None, pf=None):
             st, emit, rows, ["brew:" + x for x in pf["brew"]],
             "Linux sandboxes need these to run. After installing, run sandbox_preflight again: it starts Colima "
             "at the right size.")
+    if pf["colima"] == "rosetta":
+        plan = sb(sandbox.rosetta_plan)
+        diff = ("Sandbox %s is x86 (amd64) Linux. On this Mac, x86 programs run fast only through Apple's Rosetta "
+                "translator, and Colima needs it switched on. Without it Docker uses QEMU, which is many times "
+                "slower.\n\nWhat happens:\n%s\n\nThe cost: builds are slower than ARM ones (often about 1.5 to 2 times "
+                "as long), and the translator uses a little more memory.\n\nCommands:\n%s"
+                % (name or "this", "\n".join("- " + x for x in plan["steps"]),
+                   "\n".join("  " + c for c in plan["commands"])))
+        return ("Checklist:\n%s\n\n" % lines) + sandbox_card(
+            st, emit, {"action": "colima_rosetta", "sandbox": name}, "Turn on Rosetta in Colima (for x86 sandboxes)",
+            diff, "Turn on Rosetta", "Nothing outside this Mac changes.")
     if pf["colima"]:
         cpus, mem, disk = sandbox.colima_size()
         resize = pf["colima"] == "resize"
         title = ("Restart Colima bigger (%d CPUs, %d GB)" if resize else "Start Colima (%d CPUs, %d GB)") % (cpus, mem)
+        start = " ".join(sandbox.colima_start_argv("colima"))
         diff = ("%sColima runs the Linux machine Docker sandboxes live in. It gets %d CPUs, %d GB of memory and up to "
-                "%d GB of disk, sized for this Mac.\n\nCommands:\n%s  colima start --cpu %d --memory %d --disk %d"
+                "%d GB of disk, sized for this Mac.%s\n\nCommands:\n%s  %s"
                 % ("Running sandboxes stop while it restarts.\n\n" if resize else "", cpus, mem, disk,
-                   "  colima stop\n" if resize else "", cpus, mem, disk))
+                   " Rosetta is on too, because an x86 sandbox needs it (x86 programs run through Apple's translator: "
+                   "slower than ARM, much faster than without it)." if "--vz-rosetta" in start else "",
+                   "  colima stop\n" if resize else "", start))
         return ("Checklist:\n%s\n\n" % lines) + sandbox_card(
             st, emit, {"action": "colima_resize" if resize else "colima_start", "sandbox": name}, title, diff,
             "Restart Colima" if resize else "Start Colima", "Nothing outside this Mac changes.")
@@ -3402,13 +3478,17 @@ def t_sandbox_run(st, emit, a):
         raise ToolError("Not run: this command sends to %s, and sandboxes never change your devices. Copy the built "
                         "file out (propose_sandbox_copy_out), then use propose_command or propose_install in the real "
                         "project: that shows a card the user confirms by typing the device name." % sends["changes_on"])
+    held = x86_hold(st, emit, s, a.get("command") or "")
+    if held:
+        return held
     if s["kind"] == "linux" and not a.get("_step"):
         # Docker must answer before anything runs in a Linux sandbox. If Colima isn't started, show its card first
         # (never start it silently or keep asking a Docker that isn't there). sandbox_build already checked.
         pf = sb(sandbox.preflight, s, emit, check_stop)
-        if pf["brew"] or pf["colima"] == "start" or pf["stuck"]:
-            return ("Not run yet: Docker isn't answering. " + sandbox_preflight(st, emit, s, pf) +
-                    "\nAfter Colima is running, PatchBay carries on by itself: run the same command again then.")
+        if pf["brew"] or pf["colima"] in ("start", "rosetta") or pf["stuck"]:
+            return ("Not run yet: %s " % ("this x86 sandbox needs Rosetta on in Colima first." if pf["colima"] ==
+                                         "rosetta" else "Docker isn't answering.") + sandbox_preflight(st, emit, s, pf)
+                    + "\nAfter Colima is running, PatchBay carries on by itself: run the same command again then.")
     emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
     started = time.time()
     base = projects.build_env()["PATH"]
@@ -3429,12 +3509,15 @@ def t_sandbox_run(st, emit, a):
                                                      r"(connect|socket))", out or ""):
         result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
     result += sandbox_hints(s, code, out, a.get("_step"), started, a.get("command") or "")
+    x86 = x86_errors(s, code, out)
     mark_caught_up(name)
     if code == 0:
         made = built_in_sandbox(s, started, a.get("_step"))
         if made:
             proof.record(st, "built", "sandbox %s: %s" % (name, made))
     summary, detail = show_output(emit, result, code, out, a.get("command") or "")
+    if x86:
+        detail += "\n\n" + x86_card(st, emit, name, x86, "the build's errors")
     return detail
 
 
@@ -3532,6 +3615,115 @@ def ffmpeg_log(s):
     except (sandbox.SandboxError, OSError):
         return ""
     return (text or "").strip()[-6000:]
+
+
+# Errors that mean code written only for x86 (Intel/AMD) was compiled for the sandbox's own processor, ARM. No package
+# fixes that: the build machine itself has to be x86 (an amd64 sandbox, through Rosetta). A cross-compile for the PS5
+# (clang --target x86_64-sie-ps5) is fine on ARM and never gives these.
+X86_BUILD_ERR = re.compile(
+    r"this header is for x86 only|"
+    r"invalid output constraint '=[abcdSD]' in asm|impossible constraint in 'asm'|"
+    r"use of undeclared identifier 'REG_(RIP|RSP|RAX|RBP|EFL)'|'REG_(RIP|RSP|RAX|RBP|EFL)' undeclared|"
+    r"no member named 'gregs' in 'mcontext_t'|'mcontext_t'.{0,20}has no member named 'gregs'|"
+    r"unknown register name '%?[re]?[abcd]x' in asm|"
+    r"unrecognized command[- ]line option '-m(sse|avx|ssse3|popcnt|bmi)|"
+    r"unsupported option '-m(sse|avx)[^']*' for target 'aarch64")
+X86_PACKAGE = re.compile(r"Unable to locate package (\S*(x86[-_]64|amd64|i386|i686|x86)\S*)")
+
+
+def x86_errors(s, code, out):
+    """Up to 4 error lines that show x86-only code was built for this ARM sandbox, or []. Remembers it on the
+    sandbox, so the AI stops hunting packages and the switch card is offered."""
+    if code == 0 or s["kind"] != "linux" or s.get("arch") == "amd64" or s.get("x86_declined"):
+        return []
+    lines = []
+    for line in (out or "").splitlines():
+        if X86_BUILD_ERR.search(line) and line.strip() not in lines:
+            lines.append(line.strip()[:200])
+    if not lines:
+        return []
+    try:
+        cur = sandbox.load(s["name"])
+        cur["x86_needed"] = lines[:4]
+        sandbox.save(cur)
+    except sandbox.SandboxError:
+        pass
+    return lines[:4]
+
+
+def x86_card_shown(st, name):
+    return any(p.get("kind") == "sandbox" and (p.get("change") or {}).get("action") == "arch_amd64" and
+               (p.get("change") or {}).get("sandbox") == name for p in st.pending.values())
+
+
+def x86_card(st, emit, name, why, found_in):
+    """The card that makes sandbox `name` x86 (amd64) Linux through Rosetta, and turns Rosetta on in Colima if
+    needed. why: the lines that show the project needs it."""
+    s = sb(sandbox.load, name)
+    if x86_card_shown(st, name):
+        return ("The card to switch sandbox %s to x86 is already on the page. Stop here and wait for the user to press "
+                "it: don't look for x86 packages or cross compilers, they don't fix this." % name)
+    kind, _exe = sandbox.engine()
+    steps, cmds = ["Sandbox %s's Linux is made again as x86 (amd64). The copy of your project stays. What was "
+                   "installed inside it goes, and the next setup step installs it again (the x86 versions)." % name], []
+    if kind == "docker" and sandbox._which("colima"):
+        plan = sb(sandbox.rosetta_plan)
+        steps += plan["steps"]
+        cmds += plan["commands"]
+    elif kind == "docker":
+        steps.append("Docker Desktop / OrbStack: turn on \"Use Rosetta for x86/amd64 emulation\" in its settings, or "
+                     "it uses QEMU (many times slower).")
+    gone = [f for f in s.get("fixes") or [] if "libclang_rt.builtins-x86_64" in (f.get("command") or "")]
+    if gone:
+        steps.append("The saved fix that downloads clang's x86 runtime library is taken away: x86 Linux already has "
+                     "it. The LLVM tool swaps stay (they read x86 files too).")
+    diff = ("Why: this project builds programs for the build machine itself that only work on x86 (Intel/AMD), and "
+            "this sandbox is ARM Linux. No package fixes that. Found in %s:\n%s\n\nWhat happens:\n%s\n\nThe cost: "
+            "x86 programs run through Apple's Rosetta translator, so builds are slower than ARM (often about 1.5 to 2 "
+            "times as long), the x86 Linux image and packages take a few more GB of disk, and the translator uses a "
+            "little more memory. Without Rosetta (QEMU) it would be many times slower.%s\n\nNothing goes to your "
+            "devices. Switch back any time with arch native."
+            % (found_in, "\n".join("  " + w for w in why[:6]), "\n".join("- " + x for x in steps),
+               ("\n\nCommands:\n" + "\n".join("  " + c for c in cmds)) if cmds else ""))
+    return sandbox_card(st, emit, {"action": "arch_amd64", "sandbox": name},
+                        "Build sandbox %s as x86 Linux (through Rosetta)" % name, diff, "Switch to x86",
+                        "Only sandbox %s and Colima on this Mac change." % name) + (
+        " Stop here: don't look for x86 packages or cross compilers, and don't build again until the user answers.")
+
+
+def x86_hold(st, emit, s, command):
+    """Before a command in an ARM sandbox already known to need x86: building again or hunting x86 packages only
+    wastes steps, so point to the switch card instead (unless the user said no to it)."""
+    if s["kind"] != "linux" or s.get("arch") == "amd64" or not s.get("x86_needed") or s.get("x86_declined"):
+        return ""
+    if not (sandbox.is_buildish(command) or re.search(r"\bapt(-get|-cache)?\s+(install|search)\b", command)):
+        return ""
+    return ("Not run: sandbox %s is ARM Linux and this project needs an x86 build machine (%s). Building again or "
+            "installing packages won't change that. " % (s["name"], s["x86_needed"][0][:120]) +
+            x86_card(st, emit, s["name"], s["x86_needed"], "the last build's errors"))
+
+
+def switch_to_x86(name, emit=None):
+    """After the user confirmed the card: the sandbox becomes x86 (amd64), the ARM-only saved fix goes, and Colima gets
+    Rosetta. Returns plain words."""
+    s = sandbox.set_options(name, arch="amd64")
+    words = ["Sandbox %s is x86 (amd64) Linux now." % name]
+    for i in reversed(range(len(s.get("fixes") or []))):
+        if "libclang_rt.builtins-x86_64" in (s["fixes"][i].get("command") or ""):
+            sandbox.remove_fix(name, i + 1)
+            words.append("The x86 runtime-library download fix was taken away (x86 Linux has it already).")
+    s = sandbox.load(name)
+    s.pop("x86_needed", None)
+    s.pop("x86_declined", None)
+    s["needs_setup"] = True
+    sandbox.save(s)
+    sandbox.add_note(name, "Switched to x86 (amd64) Linux through Rosetta: the project builds x86-only programs for "
+                           "the build machine (cpuid.h, REG_RIP). ARM-only workarounds aren't needed now; the LLVM "
+                           "tool swaps stay and are harmless.", "patchbay")
+    kind, _exe = sandbox.engine()
+    if kind == "docker" and sandbox._which("colima") and not sandbox.rosetta_plan()["ok"]:
+        words.append(sandbox.enable_rosetta(emit, check_stop))
+    return " ".join(words)
 
 
 # A build tool on ARM Linux that can't read the PS5's (or any other x86) object files: GNU binutils only know the
@@ -3719,10 +3911,14 @@ def sandbox_hints(s, code, out, step, started=None, command=""):
         tips += (" A program in it is built for x86 (Intel) only, and this sandbox runs ARM Linux. Switch it with "
                  "propose_sandbox_settings arch amd64 (x86 through Rosetta: works, but slower), then run the setup "
                  "step again.")
-    if code != 0 and re.search(r"Unable to locate package|has no installation candidate", out) and \
+    if code != 0 and s.get("arch") != "amd64" and X86_PACKAGE.search(out):
+        tips += (" There is no package %s: an ARM sandbox can't get an x86 compiler that way, and a cross compiler "
+                 "doesn't fix code that must run on the build machine. If the build needs x86, switch the sandbox "
+                 "with propose_sandbox_settings arch amd64 (a card)." % X86_PACKAGE.search(out).group(1))
+    elif code != 0 and re.search(r"Unable to locate package|has no installation candidate", out) and \
             s.get("arch") != "amd64":
         tips += (" A package may not exist for ARM Linux. If it's a needed one, switch to arch amd64 with "
-                 "propose_sandbox_settings.")
+                 "propose_sandbox_settings (a card).")
     if code != 0 and re.search(r"\bKilled\b|out of memory|signal 9|c\+\+: fatal error: Killed", out):
         tips += (" The build ran out of memory (%d GB). Raise memory_gb (up to %s) or lower the jobs in the build "
                  "command." % (s["memory_gb"], s.get("memory_max") or 28))
@@ -3965,7 +4161,8 @@ def t_sandbox_copy_out(st, emit, a):
 
 @both_tool("propose_sandbox_settings", "Change a sandbox: network (true needs a card the user confirms; false is "
            "immediate), cpus, memory_gb, timeout_min (per command), disk_gb, image (Linux), arch (native = ARM, "
-           "amd64 = x86 through Rosetta), and its recipe: setup_command (ADDED to the project's own setup; don't "
+           "amd64 = x86 through Rosetta; switching to amd64 shows a card, use it when the build makes x86-only "
+           "programs for the build machine, never hunt x86 packages or cross compilers for that), and its recipe: setup_command (ADDED to the project's own setup; don't "
            "rewrite it), build_command, output (file or folder to "
            "copy out), upload_hint (what to run on the Mac afterwards), never_run (a command that must never run "
            "inside, like one that sends to a device; can only be added).",
@@ -3981,6 +4178,9 @@ def t_sandbox_settings(st, emit, a):
     s = sb(sandbox.load, name)
     opts = {k: a.get(k) for k in ("cpus", "memory_gb", "timeout_min", "disk_gb", "image", "arch", "copy_ignored")
             if a.get(k) is not None}
+    to_x86 = s["kind"] == "linux" and opts.get("arch") == "amd64" and s.get("arch") != "amd64"
+    if to_x86:
+        opts.pop("arch")      # it remakes the sandbox's Linux and may need Rosetta in Colima: a card does it
     if a.get("network") is False:
         opts["network"] = False
     msg = ""
@@ -4007,6 +4207,9 @@ def t_sandbox_settings(st, emit, a):
             "Sandbox %s will be able to reach the internet (for downloads like apt-get install or git clone).\n"
             "It still can't see your real files, passwords or Keychain." % name, "Turn network on",
             "Programs in the sandbox can then download things. Turn it off again when done.")
+    if to_x86:
+        why = s.get("x86_needed") or sb(sandboxrecipe.x86_signs, sandbox.work(s)) or ["the AI asked for it"]
+        return msg + x86_card(st, emit, name, why, "the project")
     return msg + sandbox.summary(s)
 
 
@@ -6428,6 +6631,17 @@ def do_cancel(st, pid, emit):
     if p and p["kind"] == "spec_files":
         st.messages.append({"role": "user", "content": "[I chose not to save Claude's files.]"})
         emit({"type": "answer", "text": "Nothing was saved. Claude's files are kept in %s." % p["source"]})
+        return
+    if p and p["kind"] == "sandbox" and (p.get("change") or {}).get("action") == "arch_amd64":
+        try:
+            s = sandbox.load(p["change"]["sandbox"])
+            s["x86_declined"] = True
+            sandbox.save(s)
+        except sandbox.SandboxError:
+            pass
+        st.messages.append({"role": "user", "content": "[I said no to switching sandbox %s to x86. Keep it ARM; don't "
+                                                       "offer the switch again unless I ask.]" % p["remote"]})
+        emit({"type": "answer", "text": "Kept the sandbox as ARM Linux. Nothing changed."})
         return
     if p:
         st.messages.append({"role": "user", "content": "[I cancelled the %s of %s. Nothing was written.]"
