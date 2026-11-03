@@ -233,6 +233,10 @@ PatchBay works on an app's source code on your Mac, in `~/Patchbay-projects/`, a
   You never need to type commands or set anything up in Terminal.
 - Installs bring up your Mac's own password box. PatchBay never sees that password.
 - Code changes show as cards with the exact difference, and the old file is backed up first.
+- **Where an app goes on the device is looked up, never guessed.** Before installing, the AI reads the project's
+  README and install notes and looks it up online for that app on that device. The install card shows the place
+  and where that comes from (a project file, a web page it read, or the app's current spot on the device). If
+  nothing says where it goes, PatchBay won't make the card.
 
 The same works for other systems (3DS, Wii U, Vita, PSP, PS4, Linux handhelds and your own devices). For anything
 new, the AI researches it and saves what it learned, so next time it already knows.
@@ -568,6 +572,9 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
 - **Sandboxes** only see a copy of the project, with the internet off unless you switch it on. Results go back
   only when you copy them, backed up and with Undo.
 - **The private builder** sends Claude only a generic spec, after the privacy check and your **Send to Claude**.
+- **Only what really happened.** The AI can't tell you something was built, copied or installed unless PatchBay
+  saw it happen (the build worked and made its file, the copy worked, the device write was checked). Anything else
+  it says is taken out with a correction. When it stops early it says **Not finished** and what failed last.
 - **Run by hand.** Nothing runs on a schedule.
 - **🕘 Activity** lists everything PatchBay did, with **Undo** where possible.
 

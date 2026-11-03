@@ -982,7 +982,7 @@ function card(ev,closed){
     '<div>Nothing has been written yet. The current file on '+esc(ev.device)+' is backed up first, and you can undo this later.</div>'+
     (/\.(nro|nsp|ovl|3dsx|elf)$/i.test(ev.remote||'')?'<div>If this app is open on '+esc(ev.device)+', close it first.</div>':'')+
     (ev.writes_on?'':'<label style="display:block;margin-top:6px"><input type="checkbox" class="ew" checked style="width:auto"> Also turn on writing for '+esc(ev.device)+' (it\'s off right now, and this change needs it). You can turn it off again any time by asking.</label>')+
-    (ev.diff?'<details open><summary>Exact change</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre>'+diffHtml(ev.diff)+'</pre>')+'</details>':'')+
+    (ev.diff?'<details open><summary>'+(ev.kind==='install'?'Where it goes, and how PatchBay knows':'Exact change')+'</summary>'+(/^(---|@@)/m.test(ev.diff)?diffView(ev.diff):'<pre>'+diffHtml(ev.diff)+'</pre>')+'</details>':'')+
     '<div class="row">Type <b>'+esc(ev.device)+'</b> to confirm: <input autocomplete="off"><button class="primary">Confirm</button><button>Cancel</button></div>');
   const row=c.querySelector('.row'),close=m=>{row.innerHTML='<i>'+m+'</i>'};
   if(closed){close('Already handled.');return}
