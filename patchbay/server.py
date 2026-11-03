@@ -67,6 +67,7 @@ import preflight
 import activity
 import memory
 import health
+import macspecs
 import library
 import updater
 import githubpush
@@ -1119,7 +1120,10 @@ def t_project_edit(st, emit, a):
 
 @tool("propose_build",
       "Suggest building a project on the Mac with its build command. Does NOT run: shows a card the user confirms. "
-      "Afterwards you get the build output, so you can fix errors.", {"project": S}, ["project"])
+      "Afterwards you get the build output, so you can fix errors.",
+      {"project": S, "checked_system": {"type": "boolean", "description": "true only after you told the user the "
+                                                                          "project is made for another system"}},
+      ["project"])
 def t_build(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root = pe(projects.folder_of, pr)
@@ -1128,6 +1132,10 @@ def t_build(st, emit, a):
         todo = installable(rows)
     except Exception:      # never let the check itself stop a build
         rows, todo = [], []
+    warn = macspecs.target_warning(root)
+    if warn and not a.get("checked_system"):
+        return ("Not built yet. %s Then, to build on the Mac anyway, call propose_build again with "
+                "checked_system true." % warn)
     if todo:
         # Install everything the project needs in one go, instead of one failed build per missing tool.
         res = tools_card(st, emit, rows, todo, "%s needs these tools before it can build." % pr["name"])
@@ -1930,9 +1938,13 @@ def t_check_tools(st, emit, a):
     if isinstance(tools, str):
         tools = tools.replace(",", " ").split()
     tools = [str(x) for x in tools][:60]
+    warn = ""
     if a.get("project"):
         pr = project(st, a.get("project"))
-        tools = preflight.needed_for_project(pe(projects.folder_of, pr)) + tools
+        root = pe(projects.folder_of, pr)
+        tools = preflight.needed_for_project(root) + tools
+        warn = macspecs.target_warning(root)
+        warn = ("\n\nNote: %s" % warn) if warn else ""
     if not tools:
         raise ToolError("Give a project, or the list of tools the job needs (research them first if you don't "
                         "know: the project's README, Makefile, CMakeLists.txt and .github/workflows).")
@@ -1946,13 +1958,13 @@ def t_check_tools(st, emit, a):
             APP.computer if APP else "the Mac", text)})
         if stuck:
             return ("Checklist:\n%s\n\nSome are missing and can't be installed from a card. Tell the user in one "
-                    "short line what each needs (see the checklist), or research where it comes from." % text)
-        return "Checklist:\n%s\n\nEverything the job needs is already on the Mac. Carry on." % text
+                    "short line what each needs (see the checklist), or research where it comes from.%s" % (text, warn))
+        return "Checklist:\n%s\n\nEverything the job needs is already on the Mac. Carry on.%s" % (text, warn)
     out = tools_card(st, emit, rows, todo, a.get("reason") or "Tools this job needs.")
     if stuck:
         out += ("\nAlso missing, and not on the card (the user sets these up themselves): %s."
                 % ", ".join(r["name"] for r in stuck))
-    return out
+    return out + warn
 
 
 @tool("propose_install_packages",
@@ -3654,7 +3666,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
         try:
             emit and emit({"type": "status", "text": "Asking Claude..."})
             sc = claude_scrubber()
-            system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+            system = macspecs.strip("\n\n".join(m["content"] for m in messages if m.get("role") == "system"))
             msg = APP.claude.chat(system, [m for m in messages if m.get("role") != "system"],
                                   [t for t in (tools or TOOLS) if t["function"]["name"] not in PRIVATE_TOOLS], sc)
             APP.claude.save_aliases(sc)
@@ -4246,6 +4258,20 @@ def project_rules(st, names):
         label, codetools.RULES_NAME, text)
 
 
+def project_target(st, names):
+    """A warning when the project being worked on looks made for another system (e.g. Ubuntu only)."""
+    if getattr(st, "home", False) or "project_read" not in names:
+        return ""
+    known = projects.all_projects(st.cfg())
+    name = getattr(st, "last_project", None) or (known[0]["name"] if len(known) == 1 else None)
+    pr = next((p for p in known if p["name"] == name), None)
+    try:
+        text = macspecs.target_warning(projects.folder_of(pr)) if pr else ""
+    except projects.ProjectError:
+        text = ""
+    return ("\n\nAbout project %s: %s" % (pr["name"], text)) if text else ""
+
+
 def chat_turn(st, user_text, emit, user_msg=None):
     cfg = st.cfg()
     question = user_text or last_question(st)
@@ -4270,6 +4296,9 @@ def chat_turn(st, user_text, emit, user_msg=None):
     system += project_rules(st, names)
     if self_ask:
         system += SELF_HINT
+    # What this Mac is (checked, cached), so commands and tool names fit it. Kept on the Mac: ask_model strips it
+    # before anything goes to Claude.
+    system += macspecs.prompt_block() + project_target(st, names)
     # The date only: the time changes every minute and would make Ollama read the whole chat again. The time goes
     # with the question instead (with_time).
     system += "\n\nToday is %s (this Mac's time zone)." % time.strftime("%A %Y-%m-%d")
@@ -4736,6 +4765,7 @@ def _run_mac_step(st, cfg, p, emit):
             code, out = projects.install_packages(p["manager"], p["packages"], p["update_all"], emit, STOP)
         except (OSError, projects.ProjectError) as e:
             raise ToolError("Couldn't install: %s" % e)
+        macspecs.forget()           # the Mac summary checks its tools again
         result = "Installing %s %s (exit code %d)." % (", ".join(p["packages"]) or "updates",
                                                        "worked" if code == 0 else "failed", code)
         return show_output(emit, result, code, out)
@@ -6482,6 +6512,7 @@ def main():
             return
         sys.exit("Port %d is already in use by another program. Try: python3 patchbay.py --port %d" % (port, port + 1))
     threading.Thread(target=mac_app.refresh_app, daemon=True).start()   # building the app can take a minute
+    threading.Thread(target=macspecs.facts, daemon=True).start()        # the Mac summary, ready for the first question
     url = "http://127.0.0.1:%d" % port
     print("PatchBay is running. On this Mac, open: %s" % url)
     if lan:
