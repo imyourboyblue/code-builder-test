@@ -68,7 +68,8 @@ class FakeMac:
                 mock.patch.object(sandbox, "_run_progress", side_effect=self.progress),
                 mock.patch.object(sandbox, "colima_size", return_value=(8, 20, 100)),
                 mock.patch.object(sandbox.time, "sleep"),
-                mock.patch.object(sandbox.services, "record")]
+                mock.patch.object(sandbox.services, "record"),
+                mock.patch.dict(sandbox.TROUBLE, {"at": 0.0, "repairs": 0, "resets": 0})]
 
 
 class Patched(unittest.TestCase):
@@ -153,9 +154,10 @@ class StartColima(Patched):
         with mock.patch.object(sandbox, "COLIMA_WAIT", 0), self.assertRaises(sandbox.SandboxError) as e:
             sandbox.start_colima()
         words = str(e.exception)
-        self.assertIn("didn't answer", words)
+        self.assertIn("isn't answering", words)
         self.assertIn("colima is running using macOS", words)
-        self.assertIn("colima stop", words)
+        self.assertIn("Repair Colima card", words)
+        self.assertNotIn("in Terminal", words)      # never tell the user to type what PatchBay itself blocks
         self.assertIn("Cannot connect to the Docker daemon", words)
 
 
@@ -222,7 +224,7 @@ class CarryOnAfterCard(unittest.TestCase):
                 mock.patch.object(server, "chat_turn") as turn:
             self.confirm()
         turn.assert_not_called()
-        self.assertIn("Don't offer the Start Colima card again", self.st.messages[-1]["content"])
+        self.assertIn("Don't offer the same Colima card again", self.st.messages[-1]["content"])
         self.assertEqual(self.events[-1]["text"], "Docker didn't answer")
 
     def test_copy_out_does_not_carry_on(self):

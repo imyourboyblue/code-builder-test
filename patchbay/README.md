@@ -285,7 +285,7 @@ for EglantinePS5 and run its tests").
   the project are left out too.
 - **One-time setup for Linux sandboxes:** install Apple's free `container` tool (the `.pkg` from
   github.com/apple/container/releases), then run `container system start` in Terminal once. It needs macOS 26 to
-  keep the internet off. Docker works too through Colima: the chat's sandbox check puts `colima` and `docker` (the real Homebrew names) on one install card, then starts Colima sized for your Mac (about 8 CPUs and 20 GB on a 36 GB Mac).
+  keep the internet off. Docker works too through Colima: the chat's sandbox check puts `colima` and `docker` (the real Homebrew names) on one install card, then starts Colima sized for your Mac (about 8 CPUs and 20 GB on a 36 GB Mac). If Colima gets stuck (running, but Docker never answers), the check offers a **Repair Colima** card (force stop, start again), then a **Reset Colima** card (a fresh Linux machine; sandbox folders stay), and stops there instead of trying again and again.
 
 ## AI models and Claude
 

@@ -352,9 +352,11 @@ def engine_ready(start=True, emit=None, stop=None):
         if code != 0 and _which("colima"):
             if colima_info()["running"]:
                 # Colima is up but Docker inside it isn't answering yet (it's still booting): wait, don't restart.
-                ok, out = wait_for_docker(exe, emit, stop)
+                ok, out = wait_for_docker(exe, emit, stop, QUICK_WAIT if recent_trouble() else None)
                 if not ok:
-                    raise SandboxError(colima_stuck_message(out))
+                    note_trouble()
+                    raise SandboxError(colima_stuck_message(out, next_fix()))
+                clear_trouble()
                 code = 0
             elif start:
                 start_colima(emit, stop=stop)     # sized for builds; waits until Docker answers
@@ -381,7 +383,7 @@ def preflight(sb=None, emit=None, stop=None, wait=None):
     """Everything a Linux sandbox needs on the Mac, checked in one go BEFORE starting it. Only reads (it may wait
     for Colima to finish booting). Returns {"rows": [(ok, name, words)], "brew": [Homebrew formulas to install],
     "colima": None|"start"|"resize", "stuck": "" or a plain message when Colima runs but Docker won't answer,
-    "ok": bool}."""
+    "fix": None|"repair"|"reset" (the card for a stuck Colima; None with stuck = nothing left to try), "ok": bool}."""
     rows, brew, colima, stuck = [], [], None, ""
     kind, exe = engine()
     if kind == "apple":
@@ -403,21 +405,37 @@ def preflight(sb=None, emit=None, stop=None, wait=None):
     running = bool(docker) and _quiet([docker, "info"], 20)[0] == 0
     want_cpu = int((sb or {}).get("cpus") or DEFAULTS["cpus"])
     want_mem = int((sb or {}).get("memory_gb") or DEFAULTS["memory_gb"])
+    if running:
+        clear_trouble()
+    fix = None
     info = colima_info() if docker and col and not running else {"running": False}
     if info["running"]:
-        # Colima already runs: never offer to start it again. Give Docker inside it time to answer.
-        ok, out = wait_for_docker(docker, emit, stop, COLIMA_WAIT if wait is None else wait)
+        # Colima already runs: never offer to start it again. Give Docker inside it time to answer, but only once:
+        # if it was already stuck a moment ago, a quick look is enough (waiting 3 minutes again changes nothing).
+        if wait is None:
+            wait = QUICK_WAIT if recent_trouble() else COLIMA_WAIT
+        ok, out = wait_for_docker(docker, emit, stop, wait)
         running = ok
-        if not ok:
+        if ok:
+            clear_trouble()
+        else:
             cpus, memory, _ = colima_size()
             if colima_small(info, cpus, memory):
                 rows.append((False, "Docker running", "no, and Colima is too small (%s CPUs, %s GB): a card "
                              "restarts it at the right size" % (info.get("cpus") or "?", _gb(info.get("memory_gb")))))
                 colima = "resize"
             else:
+                note_trouble()
+                fix = next_fix()
                 rows.append((False, "Docker running", "Colima is running, but Docker inside it isn't answering"))
-                stuck = colima_stuck_message(out)
-    if docker and not running and not info["running"]:
+                stuck = colima_stuck_message(out, fix)
+    if docker and not running and not info["running"] and col and recent_trouble():
+        # Colima failed to start a moment ago: starting it the same way again won't help. Offer the stronger fix.
+        fix = next_fix()
+        rows.append((False, "Docker running", "no: Colima didn't come up last time"))
+        stuck = colima_stuck_message("", fix).replace("Colima is running, but Docker inside it isn't answering",
+                                                      "Colima didn't start properly last time")
+    elif docker and not running and not info["running"]:
         rows.append((False, "Docker running", "no" + (": a card starts Colima at the right size" if col else "")))
         colima = "start" if col else None
     elif running:
@@ -430,7 +448,7 @@ def preflight(sb=None, emit=None, stop=None, wait=None):
                                              if small else "")))
         if small and col and uses_colima(docker):
             colima = "resize"
-    return {"rows": rows, "brew": brew, "colima": colima, "stuck": stuck,
+    return {"rows": rows, "brew": brew, "colima": colima, "stuck": stuck, "fix": fix if stuck else None,
             "ok": not brew and not colima and not stuck and (running or not docker)}
 
 
@@ -490,13 +508,76 @@ def docker_error(out):
     return "\n".join(bad[-6:] or lines[-6:])[-800:] or "(docker said nothing)"
 
 
-def colima_stuck_message(out=""):
-    return ("Colima is running, but Docker inside it didn't answer within %d seconds.\n"
+# Colima trouble PatchBay has already seen, so it doesn't wait 3 minutes again on every check, and so the next card
+# is a different, stronger fix instead of the same one again: repair (force stop + start), then reset (delete +
+# start). Cleared as soon as Docker answers.
+TROUBLE = {"at": 0.0, "repairs": 0, "resets": 0}
+TROUBLE_FRESH = 30 * 60     # a stuck Colima seen this recently is re-checked quickly, not waited on again
+QUICK_WAIT = 6
+
+
+def note_trouble():
+    TROUBLE["at"] = time.time()
+
+
+def clear_trouble():
+    TROUBLE.update(at=0.0, repairs=0, resets=0)
+
+
+def recent_trouble():
+    return bool(TROUBLE["at"]) and time.time() - TROUBLE["at"] < TROUBLE_FRESH
+
+
+def next_fix():
+    """The card to offer for a stuck Colima: "repair" first, then "reset", then None (nothing left PatchBay can do)."""
+    if not TROUBLE["repairs"]:
+        return "repair"
+    if not TROUBLE["resets"]:
+        return "reset"
+    return None
+
+
+def colima_log():
+    return colima_home() / "_lima" / "colima" / "ha.stderr.log"
+
+
+def colima_log_tail(lines=10):
+    """The last few lines of Colima's log that say what went wrong (errors and warnings first), or ""."""
+    try:
+        with open(colima_log(), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    rows = [x.strip() for x in text.splitlines() if x.strip()][-300:]
+    bad = [x for x in rows if re.search(r"level=(error|fatal|warn)|\b(error|failed|fatal|panic)\b", x, re.I)]
+    return "\n".join(x[:240] for x in (bad or rows)[-lines:])
+
+
+FIX_WORDS = {
+    "repair": "PatchBay can fix this itself: press the Repair Colima card. It force-stops Colima and starts it "
+              "again, sized for this Mac. Your sandboxes and their files stay.",
+    "reset": "Repairing didn't help, so the next step is the Reset Colima card. It deletes Colima's Linux machine "
+             "and makes a fresh one. Your sandbox folders on this Mac stay, but anything installed inside the "
+             "sandboxes is gone and gets downloaded again on the next setup step.",
+    None: "PatchBay already tried repairing and resetting Colima, and it still won't come up, so it has stopped "
+          "trying. Something outside PatchBay is wrong with Colima on this Mac: updating it (brew upgrade colima "
+          "lima) or restarting the Mac usually helps. Then ask me again.",
+}
+
+
+def colima_stuck_message(out="", fix="repair"):
+    """Plain words for a Colima whose Docker won't answer. Never tells the user to type commands PatchBay blocks:
+    it names the card that fixes it instead."""
+    tail = colima_log_tail()
+    return ("Colima is running, but Docker inside it isn't answering.\n"
             "Docker said: %s\n"
-            "Colima says (colima status):\n%s\n"
-            "What to do, in Terminal: colima stop, then %s. If it hangs again, Colima's log is %s."
-            % (COLIMA_WAIT, docker_error(out), colima_status_text(), " ".join(colima_start_argv("colima")),
-               colima_home() / "_lima" / "colima" / "ha.stderr.log"))
+            "Colima says (colima status):\n%s\n%s"
+            "%s"
+            % (docker_error(out), colima_status_text(),
+               ("Last lines of Colima's log (%s):\n%s\n" % (colima_log(), tail)) if tail else "",
+               FIX_WORDS[fix]))
 
 
 def wait_for_docker(exe, emit=None, stop=None, timeout=None):
@@ -581,9 +662,9 @@ def start_colima(emit=None, resize=False, stop=None):
         code, out = _run_progress(argv, COLIMA_START_LIMIT, emit, "Starting Colima (%s CPUs, %s GB), this can take "
                                   "a minute or two..." % (argv[3], argv[5]), stop)
         if code != 0:
-            raise SandboxError("Colima didn't start.\nIt said: %s\nColima says (colima status):\n%s\n"
-                               "What to do, in Terminal: colima stop, then %s"
-                               % (out.strip()[-600:], colima_status_text(), " ".join(colima_start_argv("colima"))))
+            note_trouble()
+            raise SandboxError("Colima didn't start.\nIt said: %s\nColima says (colima status):\n%s\n%s"
+                               % (out.strip()[-600:], colima_status_text(), FIX_WORDS[next_fix()]))
         started_it = not resize   # restarting a bigger one keeps it whoever's it was (yours if you had it running)
     if started_it:
         services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
@@ -591,11 +672,49 @@ def start_colima(emit=None, resize=False, stop=None):
     if docker:
         ok, out = wait_for_docker(docker, emit, stop)
         if not ok:
-            raise SandboxError(colima_stuck_message(out))
+            note_trouble()
+            raise SandboxError(colima_stuck_message(out, next_fix()))
+    clear_trouble()
     ncpu, mem = docker_capacity(docker) if docker else (None, None)
     return "Colima is running%s and Docker is answering." % (" with %d CPUs and %.0f GB" % (ncpu, mem)
                                                                if ncpu else "")
 
+
+
+def repair_colima(emit=None, reset=False, stop=None):
+    """Fix a Colima that runs but whose Docker won't answer (or that won't start). Only after the user confirmed the
+    card. repair: force-stop, then start sized for this Mac. reset: also delete Colima's Linux machine first (the
+    sandboxes' folders on the Mac stay; what was installed inside them goes). Waits until Docker answers."""
+    col = _which("colima")
+    if not col:
+        raise SandboxError("Colima isn't installed. Use sandbox_preflight: it shows the install card.")
+    TROUBLE["resets" if reset else "repairs"] += 1
+    note_trouble()
+    _run_progress([col, "stop", "--force"], 300, emit, "Force-stopping Colima...", stop)   # fine if already stopped
+    if reset:
+        code, out = _run_progress([col, "delete", "--force"], 300, emit, "Deleting Colima's Linux machine...", stop)
+        if code != 0:
+            raise SandboxError("Colima's Linux machine couldn't be deleted.\nIt said: %s\n%s"
+                               % (out.strip()[-600:], FIX_WORDS[next_fix()]))
+    argv = colima_start_argv(col)
+    code, out = _run_progress(argv, COLIMA_START_LIMIT, emit, "Starting Colima again (%s CPUs, %s GB)..."
+                              % (argv[3], argv[5]), stop)
+    if code != 0:
+        tail = colima_log_tail()
+        raise SandboxError("Colima still didn't start after %s.\nIt said: %s\n%s%s"
+                           % ("a reset" if reset else "a forced restart", out.strip()[-600:],
+                              ("Last lines of Colima's log (%s):\n%s\n" % (colima_log(), tail)) if tail else "",
+                              FIX_WORDS[next_fix()]))
+    services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
+    docker = _which("docker")
+    if docker:
+        ok, out = wait_for_docker(docker, emit, stop)
+        if not ok:
+            raise SandboxError(colima_stuck_message(out, next_fix()))
+    clear_trouble()
+    ncpu, mem = docker_capacity(docker) if docker else (None, None)
+    return "Colima was %s and Docker is answering%s." % ("reset" if reset else "repaired",
+                                                        " (%d CPUs, %.0f GB)" % (ncpu, mem) if ncpu else "")
 
 def _exists(kind, exe, ref, image=False):
     if kind == "apple":

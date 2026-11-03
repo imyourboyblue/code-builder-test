@@ -2100,8 +2100,10 @@ def t_command(st, emit, a):
     if re.match(r"^(\S*/)?(brew|dkp-pacman|pacman)\s+(install|upgrade|-S)", cmd):
         raise ToolError("Use propose_install_packages to install packages (it handles the password).")
     if re.search(r"(^|[;&|/]\s*)(colima\s+(start|stop|restart)|docker\s+info)\b", cmd):
-        raise ToolError("Use sandbox_preflight instead: it checks Docker and Colima and starts Colima sized for "
-                        "this Mac (plain colima start makes a machine too small for builds).")
+        raise ToolError("Not run: PatchBay handles Colima itself. Use sandbox_preflight: it checks Docker and Colima, "
+                        "starts Colima sized for this Mac, and if Colima is stuck it offers a Repair Colima card "
+                        "(force stop and start again), then a Reset Colima card. Don't suggest these commands to the "
+                        "user either.")
     gate = docker_gate(st, emit, cmd)
     if gate:
         return gate
@@ -2879,7 +2881,11 @@ def sandbox_where(change):
     if change.get("action") == "network_on":
         return where.mac_only(computer_name(), "Only sandbox %s: it can reach the internet. Nothing on your devices"
                                                % name, runs=runs)
-    if change.get("action") in ("colima_start", "colima_resize"):
+    if change.get("action") == "colima_reset":
+        return where.mac_only(computer_name(), "Colima's Linux machine on this Mac is deleted and made again (what's "
+                                               "installed inside sandboxes goes; their folders stay). Nothing on your "
+                                               "devices")
+    if change.get("action") in ("colima_start", "colima_resize", "colima_repair"):
         return where.mac_only(computer_name(), "Colima's Linux machine on this Mac (Docker sandboxes restart). "
                                                "Nothing on your devices")
     return where.mac_only(computer_name(), "Only sandbox %s. Nothing else on this Mac or your devices" % name,
@@ -2912,17 +2918,22 @@ def confirm_sandbox(st, p, emit):
         result = sb(sandbox.copy_out, ch)
     elif a == "undo":
         result = sb(sandbox.undo_copy, ch["number"])
-    elif a in ("colima_start", "colima_resize"):
-        emit({"type": "answer", "text": "Starting Colima, this can take a minute or two. I'll carry on by myself "
-                                        "when Docker is ready."})
+    elif a in ("colima_start", "colima_resize", "colima_repair", "colima_reset"):
+        emit({"type": "answer", "text": "%s Colima, this can take a minute or two. I'll carry on by myself "
+                                        "when Docker is ready." % {"colima_repair": "Repairing",
+                                                                   "colima_reset": "Resetting"}.get(a, "Starting")})
         try:
-            result = sb(sandbox.start_colima, emit, a == "colima_resize", check_stop)
+            if a in ("colima_repair", "colima_reset"):
+                result = sb(sandbox.repair_colima, emit, a == "colima_reset", check_stop)
+            else:
+                result = sb(sandbox.start_colima, emit, a == "colima_resize", check_stop)
         except ToolError as e:
             # Don't loop back to the same card: say what's wrong and let the user decide.
             emit({"type": "answer", "text": str(e)})
             st.messages.append({"role": "user", "content": "[I confirmed the Colima card, but Docker didn't come "
-                                "up: %s\nDon't offer the Start Colima card again. Tell me in plain words what to "
-                                "do next.]" % e})
+                                "up: %s\nDon't offer the same Colima card again, and don't carry on with the job by "
+                                "yourself. Tell me in plain words what happened; if I ask again, sandbox_preflight "
+                                "offers the next, different fix.]" % e})
             return
         if ch.get("sandbox"):
             result += " Next: sandbox_build step setup for sandbox %s." % ch["sandbox"]
@@ -2938,7 +2949,7 @@ def confirm_sandbox(st, p, emit):
 
 
 # Cards after which the AI keeps going with the job by itself (the others finish something the user asked for).
-CARRY_ON_AFTER = ("colima_start", "colima_resize", "network_on", "reset")
+CARRY_ON_AFTER = ("colima_start", "colima_resize", "colima_repair", "colima_reset", "network_on", "reset")
 
 
 def sandbox_name(st, a):
@@ -3081,6 +3092,9 @@ def fill_from_preset(s):
                   or "recipe", ", ".join(r.get("recipe_from") or []) or "its build files"))
 
 
+COLIMA_GAVE_UP = "[PatchBay already repaired and reset Colima this time and it still doesn't work.]"
+
+
 def sandbox_preflight(st, emit, s=None, pf=None):
     """Check everything a Linux sandbox needs on the Mac in one go, and show ONE card for what's missing."""
     pf = pf or sb(sandbox.preflight, s, emit, check_stop)
@@ -3089,8 +3103,27 @@ def sandbox_preflight(st, emit, s=None, pf=None):
     name = (s or {}).get("name") or ""
     if pf.get("stuck"):
         emit({"type": "note", "text": pf["stuck"]})
-        return ("Checklist:\n%s\n\n%s\n\nColima is already running, so do NOT offer to start it again. Tell the "
-                "user in plain words what's wrong and the Terminal steps above." % (lines, pf["stuck"]))
+        fix = pf.get("fix")
+        if fix:
+            cpus, mem, disk = sandbox.colima_size()
+            start = "  colima start --cpu %d --memory %d --disk %d" % (cpus, mem, disk)
+            if fix == "repair":
+                title, label = "Repair Colima (force stop, start again)", "Repair Colima"
+                diff = ("Colima is running, but Docker inside it isn't answering. This force-stops Colima and starts "
+                        "it again with %d CPUs and %d GB, then waits for Docker.\nYour sandboxes and their files stay."
+                        "\n\nCommands:\n  colima stop --force\n%s" % (cpus, mem, start))
+            else:
+                title, label = "Reset Colima (delete its Linux machine, make a new one)", "Reset Colima"
+                diff = ("Repairing Colima didn't help. This deletes Colima's Linux machine and makes a fresh one "
+                        "(%d CPUs, %d GB).\nYour sandbox folders on this Mac stay. Anything installed INSIDE the "
+                        "sandboxes is deleted and gets downloaded again on the next setup step.\n\nCommands:\n"
+                        "  colima stop --force\n  colima delete --force\n%s" % (cpus, mem, start))
+            return ("Checklist:\n%s\n\n%s\n\n" % (lines, pf["stuck"])) + sandbox_card(
+                st, emit, {"action": "colima_" + fix, "sandbox": name}, title, diff, label,
+                "Only Colima on this Mac changes. Nothing on your devices.")
+        return ("Checklist:\n%s\n\n%s\n\n%s Stop here: don't call sandbox_preflight, sandbox_build or sandbox_run "
+                "again in this answer. Tell the user in plain words what's wrong, and look up the error from Colima's "
+                "log with web_search (generic words only) if that helps." % (lines, pf["stuck"], COLIMA_GAVE_UP))
     if pf["brew"]:
         if not projects.find_brew():
             return ("Checklist:\n%s\n\nHomebrew isn't installed, so Colima and Docker can't go on a card. Tell the "
@@ -3620,8 +3653,9 @@ PatchBay reads the project's build files and sets it up (Linux version, packages
 sandbox_build step setup, sandbox_build step build, and sandbox_run as often as needed. Never write your own \
 setup command or install/start Docker or Colima yourself: sandbox_preflight checks and installs what sandboxes \
 need (one card). Docker only answers once Colima (its Linux machine) is started: if Docker doesn't answer, call \
-sandbox_preflight straight away (it shows the Start Colima card, then PatchBay waits and carries on); never wait on, \
-poll or retry Docker yourself. The project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
+sandbox_preflight straight away (it shows the Start Colima card, or Repair/Reset Colima if Colima is stuck, then \
+PatchBay waits and carries on); never wait on, poll or retry Docker yourself, and never tell the user to type colima \
+commands. The project's preset setup is kept (propose_sandbox_settings only adds to it). Its internet is off; it is \
 asked for with a card when a download is needed. When it works, propose_sandbox_copy_out the file or folder that \
 should go back into the real project. Anything that sends to a device (make install, FTP upload) runs on the Mac \
 with propose_command after copying out, never inside the sandbox.
@@ -3973,7 +4007,8 @@ PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
                   "propose_device_command", "private_build", "sandbox_create", "sandbox_run",
-                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build", "sandbox_preflight"}
+                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build"}
+# sandbox_preflight is only a check, so it isn't progress: running it again and again counts towards the loop guard.
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
 
@@ -3993,6 +4028,54 @@ def bug_result(e):
     spot = (" at %s line %d" % (Path(frames[-1].filename).name, frames[-1].lineno)) if frames else ""
     return ("%s (%s: %s%s). This is a mistake in PatchBay's own code, not in the project. Don't run this step "
             "again." % (BUG_PREFIX, type(e).__name__, e, spot))
+
+
+LOOP_STOP = ("I stopped because I was going round in circles: %s gave the same answer %d times, even after I "
+             "looked into why. It keeps saying: %s")
+DIAGNOSE = ("[PatchBay loop guard: %s %s. Don't run it again the same way: that won't change anything. Diagnose "
+            "first, then fix:\n"
+            "1. Say in one short line what you're looking into.\n"
+            "2. Read what explains it: the error and any log lines above, and the relevant log or build file with "
+            "your read tools (project_read, sandbox_read, read_file).\n"
+            "3. Look up the exact error message and known fixes with web_search and read_web_page (the tool's "
+            "docs, its GitHub issues). Use generic words only: the program's name and the error text, never "
+            "file paths, IP addresses, device names or personal names.\n"
+            "4. Then offer ONE different fix with the right card tool (a setting, a command, a package, a sandbox "
+            "card), and say plainly why it should work. If no tool can fix it, tell the user plainly what's wrong "
+            "and what you found.]")
+
+
+def first_line(text):
+    return next((l.strip() for l in (text or "").splitlines() if l.strip()), "")[:200]
+
+
+def answer_lines(text):
+    """A step's answer as a set of lines, with numbers (times, seconds, counts) taken out, so the same answer at a
+    different time still counts as the same."""
+    return frozenset(re.sub(r"\s+", " ", re.sub(r"\d+", "#", l)).strip() for l in (text or "").splitlines()
+                     if l.strip())
+
+
+def repeats(answers, name, result):
+    """Remember this answer and say how many times (this one included) an answer this similar came back in this
+    question. Short answers ("Done.", "(no output)") don't count: they are the same every time anyway."""
+    lines = answer_lines(result)
+    if len("".join(lines)) < 40:
+        return 0
+    same = 1 + sum(1 for x in answers if len(x & lines) >= 0.8 * max(len(x), len(lines)))
+    answers.append(lines)
+    return same
+
+
+def start_diagnosis(st, emit, name, args, result, why):
+    """Switch from retrying to finding out why: tell the user plainly what's being looked into, then have the AI read
+    the logs, look up the error and known fixes, and offer a different fix on a card."""
+    what = step_doing(name, args)
+    err = first_line(re.sub(r"^Error:\s*", "", result or ""))
+    emit({"type": "note", "text": "%s %s, so I've stopped retrying it. I'm looking into why: reading the logs and "
+                                  "looking up this error and its known fixes%s." % (
+                                      what, why, (": \"%s\"" % err[:120]) if err else "")})
+    st.messages.append({"role": "user", "content": DIAGNOSE % (what, why)})
 
 
 def ask_user(st, emit, why, tried, bug=False):
@@ -4975,6 +5058,7 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                        "%d. %s" % (i + 1, x) for i, x in enumerate(st.plan["steps"])))
     stamp = "\n\n[Sent %s, %s.]" % (time.strftime("%H:%M"), time.strftime("%Z") or "local time")
     fails, nudges, tried, idle = {}, 0, [], 0
+    answers, diagnosed, helped = [], set(), False      # for the loop guard (same answer again) and diagnosis
     idle_limit = 15 if st.plan else 8
     base = PLAN_TOOL_ROUNDS if st.plan else MAX_TOOL_ROUNDS
     seen, new_reads, rounds = set(), 0, 0
@@ -5062,6 +5146,14 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                 continue
             bad = failed(result)
             sig = name + json.dumps(args, sort_keys=True, default=str)
+            again = 0 if bad else repeats(answers, name, result)     # failures have their own count below
+            if again >= 3:
+                # The same answer three times, even after being told to diagnose: stop instead of going round.
+                return ask_user(st, emit, LOOP_STOP % (step_doing(name, args).lower(), again, first_line(result)),
+                                tried)
+            if again == 2 and ("same", name) not in diagnosed:
+                diagnosed.add(("same", name))
+                start_diagnosis(st, emit, name, args, result, "gave the same answer twice")
             if not bad and name in PROGRESS_TOOLS:
                 idle = 0
             elif not bad and sig not in seen:
@@ -5086,12 +5178,18 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                                                       k.split(":")[0] in ("find_github_repo", "latest_release")
                                                       for k in fails) else
                                         "Several lookups didn't find what I was looking for.", tried)
-                elif fails[key] == 2 and claude_ready():
+                elif fails[key] >= 2 and key not in diagnosed:
+                    # Failed twice: stop retrying, find out why (logs, the error text, known fixes), then offer a
+                    # different fix on a card.
+                    diagnosed.add(key)
+                    start_diagnosis(st, emit, name, args, result, "failed twice")
+                elif fails[key] >= 3 and claude_ready() and not helped:
+                    helped = True
                     if stuck_help(st, emit, cfg, name, args, result):
                         return          # a card is waiting for the user
-                elif fails[key] >= 2:
-                    return ask_user(st, emit, "That step failed %s." % ("twice" if fails[key] == 2 else
-                                                                     "%d times" % fails[key]), tried)
+                elif fails[key] >= 3:
+                    return ask_user(st, emit, "That step failed %d times, even after looking into why."
+                                    % fails[key], tried)
             if idle >= idle_limit:
                 return ask_user(st, emit, "I've taken %d steps without getting any further." % idle, tried)
         if card:
