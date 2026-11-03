@@ -1357,6 +1357,10 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
         (s.blocked||[]).map(b=>'<b>Never run inside:</b> '+esc(b.why)+'<br>').join('')+
         (s.upload_hint?'<b>Then, on the Mac:</b> <code>'+esc(s.upload_hint)+'</code><br>':'')+
         (s.recipe_notes||[]).map(n=>esc(n)+'<br>').join('')+'</div></details>':'')+
+      (Object.keys(s.tool_aliases||{}).length||(s.fixes||[]).length||(s.notes||[]).length?'<details style="margin-top:6px"><summary style="cursor:pointer">What was changed and learned</summary><div class="md-why">'+
+        Object.entries(s.tool_aliases||{}).map(([t,u])=>'<b>Tool swap</b> (every run): <code>'+esc(t)+'</code> means <code>'+esc(u)+'</code><br>').join('')+
+        (s.fixes||[]).map((f,i)=>'<b>Saved fix '+(i+1)+'</b> (every setup): '+esc(f.why||f.command)+'<br>').join('')+
+        (s.notes||[]).slice(-12).map(n=>esc(n.time)+' · '+esc(n.text)+'<br>').join('')+'</div></details>':'')+
       (here&&!s.running&&(s.setup_command||s.build_command)?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+
         (s.setup_command?'<button class="sb-setup">Set up</button>':'')+(s.build_command?'<button class="sb-build primary">Build</button>':'')+
         (s.output?'<button class="sb-result">Copy result back…</button>':'')+
