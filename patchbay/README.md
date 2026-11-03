@@ -272,6 +272,13 @@ for EglantinePS5 and run its tests").
   (docs, Makefile, CI workflow, Dockerfile) and picks the Linux version, the packages, the setup and build commands,
   the memory, and what the build makes. **How it builds** on the sandbox shows all of it; **Set up** (once, needs the
   internet) and **Build** run it. You or the chat can change any part.
+- **Installs every tool the build needs at once.** Before each setup, PatchBay reads the Makefile, the scripts in
+  `tools/` and `scripts/`, the CI workflows and the dependency list, picks out every program they check for
+  (`command -v wget`, `for tool in cmake ninja ...`), looks up the Linux package for each, and installs them all in
+  one step (a package that doesn't exist on that Linux is skipped, not fatal). If a build still stops on a missing
+  program, PatchBay reads the script that failed inside the sandbox (also ones the build downloaded) and adds
+  everything else it checks for. A build that stops on a *different* missing program each time counts as progress;
+  only the same one again counts as a repeat failure.
 - **Never sends to a device from inside.** Commands like `make install` that upload to a console are blocked in the
   sandbox. Copy the result out (**Copy result back…** copies a whole app folder, with backup and Undo), then the
   chat sends it from the Mac on a card.
