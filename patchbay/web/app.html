@@ -3,20 +3,20 @@
 <title>PatchBay</title>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--mute:#6b6b66;--line:#e2e2dd;--me:#2f5bd3;--meink:#fff;
---ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3}
+--ok:#1f7a3f;--warn:#a15c00;--bad:#b3261e;--code:#f0f0ec;--sel:#dfe7fb;--drop:#2f5bd3;--ai:#0f7b6c;--aibg:#e8f5f1}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecece8;--mute:#9a9a93;--line:#33332f;
---me:#4a74e8;--code:#2a2a27;--ok:#5cc184;--warn:#e0a24a;--bad:#ff7b72;--sel:#26324f;--drop:#7c9cf0}}
+--me:#4a74e8;--code:#2a2a27;--ok:#5cc184;--warn:#e0a24a;--bad:#ff7b72;--sel:#26324f;--drop:#7c9cf0;--ai:#3fbfa8;--aibg:#182b27}}
 /* ---- themes: pick one in 🩺 Setup. Each one only changes these colour and shape settings. */
 :root{--overlay:rgba(0,0,0,.4);--shadow:0 6px 24px rgba(0,0,0,.18);--radius:12px;--panel-blur:none;--glow:none;--bg-art:none;--head-font:inherit}
 html[data-theme=pirate]{color-scheme:dark;--bg:#0B132B;--card:#13213F;--ink:#E0E1DD;--mute:#A9B4C2;--line:#6B4F2A;
---me:#D4AF37;--meink:#0B132B;--ok:#5FBF77;--warn:#E8A33D;--bad:#EF6B5E;--code:#0F1A33;--sel:#3A3220;--drop:#D4AF37;
+--me:#D4AF37;--meink:#0B132B;--ai:#5FB3C9;--aibg:#12304A;--ok:#5FBF77;--warn:#E8A33D;--bad:#EF6B5E;--code:#0F1A33;--sel:#3A3220;--drop:#D4AF37;
 --overlay:rgba(3,6,16,.62);--shadow:0 8px 26px rgba(0,0,0,.45);--radius:10px;--head-font:Georgia,"Iowan Old Style","Palatino",serif;
 --bg-art:radial-gradient(ellipse at 50% -20%,rgba(212,175,55,.12),transparent 55%),linear-gradient(180deg,#0B132B 0%,#0B1A33 70%,#0A2238 100%)}
 html[data-theme=mac-tahoe]{color-scheme:light;--bg:#F6F6F6;--card:#FFFFFF;--ink:#1C1C1E;--mute:#6E6E73;--line:#E5E5EA;
---me:#007AFF;--meink:#FFFFFF;--ok:#1E7B34;--warn:#B25000;--bad:#D70015;--code:#F2F2F7;--sel:#E1EEFF;--drop:#007AFF;
+--me:#007AFF;--meink:#FFFFFF;--ai:#9A3FD0;--aibg:#F5ECFB;--ok:#1E7B34;--warn:#B25000;--bad:#D70015;--code:#F2F2F7;--sel:#E1EEFF;--drop:#007AFF;
 --overlay:rgba(0,0,0,.22);--shadow:0 10px 30px rgba(0,0,0,.10),0 1px 3px rgba(0,0,0,.06);--radius:14px}
 html[data-theme=dark-neon-glass]{color-scheme:dark;--bg:#0A0F1D;--card:rgba(30,41,59,.70);--ink:#E2E8F0;--mute:#94A3B8;
---line:rgba(148,163,184,.20);--me:#00F5D4;--meink:#0A0F1D;--ok:#34D399;--warn:#FBBF24;--bad:#FB7185;--code:rgba(15,23,42,.72);
+--line:rgba(148,163,184,.20);--me:#00F5D4;--meink:#0A0F1D;--ai:#C084FC;--aibg:rgba(123,44,191,.24);--ok:#34D399;--warn:#FBBF24;--bad:#FB7185;--code:rgba(15,23,42,.72);
 --sel:rgba(123,44,191,.38);--drop:#00F5D4;--overlay:rgba(2,6,18,.6);--shadow:0 10px 34px rgba(0,0,0,.5);--radius:12px;
 --panel-blur:blur(16px) saturate(140%);--glow:0 0 0 1px rgba(0,245,212,.22),0 0 22px rgba(123,44,191,.22);
 --bg-art:radial-gradient(circle at 12% 8%,rgba(123,44,191,.35),transparent 42%),radial-gradient(circle at 88% 92%,rgba(0,245,212,.20),transparent 45%),linear-gradient(160deg,#0A0F1D,#0D1428 60%,#0A0F1D)}
@@ -120,14 +120,18 @@ font-weight:700;color:#fff;position:relative}
 .msg:hover>.cp,.cp:focus,.cp.done{opacity:1}
 pre{position:relative}pre>.cp{top:4px;bottom:auto;right:4px}pre:hover>.cp{opacity:1}
 @media (hover:none){.cp{opacity:.75}}
-.me{align-self:flex-end;background:var(--me);color:var(--meink)}
-.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.me{align-self:flex-end;background:var(--me);color:var(--meink);border-bottom-right-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.ai{align-self:flex-start;background:var(--aibg);border:1px solid var(--line);border-left:4px solid var(--ai);border-bottom-left-radius:4px}
+/* who-said-it labels above each bubble */
+.msg.me::before,.msg.ai::before{display:block;font:700 11px/1.2 system-ui,sans-serif;letter-spacing:.4px;text-transform:uppercase;margin-bottom:4px}
+.msg.me::before{content:"You";opacity:.8}
+.msg.ai::before{content:"PatchBay";color:var(--ai)}
 .err{align-self:flex-start;color:var(--bad);border:1px solid var(--bad);background:var(--card)}
 .step{align-self:flex-start;color:var(--mute);font-size:13px;max-width:100%}
 .step summary{cursor:pointer}.step pre{max-height:300px}
 pre{background:var(--code);padding:8px 10px;border-radius:8px;overflow:auto;font:12.5px/1.45 ui-monospace,Menlo,monospace;
 white-space:pre;margin:6px 0}
-.msg a{color:inherit;text-decoration:underline;word-break:break-all}.ai a{color:var(--me)}
+.msg a{color:inherit;text-decoration:underline;word-break:break-all}.ai a{color:var(--ai)}
 code{background:var(--code);padding:1px 4px;border-radius:4px;font:13px ui-monospace,Menlo,monospace}
 .card{align-self:stretch;border:2px solid var(--warn);border-radius:var(--radius);padding:12px 14px;background:var(--card)}
 .card h3{margin:0 0 6px;font-size:15px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
@@ -205,16 +209,17 @@ color:var(--ink);resize:none;min-height:46px;max-height:45vh;overflow-y:auto}
 #console-btn.on{background:var(--me);color:var(--meink);border-color:var(--me)}
 
 /* ---- Console view: PatchBay's own terminal-style look for the chat (dark, monospace, one line per step). */
-#chat.console{--bg:#0e1116;--card:#151a21;--ink:#cfd6df;--mute:#7d8794;--line:#252c36;--me:#e8b04b;--meink:#0e1116;
+#chat.console{--bg:#0e1116;--card:#151a21;--ink:#cfd6df;--mute:#7d8794;--line:#252c36;--me:#e8b04b;--meink:#0e1116;--ai:#5cc8b0;--aibg:#121c1d;
   --code:#11161c;--ok:#6cc58a;--warn:#e8b04b;--bad:#f07167;--sel:#1f2833;color-scheme:dark;
   background:var(--bg);color:var(--ink);font:13.5px/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
 #chat.console .chatbar,#chat.console #f,#chat.console .quick{font-family:system-ui,sans-serif}
 #chat.console #log{gap:6px;max-width:1100px}
 #chat.console .msg{max-width:100%;border:0;border-radius:0;background:none;padding:2px 0 2px 22px;align-self:stretch}
-#chat.console .msg::before{position:absolute;left:4px;top:2px}
-#chat.console .msg.me{color:var(--ink);margin-top:12px;font-weight:600}
+#chat.console .msg::before{position:absolute;left:4px;top:2px;display:inline;margin:0;font:inherit;text-transform:none;letter-spacing:0;opacity:1}
+#chat.console .msg.me{color:var(--me);margin-top:12px;font-weight:600;background:rgba(232,176,75,.08);border-left:2px solid var(--me);box-shadow:none}
+#chat.console .msg.ai{background:var(--aibg);border-left:2px solid var(--ai)}
 #chat.console .msg.me::before{content:"›";color:var(--me);font-weight:700}
-#chat.console .msg.ai::before{content:"▪";color:var(--ok);font-size:11px;top:4px}
+#chat.console .msg.ai::before{content:"▪";color:var(--ai);font-size:11px;top:4px}
 #chat.console .msg.err{color:var(--bad)}#chat.console .msg.err::before{content:"✗"}
 #chat.console .msg.ai a{color:var(--me)}
 #chat.console .step{padding-left:22px;font-size:12.5px;align-self:stretch;position:relative}
