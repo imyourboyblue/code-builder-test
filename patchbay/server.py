@@ -2721,13 +2721,32 @@ def confirm_sandbox(st, p, emit):
     elif a == "undo":
         result = sb(sandbox.undo_copy, ch["number"])
     elif a in ("colima_start", "colima_resize"):
-        result = sb(sandbox.start_colima, emit, a == "colima_resize")
+        emit({"type": "answer", "text": "Starting Colima, this can take a minute or two. I'll carry on by myself "
+                                        "when Docker is ready."})
+        try:
+            result = sb(sandbox.start_colima, emit, a == "colima_resize", check_stop)
+        except ToolError as e:
+            # Don't loop back to the same card: say what's wrong and let the user decide.
+            emit({"type": "answer", "text": str(e)})
+            st.messages.append({"role": "user", "content": "[I confirmed the Colima card, but Docker didn't come "
+                                "up: %s\nDon't offer the Start Colima card again. Tell me in plain words what to "
+                                "do next.]" % e})
+            return
         if ch.get("sandbox"):
             result += " Next: sandbox_build step setup for sandbox %s." % ch["sandbox"]
     else:
         raise ToolError("Unknown sandbox change.")
     emit({"type": "answer", "text": result})
-    st.messages.append({"role": "user", "content": "[I confirmed the sandbox card. Result: %s]" % result})
+    carry_on = a in CARRY_ON_AFTER
+    st.messages.append({"role": "user", "content": "[I confirmed the sandbox card. Result: %s%s]" % (
+        result, " Carry on with what I asked before now, without asking me again." if carry_on else "")})
+    if carry_on:
+        # Keep working by itself: the user shouldn't have to type "continue" after pressing the button.
+        chat_turn(st, None, emit)
+
+
+# Cards after which the AI keeps going with the job by itself (the others finish something the user asked for).
+CARRY_ON_AFTER = ("colima_start", "colima_resize", "network_on", "reset")
 
 
 def sandbox_name(st, a):
@@ -2843,7 +2862,7 @@ def t_sandbox_build(st, emit, a):
             "It still can't see your real files, passwords or Keychain." % (name, step), "Turn network on",
             "After you press it, PatchBay runs the %s step." % step))
     if s["kind"] == "linux":
-        pf = sb(sandbox.preflight, s)
+        pf = sb(sandbox.preflight, s, emit, check_stop)
         if not pf["ok"]:
             return filled + sandbox_preflight(st, emit, s, pf)
     return filled + t_sandbox_run(st, emit, {"sandbox": name, "command": cmd, "_step": step})
@@ -2872,10 +2891,14 @@ def fill_from_preset(s):
 
 def sandbox_preflight(st, emit, s=None, pf=None):
     """Check everything a Linux sandbox needs on the Mac in one go, and show ONE card for what's missing."""
-    pf = pf or sb(sandbox.preflight, s)
+    pf = pf or sb(sandbox.preflight, s, emit, check_stop)
     lines = "\n".join("- %s **%s**: %s" % ("✓" if ok else "✗", n, w) for ok, n, w in pf["rows"])
     emit({"type": "note", "text": "**Sandbox check** (on %s):\n%s" % (APP.computer if APP else "the Mac", lines)})
     name = (s or {}).get("name") or ""
+    if pf.get("stuck"):
+        emit({"type": "note", "text": pf["stuck"]})
+        return ("Checklist:\n%s\n\n%s\n\nColima is already running, so do NOT offer to start it again. Tell the "
+                "user in plain words what's wrong and the Terminal steps above." % (lines, pf["stuck"]))
     if pf["brew"]:
         if not projects.find_brew():
             return ("Checklist:\n%s\n\nHomebrew isn't installed, so Colima and Docker can't go on a card. Tell the "

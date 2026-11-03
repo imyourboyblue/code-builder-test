@@ -26,7 +26,9 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -195,7 +197,26 @@ def _which(exe):
 def cli_env():
     env = dict(os.environ)
     env["PATH"] = ":".join([p for p in EXTRA_PATHS if p not in env.get("PATH", "")] + [env.get("PATH", "")])
+    if not env.get("DOCKER_HOST"):
+        # Point every docker command straight at Colima. Otherwise docker follows its "current context", which can
+        # still be Docker Desktop's or the default socket, so "docker info" fails even though Colima is running.
+        sock = colima_socket()
+        if sock:
+            env["DOCKER_HOST"] = "unix://%s" % sock
     return env
+
+
+def colima_home():
+    return Path(os.environ.get("COLIMA_HOME") or (Path.home() / ".colima"))
+
+
+def colima_socket():
+    """Colima's Docker socket (~/.colima/default/docker.sock), or None when Colima hasn't made one."""
+    p = colima_home() / "default" / "docker.sock"
+    try:
+        return p if stat.S_ISSOCK(p.stat().st_mode) else None
+    except OSError:
+        return None
 
 
 def _quiet(argv, timeout=60):
@@ -312,7 +333,7 @@ def fit_to_engine(kind, exe, sb):
     return note
 
 
-def engine_ready(start=True):
+def engine_ready(start=True, emit=None, stop=None):
     """The engine, started if it was stopped. Raises SandboxError with plain steps if it can't be used."""
     kind, exe = engine()
     if not kind:
@@ -328,14 +349,18 @@ def engine_ready(start=True):
                                "container system start" % out[-400:])
     else:
         code, out = _quiet([exe, "info"], 20)
-        if code != 0 and start and _which("colima"):
-            # Sized for builds: plain "colima start" makes a 2 CPU, 2 GB machine.
-            code, out = _quiet(colima_start_argv(_which("colima")), 900)
-            if code == 0:
-                services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
-                code, out = _quiet([exe, "info"], 20)
+        if code != 0 and _which("colima"):
+            if colima_info()["running"]:
+                # Colima is up but Docker inside it isn't answering yet (it's still booting): wait, don't restart.
+                ok, out = wait_for_docker(exe, emit, stop)
+                if not ok:
+                    raise SandboxError(colima_stuck_message(out))
+                code = 0
+            elif start:
+                start_colima(emit, stop=stop)     # sized for builds; waits until Docker answers
+                code = 0
         if code != 0:
-            raise SandboxError("Docker isn't running: %s\n%s" % (out[-400:], (
+            raise SandboxError("Docker isn't running.\n%s\n%s" % (docker_error(out), (
                 "Start Colima with sandbox_preflight (it shows a card)." if _which("colima") else
                 "Docker needs Colima to run: sandbox_preflight puts it on an install card (Homebrew name: colima).")))
     return kind, exe
@@ -352,18 +377,19 @@ def engine_status():
                                         "Start Colima with sandbox_preflight (a card), or OrbStack / Docker Desktop.")}
 
 
-def preflight(sb=None):
-    """Everything a Linux sandbox needs on the Mac, checked in one go BEFORE starting it. Only reads.
-    Returns {"rows": [(ok, name, words)], "brew": [Homebrew formulas to install], "colima": None|"start"|"resize",
-             "ok": bool}."""
-    rows, brew, colima = [], [], None
+def preflight(sb=None, emit=None, stop=None, wait=None):
+    """Everything a Linux sandbox needs on the Mac, checked in one go BEFORE starting it. Only reads (it may wait
+    for Colima to finish booting). Returns {"rows": [(ok, name, words)], "brew": [Homebrew formulas to install],
+    "colima": None|"start"|"resize", "stuck": "" or a plain message when Colima runs but Docker won't answer,
+    "ok": bool}."""
+    rows, brew, colima, stuck = [], [], None, ""
     kind, exe = engine()
     if kind == "apple":
         code, out = _quiet([exe, "system", "status"], 20)
         rows.append((True, "Apple container tool", exe))
         rows.append((code == 0, "Apple container tool running", "yes" if code == 0 else
                      "no: PatchBay starts it when the sandbox starts"))
-        return {"rows": rows, "brew": [], "colima": None, "ok": True}
+        return {"rows": rows, "brew": [], "colima": None, "stuck": "", "ok": True}
     docker, col = _which("docker"), _which("colima")
     rows.append((bool(docker), "Docker command-line tool", docker or "missing (Homebrew: docker)"))
     if not docker:
@@ -377,7 +403,21 @@ def preflight(sb=None):
     running = bool(docker) and _quiet([docker, "info"], 20)[0] == 0
     want_cpu = int((sb or {}).get("cpus") or DEFAULTS["cpus"])
     want_mem = int((sb or {}).get("memory_gb") or DEFAULTS["memory_gb"])
-    if docker and not running:
+    info = colima_info() if docker and col and not running else {"running": False}
+    if info["running"]:
+        # Colima already runs: never offer to start it again. Give Docker inside it time to answer.
+        ok, out = wait_for_docker(docker, emit, stop, COLIMA_WAIT if wait is None else wait)
+        running = ok
+        if not ok:
+            cpus, memory, _ = colima_size()
+            if colima_small(info, cpus, memory):
+                rows.append((False, "Docker running", "no, and Colima is too small (%s CPUs, %s GB): a card "
+                             "restarts it at the right size" % (info.get("cpus") or "?", _gb(info.get("memory_gb")))))
+                colima = "resize"
+            else:
+                rows.append((False, "Docker running", "Colima is running, but Docker inside it isn't answering"))
+                stuck = colima_stuck_message(out)
+    if docker and not running and not info["running"]:
         rows.append((False, "Docker running", "no" + (": a card starts Colima at the right size" if col else "")))
         colima = "start" if col else None
     elif running:
@@ -390,32 +430,171 @@ def preflight(sb=None):
                                              if small else "")))
         if small and col and uses_colima(docker):
             colima = "resize"
-    return {"rows": rows, "brew": brew, "colima": colima, "ok": not brew and not colima and (running or not docker)}
+    return {"rows": rows, "brew": brew, "colima": colima, "stuck": stuck,
+            "ok": not brew and not colima and not stuck and (running or not docker)}
 
 
-def start_colima(emit=None, resize=False):
-    """Start (or restart bigger) Colima, sized for builds. Only after the user confirmed the card."""
+COLIMA_WAIT = 180       # how long to wait for Docker to answer after Colima starts (seconds)
+COLIMA_START_LIMIT = 600   # give up on "colima start" after this long
+COLIMA_SLOW = 150       # after this long, say it's slower than usual
+POLL = 3
+
+
+def _gb(x):
+    return "%.0f" % x if isinstance(x, (int, float)) else "?"
+
+
+def colima_info():
+    """What Colima itself says, without needing Docker: {"running", "cpus", "memory_gb"}."""
+    col = _which("colima")
+    info = {"running": False, "cpus": None, "memory_gb": None}
+    if not col:
+        return info
+    code, out = _quiet([col, "list", "--json"], 20)
+    for line in out.splitlines() if code == 0 else []:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(d, dict) or d.get("name", "default") != "default":
+            continue
+        mem = d.get("memory")
+        if isinstance(mem, (int, float)) and mem > 4096:     # bytes (older Colima gives GB)
+            mem = mem / 1024 ** 3
+        return {"running": str(d.get("status", "")).lower() == "running",
+                "cpus": d.get("cpus") if isinstance(d.get("cpus"), int) else None,
+                "memory_gb": mem if isinstance(mem, (int, float)) else None}
+    info["running"] = _quiet([col, "status"], 20)[0] == 0
+    return info
+
+
+def colima_small(info, cpus, memory):
+    """Whether a running Colima is smaller than PatchBay's size for this Mac (unknown size counts as fine)."""
+    return bool((info.get("cpus") and info["cpus"] < cpus) or
+                (info.get("memory_gb") and info["memory_gb"] + 0.5 < memory))
+
+
+def colima_status_text():
+    col = _which("colima")
+    if not col:
+        return "(Colima isn't installed)"
+    code, out = _quiet([col, "status"], 20)
+    return out.strip()[-800:] or "(colima status said nothing, exit code %d)" % code
+
+
+def docker_error(out):
+    """The part of docker's output that says what went wrong (docker info prints a long client section first)."""
+    lines = [x.strip() for x in (out or "").splitlines() if x.strip()]
+    bad = [x for x in lines if re.search(r"error|cannot|can't|couldn't|denied|refused|no such|timed out|"
+                                         r"not running|failed|daemon", x, re.I)]
+    return "\n".join(bad[-6:] or lines[-6:])[-800:] or "(docker said nothing)"
+
+
+def colima_stuck_message(out=""):
+    return ("Colima is running, but Docker inside it didn't answer within %d seconds.\n"
+            "Docker said: %s\n"
+            "Colima says (colima status):\n%s\n"
+            "What to do, in Terminal: colima stop, then %s. If it hangs again, Colima's log is %s."
+            % (COLIMA_WAIT, docker_error(out), colima_status_text(), " ".join(colima_start_argv("colima")),
+               colima_home() / "_lima" / "colima" / "ha.stderr.log"))
+
+
+def wait_for_docker(exe, emit=None, stop=None, timeout=None):
+    """Ask Docker every few seconds until it answers (Colima's Linux machine can take a minute or two to boot).
+    Returns (True, "") or (False, docker's last output)."""
+    timeout = COLIMA_WAIT if timeout is None else timeout
+    started, out = time.time(), ""
+    while True:
+        code, out = _quiet([exe, "info"], 20)
+        if code == 0:
+            return True, ""
+        waited = time.time() - started
+        if waited >= timeout:
+            return False, out
+        if emit:
+            emit({"type": "status", "text": "Waiting for Docker inside Colima to answer... %d s%s"
+                                            % (waited, " (slower than usual, still waiting)"
+                                               if waited > COLIMA_SLOW else "")})
+        _check_stop(stop)
+        time.sleep(POLL)
+
+
+def _check_stop(stop):
+    """stop can be the chat's check function (raises when Stop was pressed) or a threading.Event."""
+    if stop is None:
+        return
+    if isinstance(stop, threading.Event):
+        if stop.is_set():
+            raise SandboxError("Stopped.")
+    else:
+        stop()
+
+
+def _run_progress(argv, timeout, emit, text, stop=None):
+    """Run a slow command, showing how long it has been going. Returns (exit code, output)."""
+    with tempfile.TemporaryFile("w+", errors="replace") as log:
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                    env=cli_env(), text=True)
+        except OSError as e:
+            return 1, str(e)
+        started = time.time()
+        while proc.poll() is None:
+            waited = time.time() - started
+            if waited > timeout:
+                proc.kill()
+                proc.wait()
+                log.seek(0)
+                return 124, log.read()[-2000:] + "\n(gave up after %d seconds)" % timeout
+            if emit:
+                emit({"type": "status", "text": "%s %d s%s" % (text, waited, " (slower than usual, still going)"
+                                                               if waited > COLIMA_SLOW else "")})
+            if stop:
+                try:
+                    _check_stop(stop)
+                except BaseException:
+                    proc.kill()
+                    raise
+            time.sleep(POLL)
+        log.seek(0)
+        return proc.returncode, log.read()[-4000:]
+
+
+def start_colima(emit=None, resize=False, stop=None):
+    """Start (or restart bigger) Colima, sized for builds, then wait until Docker inside it answers. Only after the
+    user confirmed the card (or when a sandbox needs it). If Colima already runs, it isn't started again."""
     col = _which("colima")
     if not col:
         raise SandboxError("Colima isn't installed. Use sandbox_preflight: it shows the install card.")
-    if resize:
-        if emit:
-            emit({"type": "status", "text": "Stopping Colima..."})
-        code, out = _quiet([col, "stop"], 300)
-        if code != 0:
-            raise SandboxError("Colima didn't stop: %s" % out[-400:])
     argv = colima_start_argv(col)
-    if emit:
-        emit({"type": "status", "text": "Starting Colima (%s CPUs, %s GB)... this takes a minute or two"
-                                        % (argv[3], argv[5])})
-    code, out = _quiet(argv, 900)
-    if code != 0:
-        raise SandboxError("Colima didn't start: %s" % out[-600:])
-    if not resize:   # restarting a bigger one keeps it whoever's it was (yours if you had it running)
+    info = colima_info()
+    started_it = False
+    if info["running"] and not resize:
+        if emit:
+            emit({"type": "status", "text": "Colima is already running. Checking Docker answers..."})
+    else:
+        if resize and info["running"]:
+            code, out = _run_progress([col, "stop"], 300, emit, "Stopping Colima...", stop)
+            if code != 0:
+                raise SandboxError("Colima didn't stop.\n%s\nColima says (colima status):\n%s"
+                                   % (out.strip()[-600:], colima_status_text()))
+        code, out = _run_progress(argv, COLIMA_START_LIMIT, emit, "Starting Colima (%s CPUs, %s GB), this can take "
+                                  "a minute or two..." % (argv[3], argv[5]), stop)
+        if code != 0:
+            raise SandboxError("Colima didn't start.\nIt said: %s\nColima says (colima status):\n%s\n"
+                               "What to do, in Terminal: colima stop, then %s"
+                               % (out.strip()[-600:], colima_status_text(), " ".join(colima_start_argv("colima"))))
+        started_it = not resize   # restarting a bigger one keeps it whoever's it was (yours if you had it running)
+    if started_it:
         services.record("colima", "default", "Colima (the sandboxes' Linux machine)")
     docker = _which("docker")
+    if docker:
+        ok, out = wait_for_docker(docker, emit, stop)
+        if not ok:
+            raise SandboxError(colima_stuck_message(out))
     ncpu, mem = docker_capacity(docker) if docker else (None, None)
-    return "Colima is running%s." % (" with %d CPUs and %.0f GB" % (ncpu, mem) if ncpu else "")
+    return "Colima is running%s and Docker is answering." % (" with %d CPUs and %.0f GB" % (ncpu, mem)
+                                                               if ncpu else "")
 
 
 def _exists(kind, exe, ref, image=False):
@@ -465,9 +644,9 @@ def create_args(kind, exe, sb):
     return argv + ["-e", "HOME=/root", "-e", "PATCHBAY_SANDBOX=1", image, "sleep", "infinity"]
 
 
-def ensure_container(sb, emit=None):
+def ensure_container(sb, emit=None, stop=None):
     """Make sure the sandbox's container exists and is running, with the sandbox's current network setting."""
-    kind, exe = engine_ready()
+    kind, exe = engine_ready(emit=emit, stop=stop)
     name = container_name(sb["name"])
     if sb.get("container_network") is not None and sb.get("container_network") != sb["network"]:
         _save_and_remove(kind, exe, sb)        # network changed: keep what was installed, then recreate
@@ -825,7 +1004,7 @@ def run(name, command, emit=None, stop=None, base_path=None):
         path = base_path or "/opt/devkitpro/tools/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         code, out = _stream(mac_argv(sb, command), w, mac_env(sb, path), emit, timeout, stop)
     else:
-        kind, exe, cname = ensure_container(sb, emit)
+        kind, exe, cname = ensure_container(sb, emit, stop)
         argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", command]
         code, out = _stream(argv, w, cli_env(), emit, timeout, stop,
                             on_kill=lambda: _quiet([exe, "stop", cname], 60))
