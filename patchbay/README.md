@@ -26,6 +26,7 @@ for help when it's stuck, using your own API key.
 - [Backups](#backups)
 - [Apps and homebrew updates](#apps-and-homebrew-updates)
 - [Building apps from source](#building-apps-from-source)
+- [Sandboxes for building and testing](#sandboxes-for-building-and-testing)
 - [AI models and Claude](#ai-models-and-claude)
 - [The private builder](#the-private-builder)
 - [Reviewing code projects](#reviewing-code-projects)
@@ -232,6 +233,27 @@ new, the AI researches it and saves what it learned, so next time it already kno
   what must not be touched. The AI reads it before every question about that project. PatchBay has its own
   `PATCHBAY.md` too.
 - Searching code is fast: the AI can search with patterns, only some file types, and lines around each match.
+
+## Sandboxes for building and testing
+
+A sandbox is a **copy** of a project where PatchBay builds and runs tests by itself, **with no cards**, because it
+can't touch your real files, passwords or Keychain. Open **🩺 Setup → Sandbox**, or ask in the chat ("make a sandbox
+for EglantinePS5 and run its tests").
+
+- **Two kinds.** *Linux*: a small Linux computer inside your Mac (for projects that build on Linux/Ubuntu). It only
+  sees the copy, with CPU and memory limits. *Mac*: runs on the Mac itself, locked down by macOS, for devkitPro or
+  Xcode builds. It can only write inside the sandbox and can't read your home folder or the Keychain.
+- **The internet is off** until you switch it on (for downloads like `apt-get install`). That needs a card or an OK.
+  Turn it off again when done. Anything you installed is kept.
+- **Getting results out.** **Copy results back…** lists the files a build made or changed. Each copy into the real
+  project backs up the old file first and can be undone. In the chat, this is a card.
+- **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it.
+  Neither touches the real project.
+- Password and key files (`config.json`, `.env`, `id_rsa`, `.ssh` …) are never copied in. Links that point outside
+  the project are left out too.
+- **One-time setup for Linux sandboxes:** install Apple's free `container` tool (the `.pkg` from
+  github.com/apple/container/releases), then run `container system start` in Terminal once. It needs macOS 26 to
+  keep the internet off. Docker works too (Colima: `brew install colima docker`, then `colima start`).
 
 ## AI models and Claude
 
@@ -493,6 +515,8 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
   never guess passwords or try to break in.
 - **Your Mac and calendar**: only folders you added, and Calendar only when its switch is on. Every change shows
   a card first and can be undone. None of it goes to Claude or into web searches.
+- **Sandboxes** only see a copy of the project, with the internet off unless you switch it on. Results go back
+  only when you copy them, backed up and with Undo.
 - **The private builder** sends Claude only a generic spec, after the privacy check and your **Send to Claude**.
 - **Run by hand.** Nothing runs on a schedule.
 - **🕘 Activity** lists everything PatchBay did, with **Undo** where possible.
@@ -503,6 +527,8 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
   and reports, the Needs attention files, change history, chats, and the device's picture.
 - **Backups**: wherever you chose on the Backups tab (default `~/Patchbay-backups/<device name>/`).
 - **Projects** (source code): `~/Patchbay-projects/`.
+- **Sandboxes**: `~/PatchBay-data/sandboxes/<name>/` (the copy is in `work/`). Files copied back are backed up in
+  `sandboxes/_backups/`.
 - **Device settings**: `config.json` for your first device, and one file per device in the `devices` folder.
 - **PatchBay's own data** (themes, saved prompts, caches): `data-cache/` inside the PatchBay folder.
 - **Simple names maps**: `data-cache/name-maps/` (put-back ones move to `name-maps/restored/`).
