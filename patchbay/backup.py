@@ -42,11 +42,43 @@ def backup_root(cfg):
     return folder / cfg["device_name"]
 
 
+def missing_folder_message(p):
+    """Say plainly why a backup folder isn't there: an unplugged drive, or just a missing folder."""
+    parts = Path(p).parts
+    if len(parts) >= 3 and parts[1] == "Volumes":
+        drive = Path("/Volumes") / parts[2]
+        if not drive.is_dir():
+            return ("The backup drive \"%s\" isn't plugged in, so I can't save backups to %s. "
+                    "Plug it in, or pick another backup folder on the Backups tab." % (parts[2], p))
+    if p.exists():
+        return "%s is a file, not a folder, so backups can't go there. Pick another backup folder." % p
+    return "The backup folder %s doesn't exist. Make it in Finder, or pick another one on the Backups tab." % p
+
+
+def can_make_itself(p):
+    """PatchBay may make the backup folder itself when it lives in the user's home folder (not on a drive)."""
+    home = Path(os.path.expanduser("~")).resolve()
+    p = Path(p)
+    return p == Path(os.path.expanduser(DEFAULT_FOLDER)).resolve() or home in p.parents
+
+
+def ready_folder(cfg):
+    """Get the backup folder ready: PatchBay's own folder in the home folder is made if it's missing;
+    a folder on another drive must already be there."""
+    p = Path(os.path.expanduser(cfg.get("backup_folder") or DEFAULT_FOLDER)).resolve()
+    if not p.exists() and can_make_itself(p):
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise BackupError("I couldn't make the backup folder %s (%s)." % (p, e.strerror or e))
+    return check_folder(p)
+
+
 def check_folder(path):
     """The folder must exist and be writable (a drive that isn't plugged in fails here)."""
     p = Path(os.path.expanduser(path or "")).resolve()
     if not p.is_dir():
-        raise BackupError("%s isn't a folder on the Mac (if it's a drive, is it plugged in?)." % p)
+        raise BackupError(missing_folder_message(p))
     test = p / ".patchbay-write-test"
     try:
         test.write_text("ok")
@@ -170,7 +202,7 @@ class Job:
 
 def run(cfg, job, items=None, label=""):
     root = backup_root(cfg)
-    check_folder(root.parent)
+    ready_folder(cfg)
     root.mkdir(parents=True, exist_ok=True)
     folders = [i["path"] for i in items] if items else (cfg.get("backup_folders") or ["/"])
     skip = [] if items else (cfg.get("backup_exclude") or [])

@@ -1389,11 +1389,8 @@ def start_backup(cfg, items=None, label=""):
         if job and job.status()["running"]:
             raise ToolError("A backup of %s is already running. Wait for it, or stop it on the Backups tab."
                             % cfg["device_name"])
-        folder = backup.backup_root(cfg).parent
-        if not cfg.get("backup_folder"):
-            folder.mkdir(exist_ok=True)   # the default folder is made for you; a chosen one must exist
         try:
-            backup.check_folder(folder)
+            backup.ready_folder(cfg)   # PatchBay's own folder is made for you; one on a drive must be there
         except backup.BackupError as e:
             raise ToolError(str(e))
         job = APP.backups[cfg["device_name"]] = backup.Job(cfg, clean_items(items), label)
