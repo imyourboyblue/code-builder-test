@@ -1270,9 +1270,20 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
   h+=j.sandboxes.length?j.sandboxes.map(s=>{
     const lim=s.kind==='linux'?s.cpus+' CPUs · '+s.memory_gb+' GB memory · ':'';
     return '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)" data-sb="'+esc(s.name)+'">'+
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1">'+esc(s.name)+'</b><span class="md-chip">'+(s.kind==='linux'?'Linux · '+esc(s.image_in_use||s.image):'Mac, locked down')+'</span>'+
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1">'+esc(s.name)+'</b><span class="md-chip">'+(s.kind==='linux'?'Linux · '+esc(s.image_in_use||s.image)+(s.arch==='amd64'?' · x86 (Rosetta)':' · ARM'):'Mac, locked down')+'</span>'+
       '<span class="md-chip'+(s.network?' warn':'')+'">internet '+(s.network?'ON':'off')+'</span></div>'+
       '<div class="md-why">Copy of <code>'+esc(s.source)+'</code> · '+lim+s.timeout_min+' min per command · '+s.disk_gb+' GB disk'+(s.skipped&&s.skipped.length?' · left out as secrets: '+esc(s.skipped.slice(0,6).join(', ')):'')+'</div>'+
+      (s.setup_command||s.build_command?'<details style="margin-top:6px"><summary style="cursor:pointer">How it builds</summary><div class="md-why">'+
+        (s.setup_command?'<b>Set up</b> (once, needs internet): <code>'+esc(s.setup_command)+'</code><br>':'')+
+        (s.build_command?'<b>Build:</b> <code>'+esc(s.build_command)+'</code><br>':'')+
+        (s.output?'<b>Result:</b> <code>'+esc(s.output)+'</code><br>':'')+
+        (s.blocked||[]).map(b=>'<b>Never run inside:</b> '+esc(b.why)+'<br>').join('')+
+        (s.upload_hint?'<b>Then, on the Mac:</b> <code>'+esc(s.upload_hint)+'</code><br>':'')+
+        (s.recipe_notes||[]).map(n=>esc(n)+'<br>').join('')+'</div></details>':'')+
+      (here&&!s.running&&(s.setup_command||s.build_command)?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'+
+        (s.setup_command?'<button class="sb-setup">Set up</button>':'')+(s.build_command?'<button class="sb-build primary">Build</button>':'')+
+        (s.output?'<button class="sb-result">Copy result back…</button>':'')+
+        (s.kind==='linux'?'<button class="sb-arch">'+(s.arch==='amd64'?'Use ARM (faster)…':'Use x86 (Rosetta)…')+'</button>':'')+'</div>':'')+
       (here?'<div style="display:flex;gap:6px;margin-top:6px"><input class="sb-cmd" placeholder="'+(s.kind==='linux'?'e.g. apt-get update && apt-get install -y build-essential, or make':'e.g. make')+'" style="flex:1"'+(s.running?' disabled':'')+'>'+
         (s.running?'<button class="sb-stop">Stop</button>':'<button class="sb-run primary">Run</button>')+'</div>':'')+
       ((s.running||s.live)?'<pre class="sb-out" style="white-space:pre-wrap;font-size:11.5px;max-height:260px;overflow:auto;margin-top:6px">'+esc((s.live_command?'$ '+s.live_command+'\n':'')+(s.live||'')+(s.running?'\n…running':s.live_code!==null&&s.live_code!==undefined?'\n(exit code '+s.live_code+')':''))+'</pre>':
@@ -1284,7 +1295,8 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
     h+='<details style="margin-top:14px"'+(j.sandboxes.length?'':' open')+'><summary style="cursor:pointer"><b>Make a sandbox</b></summary>'+
       (src?'<label>Copy this folder<select id="sb-src">'+src+'</select></label>'+
         '<label>Kind<select id="sb-kind"><option value="linux">Linux container (for projects that build on Linux/Ubuntu)</option>'+(j.mac_sandbox?'<option value="mac">On this Mac, locked down (for devkitPro / Xcode builds)</option>':'')+'</select></label>'+
-        '<label>Linux image <input id="sb-img" placeholder="ubuntu:24.04"></label><label>Name <input id="sb-name" placeholder="same as the folder"></label>'+
+        '<label class="sw-row" style="margin-top:6px"><span>Set it up from the project\'s build files<span class="md-why" style="display:block">Reads the docs, Makefile and CI to pick the Linux, packages, build command and memory.</span></span><span class="switch"><input type="checkbox" id="sb-recipe" checked><span></span></span></label>'+
+        '<label>Linux image <input id="sb-img" placeholder="what the project uses"></label><label>Name <input id="sb-name" placeholder="same as the folder"></label>'+
         '<div style="margin-top:6px"><button id="sb-make" class="primary">Make sandbox</button></div>'
         :'<div class="md-why">First save a project for a device, or approve a folder in the Mac tab.</div>')+'</details>';}
   if(j.copies.length)h+='<h4 style="margin:16px 0 4px">Copied back</h4><div class="md-list">'+j.copies.map(c=>'<div class="md-row dl" style="padding:5px 10px"><div style="flex:1"><code>'+esc(c.file)+'</code> from '+esc(c.sandbox)+
@@ -1297,6 +1309,11 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
     const run=q('.sb-run'),inp=q('.sb-cmd');
     if(run){const go=()=>{if(inp.value.trim())act({action:'run',name:n,command:inp.value},null,run)};run.onclick=go;inp.onkeydown=ev=>{if(ev.key==='Enter')go()}}
     if(q('.sb-stop'))q('.sb-stop').onclick=()=>act({action:'stop',name:n});
+    if(q('.sb-setup'))q('.sb-setup').onclick=()=>act({action:'setup',name:n},null,q('.sb-setup'));
+    if(q('.sb-build'))q('.sb-build').onclick=()=>act({action:'build',name:n},null,q('.sb-build'));
+    if(q('.sb-result'))q('.sb-result').onclick=()=>{if(confirm('Copy '+s.output+' from the sandbox into your real project?\n\nWhat is there now is backed up first, and you can undo it below.'))act({action:'copy_out',name:n,path:s.output},null,q('.sb-result'))};
+    if(q('.sb-arch'))q('.sb-arch').onclick=()=>{const to=s.arch==='amd64'?'native':'amd64';
+      if(confirm(to==='amd64'?'Run sandbox '+n+' as x86 Linux through Rosetta?\n\nOnly needed if a tool is x86-only (an "Exec format error"). Builds are slower, and you need to run Set up again.':'Run sandbox '+n+' as ARM Linux again?\n\nFaster. You need to run Set up again.'))act({action:'set',name:n,arch:to},null,q('.sb-arch'))};
     if(q('.sb-net'))q('.sb-net').onclick=()=>{if(!s.network&&!confirm('Let sandbox '+n+' reach the internet?\n\nPrograms in it can then download things (like apt-get install). It still can\'t see your real files, passwords or Keychain. Turn it off again when done.'))return;
       act({action:'set',name:n,network:!s.network},s.network?'Internet is off for '+esc(n)+'.':'Internet is ON for '+esc(n)+'.',q('.sb-net'))};
     if(q('.sb-reset'))q('.sb-reset').onclick=()=>{if(confirm('Reset sandbox '+n+'?\n\nEverything built or installed in it is thrown away and the project is copied in fresh. Your real project isn\'t touched.'))act({action:'reset',name:n},null,q('.sb-reset'))};
@@ -1308,7 +1325,7 @@ async function drawSandbox(note){const box=$('sc-sb');if(!box)return;let j;
         out.querySelectorAll('.sb-copy').forEach(b=>b.onclick=()=>{if(confirm('Copy '+b.dataset.p+' from the sandbox into your real project?\n\nThe file there now is backed up first, and you can undo it below.'))act({action:'copy_out',name:n,path:b.dataset.p},null,b)})}catch(x){out.textContent='';err(x)}};
   });
   box.querySelectorAll('.sb-undo').forEach(b=>b.onclick=()=>act({action:'undo',id:+b.dataset.id},null,b));
-  const mk=$('sb-make');if(mk)mk.onclick=()=>{m('Copying the folder…');act({action:'create',folder:$('sb-src').value,kind:$('sb-kind').value,image:$('sb-img').value.trim(),name:$('sb-name').value.trim()},null,mk)};
+  const mk=$('sb-make');if(mk)mk.onclick=()=>{m('Copying the folder…');act({action:'create',folder:$('sb-src').value,kind:$('sb-kind').value,image:$('sb-img').value.trim(),name:$('sb-name').value.trim(),recipe:$('sb-recipe').checked},null,mk)};
   clearTimeout(SB_POLL);if(j.sandboxes.some(s=>s.running))SB_POLL=setTimeout(()=>{if($('sc-sb'))drawSandbox()},1500)}
 
 function sandboxCard(ev,closed){ // a sandbox step that needs the user: internet on, copy back, reset, delete, undo

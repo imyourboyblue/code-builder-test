@@ -247,6 +247,17 @@ for EglantinePS5 and run its tests").
   Turn it off again when done. Anything you installed is kept.
 - **Getting results out.** **Copy results back…** lists the files a build made or changed. Each copy into the real
   project backs up the old file first and can be undone. In the chat, this is a card.
+- **It sets itself up from the project.** When a Linux sandbox is made, PatchBay reads the project's own build files
+  (docs, Makefile, CI workflow, Dockerfile) and picks the Linux version, the packages, the setup and build commands,
+  the memory, and what the build makes. **How it builds** on the sandbox shows all of it; **Set up** (once, needs the
+  internet) and **Build** run it. You or the chat can change any part.
+- **Never sends to a device from inside.** Commands like `make install` that upload to a console are blocked in the
+  sandbox. Copy the result out (**Copy result back…** copies a whole app folder, with backup and Undo), then the
+  chat sends it from the Mac on a card.
+- **ARM or x86.** Sandboxes run ARM Linux (fast on Apple silicon). If a tool only exists for Intel/AMD (an
+  "Exec format error"), **Use x86 (Rosetta)** runs it as x86 Linux instead: it works, but builds are slower.
+- **Memory.** Big builds (Mesa, LLVM, emulators) get 16 GB, up to 20 GB. PatchBay warns when that won't fit
+  alongside macOS and a loaded AI model; **Free up memory** unloads the model.
 - **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it.
   Neither touches the real project.
 - Password and key files (`config.json`, `.env`, `id_rsa`, `.ssh` …) are never copied in. Links that point outside
