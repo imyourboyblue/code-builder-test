@@ -509,6 +509,12 @@ your router. PatchBay refuses internet addresses for the AI, so your files never
 
 - **Writing to a device is off** until you turn it on. Every change needs the device's name typed, is backed up
   first, and is uploaded under a temporary name and only swapped in once it's complete.
+- **Every card says where it runs and what it changes**, in two lines at the top: **Runs on** (this Mac, a
+  sandbox, or the device) and **Changes on**. A red **⚠ This changes a real device** box means a device will change,
+  even when the command itself runs on the Mac (for example `make install PS5_HOST=192.168.50.203` builds on the Mac
+  and then uploads to the PS5). Those commands never run by themselves, and you type the device's name to run them.
+  A green **✓ Stays on this Mac** box means nothing outside the Mac changes. A dashed orange box means it might reach
+  a device (like a bare `make install`), so check first. Sandboxes refuse commands that send to a device.
 - **Risky commands** (like deleting folders, formatting, force-stopping programs, `sudo`) are never run by
   themselves. They're marked **⚠ Risky** in plain words and need an **I understand** tick.
 - **Passwords and the Claude key** are kept in the Mac's Keychain (Keychain Access, search "PatchBay"). The first

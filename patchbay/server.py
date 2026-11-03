@@ -74,6 +74,7 @@ import githubpush
 import research
 import macaccess
 import namestrip
+import where
 import sandbox
 import stopper
 import codereview
@@ -688,9 +689,21 @@ class _SafeCommand:
 SAFE_COMMAND = _SafeCommand()
 
 
+def where_level(kind, extra):
+    """"device", "maybe" or "mac" for a Mac step (see where.py)."""
+    extra = extra or {}
+    if extra.get("where_level"):
+        return extra["where_level"]
+    if kind in ("command", "build") and extra.get("command"):
+        return where.describe(extra["command"], known_devices())["level"]
+    return "mac"
+
+
 def runs_by_itself(cfg, kind, extra):
     if not cfg.get("auto_mac_steps", True):
         return False
+    if where_level(kind, extra) != "mac":
+        return False     # it sends to a device (or might): always show a card
     if kind in AUTO_KINDS:
         return True
     cmd = (extra or {}).get("command") or ""
@@ -703,12 +716,78 @@ def in_plan(plan, kind, extra):
     if kind in ("ask_claude", "spec_claude", "spec_files"):
         return False
     cmd = (extra or {}).get("command") or ""
+    if where_level(kind, extra) != "mac":
+        # A step that sends to a device is only covered if the plan named it and the user typed the device name.
+        listed = cmd.strip() in plan.get("commands", []) or (kind == "build" and plan.get("reaches"))
+        if not (plan.get("typed") and listed):
+            return False
     if kind == "command" and risk.risky(cmd):
         return bool(plan.get("understood")) and cmd.strip() in plan.get("commands", [])
     return True
 
 
+def known_devices():
+    """[(name, address)] of every saved device, so a command's IP can be matched to a name."""
+    return [(c["device_name"], c.get("host") or "") for _, c in APP.registry.all()] if APP else []
+
+
+def computer_name():
+    return APP.computer if APP else "this Mac"
+
+
+def run_line(diff):
+    """The command out of an "In folder: ...\nRun: ..." card text."""
+    m = re.search(r"^Run: (.*)$", diff or "", re.M)
+    return m.group(1) if m else ""
+
+
+def where_for(kind, cfg, extra, diff):
+    """The "Runs on" / "Changes on" lines for a Mac-side card (see where.py)."""
+    comp = computer_name()
+    if kind in ("command", "build"):
+        return where.describe((extra or {}).get("command") or run_line(diff), known_devices(), comp)
+    if kind == "plan":
+        cmds = " ; ".join((extra or {}).get("commands") or [])
+        w = where.describe(cmds, known_devices(), comp, sends_hint=bool(cmds))
+        if (extra or {}).get("writes"):
+            w["level"] = "device"
+            w["changes_on"] = ", ".join(dict.fromkeys([where.device_label(cfg)] + [t["text"] for t in w["targets"]]))
+        return w
+    if kind in ("ask_claude", "spec_claude"):
+        return {"level": "cloud", "runs_on": "Claude, Anthropic's cloud AI (only the text below is sent)",
+                "changes_on": where.MAC_ONLY}
+    if kind == "get_source":
+        return where.mac_only(comp, "A new folder on this Mac (downloaded from the internet). Nothing on your devices")
+    if kind == "install_packages":
+        return where.mac_only(comp, "Build tools on this Mac. Nothing on your devices")
+    if kind == "settings":
+        return where.mac_only(comp, "PatchBay's settings on this Mac. Nothing on your devices yet")
+    return where.mac_only(comp, "Files on this Mac. Nothing on your devices")
+
+
+def where_words(wh):
+    """The same two lines, for the AI to repeat in its own words."""
+    if wh.get("level") == "device":
+        return ("Say plainly where it runs and what it changes: it runs on %s and CHANGES %s. Never say it doesn't "
+                "touch that device." % (wh["runs_on"], wh["changes_on"]))
+    if wh.get("level") == "maybe":
+        return ("It runs on %s, but it might also copy to a device (the command doesn't say where). Tell the user that "
+                "plainly." % wh["runs_on"])
+    return "It runs on %s and changes: %s." % (wh["runs_on"], wh["changes_on"])
+
+
 def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, on_mac=False, extra_fields=None):
+    if on_mac:
+        wh = where_for(kind, cfg, extra_fields, diff)
+        extra_fields = dict(extra_fields or {}, where_level=wh["level"])
+        if kind in ("command", "build", "plan") and wh["level"] == "device":
+            # It sends to a device, so it's confirmed like any other device change: by typing the device's name.
+            extra_fields["needs_typing"] = True
+            extra_fields["type_word"] = wh.get("type_word") or cfg["device_name"]
+            if kind == "plan":
+                extra_fields["reaches"] = wh["changes_on"]
+    else:
+        wh = where.for_device_write(cfg, computer_name())
     if on_mac:
         before = getattr(st, "failed_steps", {}).get(step_key(dict({"kind": kind, "remote": remote}, **(extra_fields or {}))))
         if before:
@@ -743,9 +822,12 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         st.pending[pid] = dict({"kind": kind, "remote": remote, "source": str(source), "note": note}, **(extra_fields or {}))
         emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "on_mac": True, "kind": kind,
               "typing": bool((extra_fields or {}).get("needs_typing")), "risk": (extra_fields or {}).get("risk") or [],
+              "type_word": (extra_fields or {}).get("type_word") or "", "where": wh,
               "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
-        return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must press Confirm. "
-                "Tell the user what it does and ask them to confirm it on the card.")
+        return ("A confirmation card is now showing on the page. Nothing has happened yet. The user must %s. "
+                "Tell the user what it does and ask them to confirm it on the card. %s" % (
+                    "type %s and press the button" % extra_fields["type_word"] if extra_fields.get("type_word")
+                    else "press Confirm", where_words(wh)))
     if st.plan and remote in st.plan.get("writes", []) and cfg.get("allow_writes") and kind != "helper":
         # Covered by the plan the user approved (they typed the device name for it). Still backed up first.
         emit({"type": "note", "text": "Approved in the plan: %s" % summary})
@@ -759,11 +841,11 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         extra = ""
     pid = uuid.uuid4().hex[:8]
     st.pending[pid] = {"kind": kind, "remote": remote, "source": str(source), "note": note}
-    emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff,
+    emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "where": wh,
           "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
     return ("A confirmation card is now showing on the page. Nothing has been written yet. The user must type %s "
-            "and press Confirm.%s Tell the user what the change does and ask them to confirm it on the card."
-            % (cfg["device_name"], extra))
+            "and press Confirm.%s Tell the user what the change does and ask them to confirm it on the card. %s"
+            % (cfg["device_name"], extra, where_words(wh)))
 
 
 @tool("propose_restore",
@@ -1851,7 +1933,7 @@ def t_device_command(st, emit, a):
                        "note": a.get("reason") or "", "needs_typing": True, "risk": danger}
     emit({"type": "confirm", "id": pid, "title": "Run a command on %s: %s" % (cfg["device_name"], a.get("reason") or cmd[:60]),
           "remote": cfg["device_name"], "diff": cmd, "on_mac": True, "kind": "device_command", "typing": True,
-          "risk": danger,
+          "risk": danger, "where": where.on_device(cfg),
           "device": cfg["device_name"], "writes_on": True, "computer": APP.computer if APP else "the Mac"})
     return ("A confirmation card is now showing. Nothing has run yet. The user must type the device name and press the "
             "button. Tell them what the command does.%s" % (
@@ -2251,6 +2333,7 @@ def h_self_change(st, emit, a):
     emit({"type": "confirm", "id": pid, "kind": "self_edit", "on_mac": True, "self": True, "remote": pl["path"],
           "title": "Change PatchBay itself: %s" % (a.get("reason") or pl["path"]),
           "diff": clip(pl["diff"], 60000), "safety": pl["safety"], "word": word, "page_only": page_only,
+          "where": where.mac_only(computer_name(), "PatchBay itself, on this Mac. Nothing on your devices"),
           "stats": "%s: %d line%s added, %d removed" % (pl["path"], pl["added"], "" if pl["added"] == 1 else "s",
                                                          pl["removed"]),
           "computer": APP.computer if APP else "the Mac", "device": "PatchBay", "writes_on": True})
@@ -2270,6 +2353,7 @@ def h_self_restart(st, emit, a):
     changed = selfedit.pending_restart(STARTED_AT)
     emit({"type": "confirm", "id": pid, "kind": "self_restart", "on_mac": True, "self": True, "remote": "PatchBay",
           "title": "Restart PatchBay to use the changes",
+          "where": where.mac_only(computer_name(), "PatchBay restarts on this Mac. Nothing on your devices"),
           "diff": "\n".join("#%s %s: %s" % (h["id"], ", ".join(f["path"] for f in h["files"]), h["note"])
                             for h in changed) or "(no saved changes since it started)",
           "computer": APP.computer if APP else "the Mac", "device": "PatchBay", "writes_on": True})
@@ -2424,6 +2508,9 @@ def access_card(st, emit, change, title, diff, what):
                        "source": "", "note": what, "change": change}
     emit({"type": "confirm", "id": pid, "kind": "mac_access", "title": title, "diff": clip(diff, 60000),
           "calendar": change["action"].startswith("event_"), "computer": APP.computer if APP else "the Mac",
+          "where": where.mac_only(computer_name(), "Apple Calendar on this Mac. Nothing on your devices"
+                                  if change["action"].startswith("event_") else
+                                  "A file on this Mac. Nothing on your devices"),
           "remote": st.pending[pid]["remote"], "device": "this Mac"})
     return ("A card showing exactly this change is on the page. Nothing has changed yet; the user presses Confirm. "
             "Tell them in one plain sentence what it does.")
@@ -2583,11 +2670,26 @@ def sandbox_source_ok(path):
                     "into a sandbox. %s is neither." % p)
 
 
+def sandbox_where(change):
+    """Runs on / Changes on for a sandbox card. Only copy-out and undo reach the real project, never a device."""
+    name = change.get("sandbox") or "the sandbox"
+    runs = "Sandbox %s, on %s" % (name, where.mac_label(computer_name()))
+    if change.get("action") in ("copy_out", "undo"):
+        return where.mac_only(computer_name(), "Your real project on this Mac (old file backed up). Nothing on your "
+                                               "devices", runs=runs)
+    if change.get("action") == "network_on":
+        return where.mac_only(computer_name(), "Only sandbox %s: it can reach the internet. Nothing on your devices"
+                                               % name, runs=runs)
+    return where.mac_only(computer_name(), "Only sandbox %s. Nothing else on this Mac or your devices" % name,
+                          runs=runs)
+
+
 def sandbox_card(st, emit, change, title, diff, label, what):
     pid = uuid.uuid4().hex[:8]
     st.pending[pid] = {"kind": "sandbox", "remote": change.get("sandbox") or "", "source": "", "note": what,
                        "change": change}
     emit({"type": "confirm", "id": pid, "kind": "sandbox", "title": title, "diff": clip(diff, 20000),
+          "where": sandbox_where(change),
           "label": label, "what": what, "computer": APP.computer if APP else "the Mac", "device": "this Mac"})
     return ("A card showing this is on the page. Nothing has happened yet; the user presses the button on it. Tell "
             "them in one plain sentence what it does.")
@@ -2667,6 +2769,11 @@ def t_sandbox_run(st, emit, a):
     s = sb(sandbox.load, name)
     if SANDBOX_LIVE.get(name, {}).get("running"):
         raise ToolError("Something is already running in sandbox %s (from the Sandbox tab). Wait for it." % name)
+    sends = where.describe(a.get("command") or "", known_devices(), computer_name())
+    if sends["level"] == "device":
+        raise ToolError("Not run: this command sends to %s, and sandboxes never change your devices. Copy the built "
+                        "file out (propose_sandbox_copy_out), then use propose_command or propose_install in the real "
+                        "project: that shows a card the user confirms by typing the device name." % sends["changes_on"])
     emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
@@ -2983,7 +3090,7 @@ propose_settings for its host/ports, then test_connection.
 - Work on one device (checking, files, scans, backups, fixing, updating homebrew): open_device, and tell the user \
 they can carry on in that device's chat.
 - identify_firmware tells what a device runs; web_search only with generic text, never the user's files or code.
-""" + SELF_EDIT_RULES + """- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
+""" + SELF_EDIT_RULES + "- " + where.rule_text() + "\n" + """- Everyday questions (facts, how-tos) need no tools at all. For something live or recent (weather, news, prices, \
 scores) call web_search: it also reads the top pages for you, so answer straight from it in a few sentences. For \
 places in a town (what's open, where to eat, how many shops) use places_nearby. If the first try doesn't answer \
 it, try once or twice more with different words or another tool before giving up.
@@ -3054,7 +3161,7 @@ Its internet is off; ask with propose_sandbox_settings network true only when a 
 propose_sandbox_copy_out the files that should go back into the real project.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
-""" + SELF_EDIT_RULES + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
+""" + SELF_EDIT_RULES + "- " + where.rule_text() + "\n" + """- The user can change any setting by asking ("search 192.168.50.203 port 8080", "scan only /data", "use model X"). \
 Use show_settings, then propose_settings with exactly what they asked. For a new address: check_address first. If \
 it's a different device than this one, offer add_device; if they mean this device moved, propose_settings for \
 host/ports. After a change to host or ports, use test_connection.
@@ -4578,10 +4685,11 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
         cfg = APP.device(p["device"]).cfg()   # a change made from the home chat, for one device
     if p["kind"] in ("project_edit", "build", "get_source", "command", "settings", "plan", "install_packages",
                      "ask_claude", "device_command"):
-        if p.get("needs_typing") and typed.strip() != cfg["device_name"]:
+        word = p.get("type_word") or cfg["device_name"]
+        if p.get("needs_typing") and typed.strip() != word:
             raise ToolError("%s needs you to type %s exactly." % (
-                "Running a command on the device" if p["kind"] == "device_command" else "Turning writing on",
-                cfg["device_name"]))
+                "Running a command on the device" if p["kind"] == "device_command" else
+                "This sends to %s, so it" % word if p.get("type_word") else "Turning writing on", word))
         del st.pending[pid]
         return confirm_on_mac(st, cfg, p, emit, typed)
     if typed.strip() != cfg["device_name"]:
@@ -4679,6 +4787,7 @@ def confirm_on_mac(st, cfg, p, emit, typed=""):
                 return
             emit({"type": "note", "text": "Backed up %s first (Backups tab)." % ", ".join(folders)})
         st.plan = {"steps": p["steps"], "writes": p["writes"], "commands": p.get("commands") or [],
+                   "typed": bool(p.get("needs_typing")), "reaches": p.get("reaches") or "",
                    "understood": bool(p.get("risk"))}     # a risky plan can only be confirmed with the tick
         emit({"type": "answer", "text": "Plan approved. Working through it now; press Stop any time."})
         st.messages.append({"role": "user", "content": "[I approved the plan. Carry it out now without asking me again."
@@ -5940,6 +6049,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             bulk = files >= risk.BULK_DELETE or folders > 0
             st.file_pending = {pid: {"title": title, "steps": steps, "bulk": bulk}}   # only the newest plan can be confirmed
             self.json({"id": pid, "title": title, "lines": lines[:200], "more": max(0, len(lines) - 200),
+                       "where": where.for_device_write(cfg, computer_name()),
                        "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes")),
                        "bulk": {"files": files, "folders": folders} if bulk else None})
         elif path == "/api/backup/start":
@@ -5973,6 +6083,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             pid = uuid.uuid4().hex[:10]
             st.file_pending = {pid: {"title": title, "steps": steps}}
             self.json({"id": pid, "title": title, "lines": lines[:200], "more": max(0, len(lines) - 200),
+                       "where": where.for_device_write(cfg, computer_name()),
                        "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
         elif path == "/api/backup/stop":
             job = APP.backups.get(APP.device(data.get("device")).cfg()["device_name"])
