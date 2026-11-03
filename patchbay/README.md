@@ -288,6 +288,18 @@ for EglantinePS5 and run its tests").
   chat sends it from the Mac on a card.
 - **ARM or x86.** Sandboxes run ARM Linux (fast on Apple silicon). If a tool only exists for Intel/AMD (an
   "Exec format error"), **Use x86 (Rosetta)** runs it as x86 Linux instead: it works, but builds are slower.
+- **Fixes stick.** When the sandbox's own tools are the problem, PatchBay fixes the tools, not your project, and
+  saves the fix so it holds after `make clean`, a new container and a **Reset**. Example: on ARM Linux, GNU
+  `objcopy`/`nm` can't read x86 (PS5) files, so PatchBay makes them mean the LLVM versions in every command (a
+  *tool swap*). A missing file put in place (like clang's x86 runtime library) becomes a *saved fix* that every
+  **Set up** redoes, and packages installed by hand are added to the setup. If the container is new, **Build** runs
+  the setup first.
+- **Half-made files are removed.** If a failed step wrote a file just before it failed (say, a library a script
+  made and then found wrong), the next build would think that part was done and skip it. PatchBay deletes such
+  files (never your project's own files) before the next build, so they're made again.
+- **Notebook.** Each sandbox keeps a short list of what was changed and found out (**What was changed and learned**
+  in the Sandbox tab). The AI sees it at the end of every step, and Claude gets it too, so work isn't redone or
+  undone.
 - **Memory.** Big builds (Mesa, LLVM, emulators) get 16 GB, up to 20 GB. PatchBay warns when that won't fit
   alongside macOS and a loaded AI model; **Free up memory** unloads the model.
 - **Reset** throws away the sandbox's contents and copies the project in fresh. **Delete** removes it.

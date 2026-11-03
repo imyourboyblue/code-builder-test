@@ -51,13 +51,20 @@ DEFAULTS = {"kind": "linux", "image": "ubuntu:24.04", "network": False, "copy_ig
             "timeout_min": 60, "disk_gb": 20, "arch": "native", "memory_max": 28,
             # The recipe: how this project is set up and built inside (see sandboxrecipe.py). Empty = none yet.
             "setup_command": "", "build_command": "", "output": "", "blocked": [], "upload_hint": "",
-            "recipe_notes": [], "recipe_from": []}
+            "recipe_notes": [], "recipe_from": [],
+            # What PatchBay and the AI changed or learned in this sandbox, kept so later steps (and resets, make clean,
+            # new chats) don't redo or undo it: tool swaps done on every run, fixes redone by every setup, notes.
+            "tool_aliases": {}, "fixes": [], "notes": [], "suspect": [], "needs_setup": False}
 RECIPE_KEYS = ("setup_command", "build_command", "output", "upload_hint", "recipe_notes", "recipe_from")
 ARCHES = ("native", "amd64")         # native = arm64 on Apple silicon (fast); amd64 = x86 Linux through Rosetta
 OFFLINE_NET = "patchbay-offline"     # Apple container: a host-only network (macOS 26+), used when network is off
 EXTRA_PATHS = ["/usr/local/bin", "/opt/homebrew/bin", str(HOME / ".orbstack/bin"),
                "/Applications/Docker.app/Contents/Resources/bin"]
 LOCK = threading.Lock()
+ALIAS_DIR = "/opt/patchbay/bin"      # inside a Linux sandbox: tool swaps (objcopy -> llvm-objcopy), first on PATH
+TOOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,60}$")
+NOTES_MAX = 30
+FIXES_MAX = 20
 
 
 class SandboxError(Exception):
@@ -928,6 +935,10 @@ def ensure_container(sb, emit=None, stop=None):
         raise SandboxError("Couldn't start the sandbox: %s" % out[-600:])
     services.record("sandbox", name, "sandbox %s" % sb["name"])
     sb["container_network"] = sb["network"]
+    if not sb.get("image_in_use") and (sb.get("setup_command") or sb.get("fixes")):
+        # A brand-new container from the plain image: nothing the setup installed (or the saved fixes did) is in it
+        # yet, so the build step runs the setup first.
+        sb["needs_setup"] = True
     save(sb)
     return kind, exe, name
 
@@ -1082,8 +1093,12 @@ def reset(name, emit=None):
     skipped, leftovers = copy_in(sb["source"], d / "work", bool(sb.get("copy_ignored")))
     sb["skipped"], sb["left_out"], sb["left_out_count"] = skipped[:50], leftovers[:50], len(leftovers)
     sb["last_run"] = None
+    sb["suspect"] = []
+    sb["needs_setup"] = bool(sb.get("setup_command") or sb.get("fixes"))
     save(sb)
-    return sb
+    add_note(name, "Reset: the project was copied in fresh and everything installed inside was thrown away. The saved "
+                   "tool swaps and fixes are kept and are redone by the next setup step.", "patchbay")
+    return load(name)
 
 
 def delete(name):
@@ -1189,6 +1204,200 @@ def set_recipe(name, recipe):
     return new
 
 
+# ---------------------------------------------------------------- what was changed and learned (kept)
+
+def add_note(name, text, by="ai"):
+    """One line in the sandbox's notebook: what was changed or learned, so later steps don't redo or undo it.
+    by: ai (the chat's AI) or patchbay (PatchBay itself). The same text again isn't added twice."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()[:300]
+    if not text:
+        raise SandboxError("Give the note: one short line on what you changed or learned.")
+    sb = load(name)
+    notes = [n for n in sb.get("notes") or [] if n.get("text") != text]
+    notes.append({"time": time.strftime("%Y-%m-%d %H:%M"), "by": by, "text": text})
+    sb["notes"] = notes[-NOTES_MAX:]
+    save(sb)
+    return sb
+
+
+def set_alias(name, tool, use, why=""):
+    """Make `tool` mean `use` for every command in a Linux sandbox (e.g. objcopy -> llvm-objcopy, whose LLVM tools
+    read files for every processor). Done by a link in ALIAS_DIR, which is first on PATH, made again before every
+    run, so it holds after make clean, a new container and a reset. use '' takes the swap away."""
+    sb = load(name)
+    if sb["kind"] != "linux":
+        raise SandboxError("Tool swaps are for Linux sandboxes.")
+    tool, use = str(tool or "").strip(), str(use or "").strip()
+    if not TOOL_RE.match(tool) or (use and not TOOL_RE.match(use)):
+        raise SandboxError("Give program names only, like objcopy and llvm-objcopy.")
+    if tool == use:
+        raise SandboxError("A program can't be swapped for itself.")
+    aliases = dict(sb.get("tool_aliases") or {})
+    if use:
+        aliases[tool] = use
+    else:
+        aliases.pop(tool, None)
+    sb["tool_aliases"] = aliases
+    save(sb)
+    if use:
+        add_note(name, "Tool swap kept for every run: %s means %s%s." % (tool, use, " (%s)" % why if why else ""),
+                 "patchbay")
+    return load(name)
+
+
+def add_fix(name, command, why=""):
+    """Save a fix to the sandbox's own system (a file put in place, a link): it's part of every setup step from now
+    on, so a reset or a new container gets it again. Packages belong in the setup's apt-get line instead."""
+    command = str(command or "").strip()
+    if not command or "\n" in command:
+        raise SandboxError("Give the fix as one shell command line.")
+    sb = load(name)
+    fixes = [f for f in sb.get("fixes") or [] if f.get("command") != command]
+    fixes.append({"command": command[:2000], "why": re.sub(r"\s+", " ", str(why or "")).strip()[:300],
+                  "time": time.strftime("%Y-%m-%d %H:%M")})
+    if len(fixes) > FIXES_MAX:
+        raise SandboxError("This sandbox already has %d saved fixes. Take an old one away first." % FIXES_MAX)
+    sb["fixes"] = fixes
+    save(sb)
+    add_note(name, "Saved fix (redone by every setup): %s" % (why or command[:120]), "patchbay")
+    return load(name)
+
+
+def remove_fix(name, number):
+    sb = load(name)
+    fixes = list(sb.get("fixes") or [])
+    if not 1 <= int(number) <= len(fixes):
+        raise SandboxError("There's no saved fix number %s (there are %d)." % (number, len(fixes)))
+    gone = fixes.pop(int(number) - 1)
+    sb["fixes"] = fixes
+    save(sb)
+    add_note(name, "Took away saved fix: %s" % (gone.get("why") or gone["command"][:120]), "patchbay")
+    return load(name)
+
+
+def prelude(sb):
+    """Shell lines run before every command in a Linux sandbox: no install questions, and the tool swaps. A swap is
+    only linked when its program is installed (llvm-objcopy, or the newest llvm-objcopy-NN), so a swap saved before
+    the setup installed it never leaves the build without objcopy at all."""
+    if sb.get("kind") != "linux":
+        return ""
+    lines = ["export DEBIAN_FRONTEND=noninteractive"]
+    aliases = {k: v for k, v in (sb.get("tool_aliases") or {}).items() if TOOL_RE.match(k) and TOOL_RE.match(v)}
+    if aliases:
+        lines.append("mkdir -p %s 2>/dev/null" % ALIAS_DIR)
+        for tool, use in sorted(aliases.items()):
+            lines.append('t=$(command -v %s || ls -1 /usr/bin/%s-[0-9]* 2>/dev/null | sort -V | tail -n 1); '
+                         'if [ -n "$t" ]; then ln -sf "$t" %s/%s; else rm -f %s/%s; fi'
+                         % (use, use, ALIAS_DIR, tool, ALIAS_DIR, tool))
+        lines.append("export PATH=%s:$PATH" % ALIAS_DIR)
+    return "; ".join(lines) + "; "
+
+
+SUSPECT_WINDOW = 90       # files a failed step wrote in its last 90 seconds may be half-made
+SUSPECT_MAX = 30          # more than this = a big compile stopped; those files are ninja's/make's business
+
+
+def recent_files(sb, since, top=None, limit=400000):
+    """Files in the sandbox's copy written since `since` that aren't the project's own files (so a build made them).
+    Returns [(rel, mtime, size)], or None when there are too many to be a half-made result."""
+    w = work(sb)
+    src = Path(sb.get("source") or "/nonexistent")
+    out, seen = [], 0
+    for dirpath, dirs, files in os.walk(str(top or w)):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for f in files:
+            seen += 1
+            if seen > limit:
+                return None
+            p = Path(dirpath) / f
+            try:
+                st = p.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode) or st.st_mtime < since:
+                continue
+            rel = p.relative_to(w).as_posix()
+            if (src / rel).exists():
+                continue          # one of the project's own files (maybe just edited): never treated as half-made
+            out.append((rel, st.st_mtime, st.st_size))
+            if len(out) > SUSPECT_MAX:
+                return None
+    return out
+
+
+def note_suspects(name, ended):
+    """After a failed run: remember the files it wrote just before it failed (e.g. a library a script wrote and then
+    found wrong). A later run of the same build would see them, think that part is done, and skip it."""
+    sb = load(name)
+    try:
+        found = recent_files(sb, ended - SUSPECT_WINDOW)
+    except OSError:
+        found = None
+    new = [{"path": r, "mtime": m, "size": n} for r, m, n in found or []]
+    paths = {x["path"] for x in new}
+    old = [x for x in sb.get("suspect") or [] if x["path"] not in paths]     # still waiting from an earlier failure
+    sb["suspect"] = (old + new)[-SUSPECT_MAX:]
+    save(sb)
+    return [x["path"] for x in sb["suspect"]]
+
+
+def clear_suspects(name, emit=None):
+    """Before the next build: delete the files a failed step left half-made, if nothing changed them since, so the
+    build makes them again instead of skipping that part. Returns the paths removed."""
+    sb = load(name)
+    gone = []
+    for x in sb.get("suspect") or []:
+        try:
+            p = inside_work(sb, x["path"])
+            st = p.lstat()
+            if stat.S_ISREG(st.st_mode) and abs(st.st_mtime - x["mtime"]) < 0.01 and st.st_size == x["size"]:
+                p.unlink()
+                gone.append(x["path"])
+        except (SandboxError, OSError, KeyError):
+            continue
+    sb["suspect"] = []
+    save(sb)
+    if gone:
+        add_note(name, "Removed %s before building again: the step that failed wrote %s just before it failed, so the "
+                       "build would have skipped making %s again." % (", ".join(gone[:4]), "it" if len(gone) == 1
+                                                                     else "them", "it" if len(gone) == 1 else "them"),
+                 "patchbay")
+        if emit:
+            emit({"type": "note", "text": "Removed %d half-made file%s from the last failed step (%s), so the build "
+                                          "makes %s again." % (len(gone), "" if len(gone) == 1 else "s",
+                                                               ", ".join(gone[:3]), "it" if len(gone) == 1 else
+                                                               "them")})
+    return gone
+
+
+BUILDISH = re.compile(r"(^|[\s;&|(])(make|ninja|cmake|meson|cargo|gradle|\S*build\S*\.sh|\S*prepare\S*\.sh|"
+                      r"python3?\s+(-\S+\s+)*\S+\.py)(\s|$|;)")
+
+
+LOOKS_ONLY = re.compile(r"^\s*(cd\s+\S+\s*&&\s*)?(cat|tail|head|grep|egrep|rg|less|sed\s+-n|awk|find|ls|which|"
+                        r"command|type|echo|file|wc|stat|du|df|readelf|objdump|nm|llvm-nm|ar\s+t)\b")
+
+
+def is_buildish(command):
+    """A command that builds (make, ninja, a build or prepare script, a python script), not one that only looks."""
+    return bool(BUILDISH.search(command or "")) and not LOOKS_ONLY.search(command or "")
+
+
+def notes_text(sb, limit=12):
+    """The sandbox's notebook in plain lines, for the end of the AI's prompt and for Claude."""
+    rows = []
+    for tool, use in sorted((sb.get("tool_aliases") or {}).items()):
+        rows.append("Tool swap on every run: %s = %s" % (tool, use))
+    for i, f in enumerate(sb.get("fixes") or [], 1):
+        rows.append("Saved fix %d (redone by every setup): %s" % (i, f.get("why") or f["command"][:160]))
+    rows += ["%s: %s" % ("PatchBay" if n.get("by") == "patchbay" else "Note", n["text"])
+             for n in (sb.get("notes") or [])[-limit:]
+             if not n["text"].startswith(("Tool swap kept", "Saved fix (redone"))]
+    if sb.get("needs_setup"):
+        rows.append("The container is new: the setup step runs before the next build.")
+    return "\n".join("- " + r for r in rows)
+
+
 # ---------------------------------------------------------------- running a command inside
 
 def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
@@ -1269,11 +1478,16 @@ def run(name, command, emit=None, stop=None, base_path=None, record=True):
         code, out = _stream(mac_argv(sb, command), w, mac_env(sb, path), emit, timeout, stop)
     else:
         kind, exe, cname = ensure_container(sb, emit, stop)
-        argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", PIPEFAIL_SH, "sh", command]
+        sb = load(name)
+        if record and sb.get("suspect") and is_buildish(command):
+            clear_suspects(name, emit)
+        argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", PIPEFAIL_SH, "sh", prelude(sb) + command]
         code, out = _stream(argv, w, cli_env(), emit, timeout, stop,
                             on_kill=lambda: _quiet([exe, "stop", cname], 60))
     if not record:
         return code, out
+    if code != 0 and is_buildish(command):
+        note_suspects(name, time.time())
     sb = load(name)
     used = size_of(folder(name))
     sb["last_run"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "command": command[:300], "code": code,
@@ -1512,8 +1726,12 @@ def undo_copy(n):
 
 
 def step_command(sb, step):
-    """The setup or build command, with {cpus} filled in (containers don't always tell programs their CPU limit)."""
+    """The setup or build command, with {cpus} filled in (containers don't always tell programs their CPU limit).
+    The setup also redoes every saved fix, after the packages are in, so a reset or new container gets them back."""
     cmd = sb.get("setup_command" if step == "setup" else "build_command") or ""
+    if step == "setup" and sb.get("fixes"):
+        fixes = " && ".join("{ %s ; }" % f["command"].rstrip("; ") for f in sb["fixes"])
+        cmd = "%s && %s" % (cmd, fixes) if cmd else fixes
     return cmd.replace("{cpus}", str(int(sb["cpus"])))
 
 
@@ -1530,6 +1748,10 @@ def recipe_text(sb):
         rows.append("Never run inside: %s" % r["why"])
     if sb.get("upload_hint"):
         rows.append("After copying the result out: %s" % sb["upload_hint"])
+    for tool, use in sorted((sb.get("tool_aliases") or {}).items()):
+        rows.append("Tool swap on every run: %s means %s" % (tool, use))
+    for i, f in enumerate(sb.get("fixes") or [], 1):
+        rows.append("Saved fix %d (redone by every setup): %s" % (i, f.get("why") or f["command"][:160]))
     rows += ["Note: %s" % n for n in sb.get("recipe_notes") or []]
     if sb.get("recipe_from"):
         rows.append("Worked out from: %s" % ", ".join(sb["recipe_from"][:8]))

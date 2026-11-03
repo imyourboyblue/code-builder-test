@@ -1422,6 +1422,9 @@ def edited_text(old_text, a, rel, exists):
 def t_project_edit(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     root, p = pe(projects.inside, pr, a.get("path"))
+    if p.is_dir():
+        raise ToolError("Give the path of a file inside project %s (like tools/build.sh), not %s." % (
+            pr["name"], "the project's folder" if p == root else "a folder"))
     rel = p.relative_to(root).as_posix()
     old_text = p.read_text("utf-8", "replace") if p.exists() else ""
     if p.exists() and not projects.is_text(p):
@@ -3185,8 +3188,21 @@ def memory_warning(s):
            {"sandbox": S, "step": {"type": "string", "enum": ["setup", "build"]}}, ["step"])
 def t_sandbox_build(st, emit, a):
     name = sandbox_name(st, a)
+    used_sandbox(st, name)
     s = sb(sandbox.load, name)
+    s, caught = catch_up(s)
+    if caught:
+        emit({"type": "note", "text": caught})
     step = a.get("step") or "build"
+    if step == "build" and s["kind"] == "linux" and s.get("needs_setup") and not a.get("_after_setup"):
+        # A new container (after a reset, a settings change, or the first time) has none of the setup's packages or
+        # the saved fixes: run the setup first, so a fix found once is there again instead of failing the old way.
+        emit({"type": "note", "text": "Sandbox %s needs its setup step first (its container is new, or a tool or "
+                                      "fix was just added), so PatchBay runs it, then the build." % name})
+        done = t_sandbox_build(st, emit, {"sandbox": name, "step": "setup"})
+        if sb(sandbox.load, name).get("needs_setup"):
+            return "The setup step had to run first and didn't finish:\n" + done
+        return done + "\n\n" + t_sandbox_build(st, emit, {"sandbox": name, "step": "build", "_after_setup": True})
     cmd = sandbox.step_command(s, step)
     filled = ""
     if not cmd and s["kind"] == "linux":
@@ -3359,7 +3375,16 @@ def t_sandbox_preflight(st, emit, a):
            {"sandbox": S, "command": S}, ["command"])
 def t_sandbox_run(st, emit, a):
     name = sandbox_name(st, a)
+    used_sandbox(st, name)
     s = sb(sandbox.load, name)
+    if not a.get("_step"):
+        s, caught = catch_up(s)
+        if caught:
+            emit({"type": "note", "text": caught})
+        if s["kind"] == "linux" and s.get("needs_setup") and sandbox.is_buildish(a.get("command")):
+            raise ToolError("Not run yet: sandbox %s needs its setup step first (its container is new, or a tool or "
+                            "fix was just added, and the build would fail the old way without it). Call sandbox_build "
+                            "step build: it runs the setup, then the build." % name)
     if SANDBOX_LIVE.get(name, {}).get("running"):
         raise ToolError("Something is already running in sandbox %s (from the Sandbox tab). Wait for it." % name)
     sends = where.describe(a.get("command") or "", known_devices(), computer_name())
@@ -3390,7 +3415,8 @@ def t_sandbox_run(st, emit, a):
                                                      r"unreachable|network is unreachable|Operation not permitted.*"
                                                      r"(connect|socket))", out or ""):
         result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
-    result += sandbox_hints(s, code, out, a.get("_step"), started)
+    result += sandbox_hints(s, code, out, a.get("_step"), started, a.get("command") or "")
+    mark_caught_up(name)
     if code == 0:
         made = built_in_sandbox(s, started, a.get("_step"))
         if made:
@@ -3495,10 +3521,162 @@ def ffmpeg_log(s):
     return (text or "").strip()[-6000:]
 
 
-def sandbox_hints(s, code, out, step, started=None):
+# A build tool on ARM Linux that can't read the PS5's (or any other x86) object files: GNU binutils only know the
+# processor they were built for. The LLVM versions read every processor's files.
+CROSS_TOOL = re.compile(r"Unable to recognise the architecture of the input file|"
+                        r"\b(objcopy|nm|ranlib|strip|objdump|readelf|ar)\b: .{0,300}file format not recognized", re.I)
+LLVM_SWAPS = ("objcopy", "nm", "ranlib", "ar", "strip", "objdump", "readelf")
+# clang's runtime library for x86 builds isn't in ARM Ubuntu's package: it comes from the x86 package of the same
+# version (unpacked, not installed, so nothing clashes).
+RT_MISSING = re.compile(r"(/usr/lib/llvm-(\d+)/lib/clang/\d+/lib/linux/libclang_rt\.builtins-x86_64\.a)")
+NO_TARGET = re.compile(r"No rule to make target '([^']+)'")
+# A command that changes the sandbox's own system (not the project): lost when the container is made again.
+SYSTEM_CHANGE = re.compile(r"(^|[;&|(]\s*)((ln|cp|mv|install|rm)\s[^;&|]*\s/(usr|opt|etc|lib)\b|update-alternatives\b|"
+                           r"pip3?\s+install\b|dpkg\s+-i\b)")
+WRONG_CPU_LINK = re.compile(r"\bln\s+-\S*s\S*\s+\S*(aarch64|arm64)\S*\s+\S*(x86_64|amd64)|"
+                            r"\bln\s+-\S*s\S*\s+\S*(x86_64|amd64)\S*\s+\S*(aarch64|arm64)")
+
+
+def rt_fix_command(path, ver):
+    """Puts the real x86 libclang_rt.builtins in place (also replacing a wrong link to the ARM one)."""
+    pkg = "libclang-rt-%s-dev" % ver
+    return ('f=%s; if [ ! -f "$f" ] || [ -L "$f" ]; then v=$(dpkg-query -W -f=\'${Version}\' %s) && v=${v#*:} && '
+            'd=$(mktemp -d) && curl -fsSL -o "$d/rt.deb" "http://archive.ubuntu.com/ubuntu/pool/universe/l/'
+            'llvm-toolchain-%s/%s_${v}_amd64.deb" && dpkg-deb -x "$d/rt.deb" "$d/x" && rm -f "$f" && '
+            'cp "$d/x$f" "$f" && rm -rf "$d"; fi' % (path, pkg, ver, pkg))
+
+
+def toolchain_fixes(s, code, out, command):
+    """Fixes to the sandbox's own tools that PatchBay saves by itself, so they hold for every later run, make clean
+    and reset (they were done by hand before and got lost). Returns plain words for the AI."""
+    tips = ""
+    if s["kind"] != "linux":
+        return tips
+    name = s["name"]
+    if code != 0 and s.get("arch") != "amd64" and CROSS_TOOL.search(out):
+        try:
+            for t in LLVM_SWAPS:
+                if (s.get("tool_aliases") or {}).get(t) != "llvm-" + t:
+                    sandbox.set_alias(name, t, "llvm-" + t, "GNU's ARM version can't read x86 files")
+            cur = sandbox.load(name).get("setup_command") or ""
+            new = sandboxrecipe.add_packages(cur, ["llvm"])
+            if new != cur:
+                sandbox.set_recipe(name, {"setup_command": new})
+            setup_again(name)
+            sandbox.add_note(name, "objcopy/nm/ranlib couldn't read the x86 (PS5) object files: this sandbox is ARM "
+                                   "Linux and GNU's tools only read ARM files. Fixed in the sandbox's tools (LLVM "
+                                   "versions), not in the project's scripts.", "patchbay")
+        except sandbox.SandboxError:
+            return tips
+        tips += (" Cause: this sandbox is ARM Linux, and GNU's objcopy/nm/ranlib here only read ARM files, so they "
+                 "can't change the x86 (PS5) object files. PatchBay fixed the sandbox's tools for good: from now on "
+                 "objcopy, nm, ranlib, ar, strip, objdump and readelf mean the LLVM versions (they read every "
+                 "processor's files) in EVERY run, after make clean and after a reset, and llvm is in the setup. "
+                 "Don't edit the project's scripts for this. Next: sandbox_build step build (it runs the setup "
+                 "first, which installs llvm).")
+    m = RT_MISSING.search(out) if code != 0 and s.get("arch") != "amd64" else None
+    if m and re.search(r"missing|No such file|cannot find|unable to find|not found|cannot open", out, re.I):
+        path, ver = m.group(1), m.group(2)
+        try:
+            cmd = rt_fix_command(path, ver)
+            if not any(f.get("command") == cmd for f in s.get("fixes") or []):
+                sandbox.add_fix(name, cmd, "the x86 libclang_rt.builtins (clang %s) from Ubuntu's x86 package; ARM "
+                                           "Ubuntu only has the ARM one" % ver)
+            cur = sandbox.load(name).get("setup_command") or ""
+            new = sandboxrecipe.add_packages(cur, ["curl", "libclang-rt-%s-dev" % ver])
+            if new != cur:
+                sandbox.set_recipe(name, {"setup_command": new})
+            setup_again(name)
+        except sandbox.SandboxError:
+            return tips
+        tips += (" The build needs clang's x86 runtime library (%s). ARM Ubuntu doesn't ship it, so PatchBay saved a "
+                 "fix that unpacks it from Ubuntu's x86 package of the same version; every setup step redoes it. "
+                 "Never link the aarch64 file in its place: the PS5 is x86, so that makes a broken app. Next: "
+                 "sandbox_build step build (it runs the setup first)." % Path(path).name)
+    if command and WRONG_CPU_LINK.search(command):
+        tips += (" Warning: that links a file for one processor in place of another's (ARM vs x86). The build may "
+                 "go further but makes a broken program. Undo it (rm the link).")
+    if code == 0 and command and not step_like(s, command):
+        pk = [p for p in sandboxrecipe.apt_packages(command) if p not in sandboxrecipe.apt_packages(
+            s.get("setup_command") or "")]
+        if pk:
+            try:
+                sandbox.set_recipe(name, {"setup_command": sandboxrecipe.add_packages(s.get("setup_command") or "",
+                                                                                      pk)})
+                tips += (" PatchBay added %s to the sandbox's setup, so a reset or new container installs %s again."
+                         % (", ".join(pk), "it" if len(pk) == 1 else "them"))
+            except sandbox.SandboxError:
+                pass
+        elif SYSTEM_CHANGE.search(command):
+            tips += (" This changed the sandbox's own system, not the project, and it isn't saved: a reset or a new "
+                     "container loses it. If it was the right fix, save it with sandbox_fix (command + why), so every "
+                     "setup redoes it. If it was a wrong guess, undo it.")
+    return tips
+
+
+def mark_caught_up(name):
+    try:
+        s = sandbox.load(name)
+        if s.get("last_run"):
+            s["last_run"]["caught_up"] = True
+            sandbox.save(s)
+    except sandbox.SandboxError:
+        pass
+
+
+def setup_again(name):
+    """The setup step runs before the next build (a tool or fix it needs was just added)."""
+    s = sandbox.load(name)
+    if not s.get("needs_setup"):
+        s["needs_setup"] = True
+        sandbox.save(s)
+
+
+def catch_up(s):
+    """Look again at the sandbox's last run if PatchBay never did (it failed before this version, or in the Sandbox
+    tab): save the tool fixes it calls for, and remember the files it left half-made. Returns (sandbox, words)."""
+    last = s.get("last_run") or {}
+    if s["kind"] != "linux" or not last or last.get("code") in (0, None) or last.get("caught_up"):
+        return s, ""
+    name = s["name"]
+    words = toolchain_fixes(s, last["code"], last.get("output") or "", "")
+    if sandbox.is_buildish(last.get("command")):
+        try:
+            sandbox.note_suspects(name, time.mktime(time.strptime(last["time"], "%Y-%m-%d %H:%M:%S")) + 2)
+        except (ValueError, KeyError, TypeError, OSError, sandbox.SandboxError):
+            pass
+    s = sandbox.load(name)
+    if s.get("last_run"):
+        s["last_run"]["caught_up"] = True
+        sandbox.save(s)
+    return s, ("From the last run: " + words.strip() + "\n") if words.strip() else ""
+
+
+def step_like(s, command):
+    """Whether a command is the sandbox's own setup or build step (those are already its recipe)."""
+    c = (command or "").strip()
+    return bool(c) and c in (sandbox.step_command(s, "setup"), sandbox.step_command(s, "build"))
+
+
+def sandbox_hints(s, code, out, step, started=None, command=""):
     """Plain next steps after a sandbox run: ARM problems, build leftovers, and what to do once the build worked."""
     out = out or ""
-    tips = ""
+    tips = toolchain_fixes(s, code, out, command)
+    if code != 0:
+        try:
+            half = [x["path"] for x in sandbox.load(s["name"]).get("suspect") or []]
+        except (sandbox.SandboxError, KeyError):
+            half = []
+        if half:
+            tips += (" The failed step wrote %s just before it failed; that may be half-made, and a rerun could "
+                     "skip making it again. PatchBay deletes %s before the next build command (only if nothing "
+                     "changed it since)." % (", ".join(half[:4]) + (" and %d more" % (len(half) - 4) if len(half) > 4
+                                                                     else ""), "it" if len(half) == 1 else "them"))
+    nt = NO_TARGET.search(out) if code != 0 else None
+    if nt:
+        tips += (" The project has no make target called %s. The sandbox's build is: %s%s. Don't make up targets."
+                 % (nt.group(1), s.get("build_command") or "(none set)",
+                    "; it makes %s" % s["output"] if s.get("output") else ""))
     if code != 0 and LEFTOVER_RE.search(out):
         LEFTOVERS[s["name"]] = True
         tips += leftover_tip(s)
@@ -3554,6 +3732,13 @@ def sandbox_hints(s, code, out, step, started=None):
                      "propose_sandbox_settings setup_command \"apt-get install -y <package>\"." % ", ".join(unknown))
     if code == 0 and step == "setup":
         tips += " Setup is done. Next: sandbox_build step build."
+        try:
+            done = sandbox.load(s["name"])
+            if done.get("needs_setup"):
+                done["needs_setup"] = False
+                sandbox.save(done)
+        except sandbox.SandboxError:
+            pass
     if code == 0 and step != "build" and started and s.get("output"):
         # A plain sandbox_run (e.g. "rm -f stale/config.h && make") can be the build that worked: say so.
         try:
@@ -3585,6 +3770,95 @@ def sandbox_hints(s, code, out, step, started=None):
         else:
             tips += " The build said it worked, but %s isn't there. Look with sandbox_files." % s["output"]
     return tips
+
+
+@both_tool("sandbox_fix", "Save a fix to a Linux sandbox's OWN tools or system (not the project), so it holds for "
+           "every later run, after make clean, a new container and a reset. Either a tool swap (tool + use: e.g. tool "
+           "objcopy, use llvm-objcopy; done before every command) or a command (one shell line that puts a file or "
+           "link in place; it runs now and is redone by every setup step). Packages: just apt-get install them with "
+           "sandbox_run, PatchBay adds them to the setup. Use this instead of editing the project's scripts when the "
+           "sandbox's tools are the problem. remove: a saved fix's number to take away.",
+           {"sandbox": S, "tool": S, "use": dict(S, description="The program that tool should mean; empty takes the "
+                                                                "swap away"),
+            "command": S, "why": dict(S, description="One plain sentence on why"), "remove": I})
+def t_sandbox_fix(st, emit, a):
+    name = sandbox_name(st, a)
+    used_sandbox(st, name)
+    s = sb(sandbox.load, name)
+    if a.get("remove"):
+        s = sb(sandbox.remove_fix, name, a["remove"])
+        return "Took saved fix %s away.\n%s" % (a["remove"], sandbox.notes_text(s))
+    if a.get("tool"):
+        sb(sandbox.set_alias, name, a["tool"], a.get("use") or "", a.get("why") or "")
+        if not a.get("use"):
+            return "Took the %s swap away." % a["tool"]
+        return ("Kept: in every command in sandbox %s, %s now means %s (made again before each run, so make clean "
+                "and a reset don't lose it). If %s isn't installed yet, add it with sandbox_run apt-get install."
+                % (name, a["tool"], a["use"], a["use"]))
+    cmd = (a.get("command") or "").strip()
+    if not cmd:
+        raise ToolError("Give tool and use (a tool swap), or command (one shell line), and why.")
+    if not (a.get("why") or "").strip():
+        raise ToolError("Give why: one plain sentence on what the fix is for.")
+    if WRONG_CPU_LINK.search(cmd):
+        raise ToolError("Not saved: that links a file for one processor (ARM) in place of another's (x86). The build "
+                        "would make a broken program.")
+    if s["kind"] != "linux":
+        raise ToolError("Saved fixes are for Linux sandboxes.")
+    if not s["network"] and re.search(r"\b(curl|wget|apt(-get)?|git\s+clone|pip3?)\b", cmd):
+        return ("That fix downloads something, and sandbox %s's internet is off. " % name) + sandbox_card(
+            st, emit, {"action": "network_on", "sandbox": name}, "Turn on the network for sandbox %s" % name,
+            "Sandbox %s will be able to reach the internet, for the fix: %s\nIt still can't see your real files, "
+            "passwords or Keychain." % (name, a["why"]), "Turn network on", "Then call sandbox_fix again.")
+    code, out = sb(sandbox.run, name, cmd, emit, STOP, None)
+    if code != 0:
+        return ("Not saved: the fix failed in sandbox %s (exit code %d).\n%s" % (name, code, clip(out[-3000:])))
+    s = sb(sandbox.add_fix, name, cmd, a["why"])
+    return ("The fix worked and is saved: every setup step in sandbox %s redoes it, so a reset or new container gets "
+            "it again.\n%s" % (name, sandbox.notes_text(s)))
+
+
+@both_tool("sandbox_note", "Write one short line in a sandbox's notebook: what you changed or found out (e.g. 'The "
+           "result is build/release/PPSA98515, not dist/'). The notebook is shown at the end of every later step, "
+           "in new chats too, so nothing gets redone or undone.", {"sandbox": S, "text": S}, ["text"])
+def t_sandbox_note(st, emit, a):
+    name = sandbox_name(st, a)
+    used_sandbox(st, name)
+    s = sb(sandbox.add_note, name, a.get("text"), "ai")
+    return "Noted. Sandbox %s's notebook:\n%s" % (name, sandbox.notes_text(s))
+
+
+def used_sandbox(st, name):
+    """Remember that this chat works in this sandbox, so its notebook goes at the end of every later step."""
+    try:
+        used = getattr(st, "sandboxes_used", None)
+        if used is None:
+            used = st.sandboxes_used = []
+        if name and name not in used:
+            used.append(name)
+    except AttributeError:
+        pass
+
+
+def sandbox_notes_block(st):
+    """The notebooks of the sandboxes this chat used, or ''."""
+    rows = []
+    for name in getattr(st, "sandboxes_used", None) or []:
+        try:
+            text = sandbox.notes_text(sandbox.load(name))
+        except sandbox.SandboxError:
+            continue
+        if text:
+            rows.append("Sandbox %s notebook (already done or found out; don't redo or undo these):\n%s" % (name, text))
+    return "\n\n".join(rows)
+
+
+def with_notes(messages, st):
+    """The sandbox notebooks added to the newest message as it's sent (not kept), so the AI sees them last."""
+    block = sandbox_notes_block(st)
+    if not block or not messages or not isinstance(messages[-1].get("content"), str):
+        return messages
+    return messages[:-1] + [dict(messages[-1], content=messages[-1]["content"] + "\n\n[" + block + "]")]
 
 
 @both_tool("sandbox_files", "List files in a sandbox's copy of the project. changed=true lists only files that are "
@@ -4035,7 +4309,12 @@ output, caches, downloaded dependencies) is left out and the build makes it agai
 an earlier build ("config.h in source dir", an old CMakeCache.txt, a cache that "belongs to another checkout"), \
 delete those files inside the sandbox with sandbox_run, or propose_sandbox_reset; never change the project's own \
 scripts for that. Copying a changed script or source file out to the real project is a last resort, only when the \
-project's own code is really wrong, with a plain reason (why) on the card. Anything that sends to a device (make install, FTP upload) runs on the Mac \
+project's own code is really wrong, with a plain reason (why) on the card. When the sandbox's own tools are the \
+problem (a program can't read the files, a library for the target is missing), fix the TOOLS with sandbox_fix (a \
+tool swap or a saved command), never the project's scripts: a fix done with plain sandbox_run is lost by make clean, \
+a reset or a new container. Never link a file for one processor (aarch64) in place of another's (x86_64). After you \
+change or find out something that matters, sandbox_note it in one line. The sandbox notebook at the end of each step \
+says what was already done: don't redo or undo it. Anything that sends to a device (make install, FTP upload) runs on the Mac \
 with propose_command after copying out, never inside the sandbox.
 - For a code change with more than one part, call set_steps first (a short plan the user sees as a checklist), then \
 do one step at a time and call step_done after checking it (a build that worked) before starting the next.
@@ -4288,6 +4567,9 @@ def claude_question(st, question, details, purpose):
         parts.append("Details:\n" + str(details)[:12000])
     recent = [m for m in st.messages if m.get("role") == "tool" and m.get("tool_name") not in PRIVATE_TOOLS
               and str(m.get("content"))[-2000:] not in str(details or "")][-3:]
+    notes = sandbox_notes_block(st)
+    if notes:
+        parts.append(notes)
     if recent:
         parts.append("Recent step results (newest last):\n" + "\n---\n".join(
             "[%s]\n%s" % (m.get("tool_name"), str(m.get("content"))[-3500:]) for m in recent))
@@ -4385,7 +4667,7 @@ PROGRESS_TOOLS = {"propose_get_source", "set_project", "propose_project_edit", "
                   "propose_command", "propose_install_packages", "propose_plan", "backup", "propose_edit",
                   "propose_restore", "ask_claude", "save_platform_notes", "setup_firmware_helper",
                   "propose_device_command", "private_build", "sandbox_create", "sandbox_run",
-                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build"}
+                  "propose_sandbox_settings", "propose_sandbox_copy_out", "sandbox_build", "sandbox_fix"}
 # sandbox_preflight is only a check, so it isn't progress: running it again and again counts towards the loop guard.
 ASK_CLAUDE_CHOICE = "Ask Claude for help with this"
 
@@ -5127,7 +5409,7 @@ HOME_GROUPS = {
 }
 SANDBOX_GROUP = ("sandboxes: a throwaway copy of a project to build and test in (Linux container or locked-down Mac), "
                  "network off by default, results copied out only with a card",
-                 ["sandbox_list", "sandbox_preflight", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read",
+                 ["sandbox_list", "sandbox_preflight", "sandbox_create", "sandbox_build", "sandbox_run", "sandbox_files", "sandbox_read", "sandbox_fix", "sandbox_note",
                   "propose_sandbox_copy_out", "propose_sandbox_settings", "propose_sandbox_reset",
                   "propose_sandbox_delete", "propose_sandbox_undo"],
                  r"sandbox|container|docker|colima|linux|ubuntu|isolat|try it out|test (it|the build|the program)|run (the )?tests|"
@@ -5474,7 +5756,7 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
         t0 = time.time()
         st.last_ask = (system, tools)
         msg = ask_model(cfg, [{"role": "system", "content": system}]
-                        + with_time(history_view(st, cfg, system, tools), stamp), tools, emit)
+                        + with_notes(with_time(history_view(st, cfg, system, tools), stamp), st), tools, emit)
         st.timing.append(("AI", time.time() - t0))
         calls = msg.get("tool_calls") or []
         st.messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
@@ -5666,7 +5948,8 @@ STEP_WORDS = {
     "patchbay_files": "Listing PatchBay's own files", "patchbay_read": "Reading PatchBay's {path}",
     "patchbay_search": "Searching PatchBay for {text}", "propose_patchbay_change": "Preparing a change to PatchBay's {path}",
     "propose_patchbay_restart": "Preparing a restart", "set_steps": "Writing the plan", "step_done": "Step {step} checked",
-    "sandbox_run": "Running {command} in sandbox {sandbox}", "sandbox_create": "Making a sandbox",
+    "sandbox_run": "Running {command} in sandbox {sandbox}", "sandbox_fix": "Saving a fix to sandbox {sandbox}'s tools",
+    "sandbox_note": "Writing in sandbox {sandbox}'s notebook", "sandbox_create": "Making a sandbox",
     "sandbox_list": "Listing the sandboxes", "sandbox_preflight": "Checking what sandboxes need", "sandbox_files": "Listing sandbox files", "sandbox_read": "Reading {path} in the sandbox",
     "propose_build": "Building {project}", "propose_install": "Preparing to install {project}",
     "show_settings": "Reading the settings", "propose_settings": "Preparing a settings change",
