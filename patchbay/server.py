@@ -2777,8 +2777,8 @@ def t_sandbox_run(st, emit, a):
     emit({"type": "status", "text": "In sandbox %s: %s" % (name, a.get("command", "")[:60])})
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
-    where = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
-    result = "In %s %s, %s %s (exit code %d)." % (where, name, a.get("command", "")[:80],
+    place = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
+    result = "In %s %s, %s %s (exit code %d)." % (place, name, a.get("command", "")[:80],
                                                   "worked" if code == 0 else "failed", code)
     if code != 0 and not s["network"] and re.search(r"(Temporary failure resolving|Could not resolve|Network is "
                                                      r"unreachable|network is unreachable|Operation not permitted.*"
@@ -3282,10 +3282,10 @@ def mac_memory_gb():
 
 def ai_down(cfg):
     """What to check when the AI doesn't answer."""
-    where = core.ai_where(cfg)
-    if where == "this Mac":
+    host = core.ai_where(cfg)
+    if host == "this Mac":
         return "Is the Ollama app running?"
-    return ("Is %s on, with Ollama open and shared to the network? (🩺 Setup → Where the AI runs)" % where)
+    return ("Is %s on, with Ollama open and shared to the network? (🩺 Setup → Where the AI runs)" % host)
 
 
 def ai_computer_test(url, timeout=6):
@@ -3484,16 +3484,30 @@ def claude_ready():
     return bool(APP) and APP.claude.mode() in ("stuck", "plan") and APP.claude.has_key()
 
 
-def ask_user(st, emit, why, tried):
+BUG_PREFIX = "Error: PatchBay bug"
+BUG_STOP = ("This is a bug inside PatchBay itself, not a problem with your project. It happened while %s. Trying "
+            "again won't help, and asking Claude about your project won't either: PatchBay's own code needs fixing. "
+            "The error is in the steps below; copy it to whoever fixes PatchBay (or ask me to fix PatchBay itself).")
+
+
+def bug_result(e):
+    """The tool result for a crash in PatchBay's own code (a Python error such as UnboundLocalError)."""
+    frames = traceback.extract_tb(e.__traceback__)
+    spot = (" at %s line %d" % (Path(frames[-1].filename).name, frames[-1].lineno)) if frames else ""
+    return ("%s (%s: %s%s). This is a mistake in PatchBay's own code, not in the project. Don't run this step "
+            "again." % (BUG_PREFIX, type(e).__name__, e, spot))
+
+
+def ask_user(st, emit, why, tried, bug=False):
     """Stop instead of going round in circles: say what was tried and let the user pick what's next."""
     steps = "\n".join("- " + t for t in tried[-8:])
     options = []
-    if APP and APP.claude.has_key() and APP.claude.mode() != "always":
+    if not bug and APP and APP.claude.has_key() and APP.claude.mode() != "always":
         options.append({"label": "Ask Claude", "send": ASK_CLAUDE_CHOICE})
     options += [{"label": "Try another way", "send": "Try a different way. Don't repeat what already failed."},
                 {"label": "Stop here", "send": "Stop here for now and sum up what's wrong in two sentences."}]
     text = "I'm stopping to check with you. %s\n\nWhat I tried:\n%s" % (why, steps)
-    if not (APP and APP.claude.has_key()):
+    if not bug and not (APP and APP.claude.has_key()):
         text += "\n\nTip: with a Claude API key (☁ Claude button), I could ask Claude instead of guessing."
     emit({"type": "choices", "text": text, "options": options})
     st.messages.append({"role": "assistant", "content": text})
@@ -4530,9 +4544,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                 result = "Error: %s" % e
             except Stopped:
                 raise
-            except Exception as e:  # keep the chat alive and let the AI explain
+            except Exception as e:  # a crash in PatchBay's own code: keep the chat alive, then stop and say so
                 traceback.print_exc()
-                result = "Error: %s: %s" % (type(e).__name__, e)
+                result = bug_result(e)
             result = clip(result or "(no output)")
             summary = step_summary(name, args, result)
             emit({"type": "tool_result", "name": name, "text": result, "summary": summary})
@@ -4550,6 +4564,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             else:
                 idle += 1               # a failure, or the same step again
             seen.add(sig)
+            if result.startswith(BUG_PREFIX):
+                # Trying again or asking Claude about the project can't fix PatchBay's own code.
+                return ask_user(st, emit, BUG_STOP % (lambda d: d[:1].lower() + d[1:])(step_doing(name, args)), tried, bug=True)
             if bad and name != "ask_claude":
                 # The same goal (e.g. building this project), even if the command changed in between.
                 key = name + ":" + str(args.get("project") or args.get("path") or args.get("manager") or "")
