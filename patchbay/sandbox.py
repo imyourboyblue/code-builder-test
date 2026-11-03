@@ -1025,7 +1025,7 @@ def mac_argv(sb, command):
     prof.write_text(mac_profile(sb))
     limits = "ulimit -t %d 2>/dev/null; ulimit -f %d 2>/dev/null; " % (
         int(sb["timeout_min"]) * 60 * max(1, int(sb["cpus"])), int(sb["disk_gb"]) * 1024 * 1024 * 2)
-    return ["/usr/bin/sandbox-exec", "-f", str(prof), "/bin/zsh", "-c", limits + command]
+    return ["/usr/bin/sandbox-exec", "-f", str(prof), "/bin/zsh", "-c", limits + "setopt pipefail 2>/dev/null; " + command]
 
 
 # ---------------------------------------------------------------- create / reset / delete / settings
@@ -1241,6 +1241,13 @@ def _stream(argv, cwd, env, emit, timeout, stop, on_kill=None):
     return code, "\n".join(lines)
 
 
+# Commands run with pipefail, so "make 2>&1 | tail -80" fails when make fails (plain sh would report tail's exit code
+# 0, and a failed build looked like it worked). Ubuntu's sh (dash) has no pipefail, so bash runs the command when the
+# sandbox has it. The outer "sh -l" still loads the login settings (PATH and so on) first.
+PIPEFAIL_SH = ('if command -v bash >/dev/null 2>&1; then exec bash -o pipefail -c "$1"; '
+               'else exec sh -c "$1"; fi')
+
+
 def run(name, command, emit=None, stop=None, base_path=None, record=True):
     """Run one shell command inside the sandbox, in its copy of the project. Returns (exit code, output).
     record=False: a quiet look PatchBay takes itself (reading a script); the sandbox's last run stays as it was."""
@@ -1262,7 +1269,7 @@ def run(name, command, emit=None, stop=None, base_path=None, record=True):
         code, out = _stream(mac_argv(sb, command), w, mac_env(sb, path), emit, timeout, stop)
     else:
         kind, exe, cname = ensure_container(sb, emit, stop)
-        argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", command]
+        argv = [exe, "exec", "-w", "/work", cname, "sh", "-lc", PIPEFAIL_SH, "sh", command]
         code, out = _stream(argv, w, cli_env(), emit, timeout, stop,
                             on_kill=lambda: _quiet([exe, "stop", cname], 60))
     if not record:

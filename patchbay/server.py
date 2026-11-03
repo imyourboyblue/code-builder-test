@@ -78,6 +78,7 @@ import namestrip
 import where
 import sandbox
 import sandboxrecipe
+import proof
 import stopper
 import ollamactl
 import services
@@ -901,7 +902,8 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
     if st.plan and remote in st.plan.get("writes", []) and cfg.get("allow_writes") and kind != "helper":
         # Covered by the plan the user approved (they typed the device name for it). Still backed up first.
         emit({"type": "note", "text": "Approved in the plan: %s" % summary})
-        entry, result = device_write(cfg, {"kind": kind, "remote": remote, "source": str(source), "note": note}, emit)
+        entry, result = device_write(cfg, {"kind": kind, "remote": remote, "source": str(source), "note": note}, emit,
+                                     st)
         emit({"type": "note", "text": result})
         return "Done without a card (approved in the plan). " + result
     if not cfg.get("allow_writes"):
@@ -911,7 +913,7 @@ def add_pending(st, emit, kind, cfg, remote, source, note, summary, diff=None, o
         extra = ""
     pid = uuid.uuid4().hex[:8]
     st.pending[pid] = {"kind": kind, "remote": remote, "source": str(source), "note": note}
-    emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "where": wh,
+    emit({"type": "confirm", "id": pid, "title": summary, "remote": remote, "diff": diff, "where": wh, "kind": kind,
           "device": cfg["device_name"], "writes_on": bool(cfg.get("allow_writes"))})
     return ("A confirmation card is now showing on the page. Nothing has been written yet. The user must type %s "
             "and press Confirm.%s Tell the user what the change does and ask them to confirm it on the card. %s"
@@ -1147,7 +1149,15 @@ def checked_build(st, cfg, pr, emit, save=False):
       {"name": dict(S, description="Short project name"), "folder": dict(S, description="Project folder on the Mac, e.g. ~/code/mygame"),
        "build": dict(S, description="Build command run in that folder, usually: make"),
        "output": dict(S, description="The built file, relative to the folder, e.g. mygame.nro"),
-       "device_path": dict(S, description="Where the built file goes on the device, e.g. /switch/mygame/mygame.nro")},
+       "device_path": dict(S, description="Where the built file goes on the device, e.g. /switch/mygame/mygame.nro. "
+                                          "Never guess it: find it first (see device_path_source)."),
+       "device_path_source": dict(S, description="Required with device_path: where that install location comes "
+                                                 "from. Either a file in the project that says it (e.g. README.md, "
+                                                 "docs/INSTALL.md, the Makefile's install target), an https page you "
+                                                 "read with read_web_page or saw in web_search, or 'device' when "
+                                                 "PatchBay found the program's current file at exactly that path on "
+                                                 "the device (find_homebrew, list_folder). It must mention the "
+                                                 "folder.")},
       ["name", "folder"])
 def t_set_project(st, emit, a):
     if a.get("build"):
@@ -1155,9 +1165,94 @@ def t_set_project(st, emit, a):
                                            "output": a.get("output")}, emit)
         a = dict(a, build=tmp["build"], output=tmp.get("output") or a.get("output"))
     pr = pe(projects.make_project, a.get("name"), a.get("folder"), a.get("build"), a.get("output"), a.get("device_path"))
+    old = next((p for p in projects.all_projects(st.cfg()) if p["name"].lower() == pr["name"].lower()), {})
+    if pr["device_path"]:
+        if a.get("device_path_source"):
+            pr["device_path_source"] = location_source(st, pr, pr["device_path"], a["device_path_source"])
+        elif old.get("device_path_source") and norm(old.get("device_path") or "") == norm(pr["device_path"]):
+            pr["device_path_source"] = old["device_path_source"]      # same place as before, already looked up
+        else:
+            raise ToolError(NO_LOCATION_SOURCE % {"path": pr["device_path"]})
     projects.save(st.config_path, pr)
-    return "Saved project %s. Build command: %s. Built file: %s. Goes to: %s" % (
-        pr["name"], pr["build"], pr["output"] or "(not set)", pr["device_path"] or "(not set)")
+    return "Saved project %s. Build command: %s. Built file: %s. Goes to: %s%s" % (
+        pr["name"], pr["build"], pr["output"] or "(not set)", pr["device_path"] or "(not set)",
+        " (from %s)" % pr["device_path_source"] if pr.get("device_path_source") else "")
+
+
+REMOTE_DEST = re.compile(r"\b(?:s?ftps?|scp)://[^/\s'\"]+(/[^\s'\"]*)|"            # ftp://host/path, sftp://host/path
+                         r"(?:^|\s)(?:[\w.-]+@)?\d{1,3}(?:\.\d{1,3}){3}:(/[^\s'\"]*)")   # scp file 192.168.1.5:/path
+
+
+def remote_folder_in(cmd):
+    """The device path a Mac command copies to, when it names one (ftp://host/data/x/, scp f host:/data/x), else ''."""
+    m = REMOTE_DEST.search(cmd or "")
+    path = (m.group(1) or m.group(2)) if m else ""
+    return path if path and path != "/" else ""
+
+
+# Where a program goes on a device is never a guess: /user on a PS5, for one, is not where homebrew apps go.
+LOCATION_STEPS = (
+    "Don't guess install locations. Find out how and where THIS program is installed on THIS device first: 1) read the project's own README / install docs / Makefile install target "
+    "(project_search for 'install', project_read); 2) look it up with web_search (generic words: the program's name, "
+    "the console and its homebrew setup, 'install'), and read_web_page the best result. Then call set_project again "
+    "with device_path and device_path_source (the project file or https page that says so). If the program is "
+    "installed some other way (a package installer on the console, a loader that sends it over the network), say "
+    "that to the user instead of copying a file.")
+NO_LOCATION_SOURCE = "Not saved: nothing says %(path)s is where it goes. " + LOCATION_STEPS.replace("%", "%%")
+
+
+def location_folder(path):
+    """The part of an install path a source must mention: its first two folders (/data/homebrew), or its only one
+    (/switch, /user)."""
+    dirs = [x for x in PurePosixPath(norm(path)).parts[1:-1] if x]
+    return "/" + "/".join(dirs[:2]) if dirs else norm(path)
+
+
+def location_source(st, pr, path, source):
+    """Check that an install location comes from somewhere real that says so, and return the source as shown on the
+    card. Raises ToolError (with what to do) when it doesn't."""
+    source = (source or "").strip()
+    if not source:
+        raise ToolError(NO_LOCATION_SOURCE % {"path": path})
+    folder = location_folder(path)
+    if re.match(r"(?i)^https?://", source):
+        pages = getattr(st, "read_pages", None) or {}
+        text = pages.get(source) or pages.get(source.rstrip("/")) or pages.get(source.split("#")[0])
+        if text is None:
+            raise ToolError("Read %s first (read_web_page), so PatchBay can check it really says %s. Then call "
+                            "set_project again." % (source, folder))
+    elif re.match(r"(?i)^(the\s+)?device\b", source):
+        seen = "\n".join(str(m.get("content") or "") for m in st.messages if m.get("role") == "tool")
+        if norm(path) not in seen:
+            raise ToolError("PatchBay hasn't seen %s on the device in this chat. Find the program's current file "
+                            "first (find_homebrew or list_folder), or give a project file or web page that says where "
+                            "it goes." % norm(path))
+        return "the device (the program's current file is there)"
+    else:
+        try:
+            _, f = projects.inside(pr, source)
+            text = f.read_text("utf-8", "replace") if f.is_file() else None
+        except (projects.ProjectError, OSError):
+            text = None
+        if text is None:
+            raise ToolError("%s isn't a file in project %s. Give the project file (like README.md) or the https page "
+                            "that says where it goes." % (source, pr["name"]))
+    need = folder if folder.count("/") == 1 else folder.lstrip("/")
+    if need.lower() not in text.lower():
+        raise ToolError("%s doesn't mention %s, so it isn't a source for installing to %s. Find where it really "
+                        "says this program goes (don't guess), then call set_project again." % (source, need, path))
+    return source
+
+
+def note_pages(st, text, url=None):
+    """Remember the web pages read in this chat, so an install location can be checked against what they say."""
+    pages = st.__dict__.setdefault("read_pages", {})
+    for u in ([url] if url else re.findall(r"https?://[^\s)\]>\"']+", text or "")):
+        u = u.rstrip(".,")
+        pages[u] = (pages.get(u, "") + "\n" + (text or ""))[-200000:]
+    if len(pages) > 300:
+        for k in list(pages)[:100]:
+            pages.pop(k, None)
 
 
 def linux_sandboxes_for(pr):
@@ -1230,8 +1325,10 @@ def t_projects(st, emit, a):
         return "No projects yet. Ask the user where the source code folder is, then use set_project."
     rows = []
     for p in prs:
-        row = "%s: on this Mac at %s (build: %s, makes %s, goes to %s on the device)" % (
-            p["name"], p["folder"], p["build"], p.get("output") or "?", p.get("device_path") or "?")
+        row = "%s: on this Mac at %s (build: %s, makes %s, goes to %s on the device%s)" % (
+            p["name"], p["folder"], p["build"], p.get("output") or "?", p.get("device_path") or "?",
+            ", from %s" % p["device_path_source"] if p.get("device_path_source") else
+            ", NOT CHECKED: look up where it goes before propose_install" if p.get("device_path") else "")
         why = linux_build_reason(p)
         rows.append(row + ("\n  " + sandbox_route_text(p, why) if why else ""))
     return "\n".join(rows) + "\nRead project files with project_files / project_read (they're on the Mac)."
@@ -1423,11 +1520,16 @@ def t_install(st, emit, a):
     probs = [x["text"] for x in core.check_bytes(out.name, out.read_bytes()) if x["level"] == "error"]
     if probs:
         raise ToolError("The built file fails the damage checks, so I won't install it: %s" % probs[0])
+    if not pr.get("device_path_source"):
+        raise ToolError("Not ready to install: nobody has checked that %s is where %s goes on the device. "
+                        % (pr["device_path"], pr["name"]) + LOCATION_STEPS)
     age = time.time() - out.stat().st_mtime
     return add_pending(st, emit, "install", cfg, norm(pr["device_path"]), out, "built from project %s" % pr["name"],
                        "Install %s (%s, built %s ago) to %s" % (pr["output"], core.human_size(out.stat().st_size),
                                                               "%d min" % (age // 60) if age < 7200 else "%d h" % (age // 3600),
-                                                              pr["device_path"]))
+                                                              pr["device_path"]),
+                       "Install location: %s\nWhere that comes from: %s" % (norm(pr["device_path"]),
+                                                                         pr["device_path_source"]))
 
 
 # ---- settings
@@ -1585,7 +1687,9 @@ def t_search_web(st, emit, a):
         found = cached("search", q[:200].lower(), lambda: firmware.web_search(q[:200]))
     except (OSError, ValueError) as e:
         raise ToolError("The search didn't work: %s" % tlsfix.explain(e))
-    return clip(found + top_pages(found, q))
+    found = found + top_pages(found, q)
+    note_pages(st, found)
+    return clip(found)
 
 
 def excerpt(text, query, limit=1800):
@@ -1904,7 +2008,8 @@ def t_prepare(st, emit, a):
     else:
         parts.append("NEXT, without asking the user anything: if a newer release of the program already exists, say "
                      "so and offer it. Otherwise get the source (propose_get_source), read its README / build files, "
-                     "set_project with the right output file and device_path (where it was found above), then "
+                     "set_project with the right output file, device_path (where it was found above) and "
+                     "device_path_source \"device\", then "
                      "check_tools with the project and every tool its build needs (one card for all missing tools), "
                      "propose_build, fix errors, and propose_install.")
     return clip("\n\n".join(parts))
@@ -2097,8 +2202,12 @@ def t_get_source(st, emit, a):
 @tool("propose_command",
       "Suggest running one command in a project's folder on the Mac, e.g. a cmake setup step, 'git pull', 'git "
       "submodule update --init --recursive', or 'make clean'. Does NOT run: shows the exact command on a card the "
-      "user confirms. To install build packages, use propose_install_packages instead.",
-      {"project": S, "command": S, "reason": dict(S, description="One short sentence on why")}, ["project", "command"])
+      "user confirms. To install build packages, use propose_install_packages instead. A command that copies a file to "
+      "a named folder on a device (curl -T / ftp:// / scp host:/path) needs location_source.",
+      {"project": S, "command": S, "reason": dict(S, description="One short sentence on why"),
+       "location_source": dict(S, description="Only for a command that copies to a folder on a device: the project "
+                                              "file or https page (read first) that says the program goes there")},
+      ["project", "command"])
 def t_command(st, emit, a):
     cfg, pr = st.cfg(), project(st, a.get("project"))
     cmd = (a.get("command") or "").strip()
@@ -2119,9 +2228,18 @@ def t_command(st, emit, a):
     if gate:
         return gate
     root = pe(projects.folder_of, pr)
+    shown = "In folder: %s\nRun: %s" % (root, cmd)
+    dest = remote_folder_in(cmd)
+    if dest:
+        # It copies to a folder it names on a device: that place must come from somewhere real, like propose_install.
+        src = location_source(st, pr, dest, a.get("location_source") or "") if a.get("location_source") else ""
+        if not src:
+            raise ToolError("Not shown: this copies to %s on a device, and nothing says that's where the program "
+                            "goes. " % dest + LOCATION_STEPS + " Then call propose_command again with location_source.")
+        shown += "\nInstall location: %s\nWhere that comes from: %s" % (dest, src)
     return add_pending(st, emit, "command", cfg, pr["name"], root, a.get("reason") or "",
                        "Run a command in project %s: %s" % (pr["name"], a.get("reason") or ""),
-                       "In folder: %s\nRun: %s" % (root, cmd), on_mac=True,
+                       shown, on_mac=True,
                        extra_fields={"project": pr["name"], "command": cmd, "risk": risk.risky(cmd)})
 
 
@@ -2294,7 +2412,9 @@ def t_web(st, emit, a):
     if leaks_private(st, a.get("url")):
         raise ToolError(PRIVATE_REFUSAL)
     url = (a.get("url") or "").strip()
-    return clip(cached("page", url, lambda: page_text(url)), 8000)
+    text = cached("page", url, lambda: page_text(url))
+    note_pages(st, text, url)
+    return clip(text, 8000)
 
 
 def page_text(url, timeout=30):
@@ -2929,6 +3049,8 @@ def confirm_sandbox(st, p, emit):
         result = sb(sandbox.delete, ch["sandbox"])
     elif a == "copy_out":
         result = sb(sandbox.copy_out, ch)
+        proof.record(st, "copied", "sandbox %s: %s -> %s" % (ch.get("sandbox") or "", ch.get("rel") or "",
+                                                             ch.get("to") or ""))
     elif a == "undo":
         result = sb(sandbox.undo_copy, ch["number"])
     elif a in ("colima_start", "colima_resize", "colima_repair", "colima_reset"):
@@ -3257,15 +3379,55 @@ def t_sandbox_run(st, emit, a):
     base = projects.build_env()["PATH"]
     code, out = sb(sandbox.run, name, a.get("command"), emit, STOP, base)
     place = "the Linux sandbox" if s["kind"] == "linux" else "the Mac sandbox"
-    result = "In %s %s, %s %s (exit code %d)." % (place, name, a.get("command", "")[:80],
-                                                  "worked" if code == 0 else "failed", code)
+    hidden = hidden_failure(a.get("command") or "", code, out)
+    if hidden:
+        code = 1        # "make ... || echo done" said 0, but the build itself failed: treat it as the failure it is
+    result = "In %s %s, %s %s (exit code %d%s)." % (
+        place, name, a.get("command", "")[:80], "worked" if code == 0 else "failed", code,
+        ": the command itself said 0, but its output shows the build failed (an || or ; in the command hid it): %s"
+        % hidden if hidden else "")
     if code != 0 and not s["network"] and re.search(r"(Temporary failure resolving|Could not resolve|Network is "
                                                      r"unreachable|network is unreachable|Operation not permitted.*"
                                                      r"(connect|socket))", out or ""):
         result += " It tried to use the network, which is off: propose_sandbox_settings with network true."
     result += sandbox_hints(s, code, out, a.get("_step"), started)
+    if code == 0:
+        made = built_in_sandbox(s, started, a.get("_step"))
+        if made:
+            proof.record(st, "built", "sandbox %s: %s" % (name, made))
     summary, detail = show_output(emit, result, code, out, a.get("command") or "")
     return detail
+
+
+# Lines that mean a build failed, even when the command's exit code said 0 (because of "|| echo", "; ls" and so on).
+HIDDEN_FAIL = re.compile(r"(?m)^\s*(make(\[\d+\])?: \*\*\* .*|.*\bC compiler test failed\b.*|configure: error: .*|"
+                         r"CMake Error.*|ninja: build stopped.*|.*\bcollect2: error\b.*|.*: fatal error: .*|"
+                         r"\S+:\d+:\d+: error: .*|.*error: linker command failed.*|ERROR: .*)$")
+# Commands that only look at things: their output can quote a failure (a log) without failing themselves.
+LOOKS_ONLY = re.compile(r"^\s*(cat|tail|head|grep|egrep|rg|less|more|sed|awk|find|ls|which|command|type|echo|printf|"
+                        r"file|wc|stat|du|df|tree|readlink|diff|cmp|env|printenv|uname|id)\b")
+
+
+def hidden_failure(command, code, out):
+    """The error line when a build command exited 0 but its output shows it failed, else ''."""
+    if code != 0 or LOOKS_ONLY.search(command or ""):
+        return ""
+    m = HIDDEN_FAIL.search(out or "")
+    return m.group(0).strip()[:200] if m else ""
+
+
+def built_in_sandbox(s, started, step):
+    """The sandbox's output file when a run that exited 0 made it (new since the run started), else ''. A build step
+    with no output file set counts as built by its exit code alone, and says so."""
+    if s.get("output"):
+        try:
+            p = sandbox.inside_work(s, s["output"])
+            if p.exists() and p.stat().st_mtime >= (started or 0) - 2:
+                return s["output"]
+        except (sandbox.SandboxError, OSError):
+            pass
+        return ""
+    return "build step exited 0 (no output file set)" if step == "build" else ""
 
 
 def script_needs(s, out):
@@ -3318,6 +3480,21 @@ def leftover_tip(s):
                   "the real project.")
 
 
+FFMPEG_TEST = re.compile(r"C compiler test failed|ffbuild/config\.log|If you think configure made a mistake")
+FFMPEG_LOG_CMD = ("for f in $(find / -xdev \\( -path /proc -o -path /sys -o -path /usr \\) -prune -o "
+                  "-path '*/ffbuild/config.log' -print 2>/dev/null | head -n 2); do echo \"== $f\"; "
+                  "tail -n 60 \"$f\"; done")
+
+
+def ffmpeg_log(s):
+    """The end of FFmpeg's ffbuild/config.log inside the sandbox (wherever the build put FFmpeg), or ''."""
+    try:
+        code, text = sandbox.run(s["name"], FFMPEG_LOG_CMD, None, STOP, None, record=False)
+    except (sandbox.SandboxError, OSError):
+        return ""
+    return (text or "").strip()[-6000:]
+
+
 def sandbox_hints(s, code, out, step, started=None):
     """Plain next steps after a sandbox run: ARM problems, build leftovers, and what to do once the build worked."""
     out = out or ""
@@ -3336,6 +3513,23 @@ def sandbox_hints(s, code, out, step, started=None):
     if code != 0 and re.search(r"\bKilled\b|out of memory|signal 9|c\+\+: fatal error: Killed", out):
         tips += (" The build ran out of memory (%d GB). Raise memory_gb (up to %s) or lower the jobs in the build "
                  "command." % (s["memory_gb"], s.get("memory_max") or 28))
+    if code == 141:
+        tips += (" Exit code 141 means a later part of the pipe (like head) stopped reading, so the command before it "
+                 "was cut off early and didn't finish. Run it without head, or with tail instead.")
+    if code != 0 and s["kind"] == "linux" and FFMPEG_TEST.search(out):
+        # FFmpeg's configure only says "C compiler test failed": the reason is in ffbuild/config.log. Read it now
+        # (inside the sandbox) so every missing program it names is installed in one go, and the AI sees the cause.
+        log = ffmpeg_log(s)
+        if log:
+            out += "\n" + log
+            why = [l.strip() for l in log.splitlines() if ERROR_LINE.search(l)][-6:]
+            tips += (" FFmpeg's configure test failed. PatchBay read ffbuild/config.log in the sandbox; its last "
+                     "error lines: %s. Fix that cause (a missing program, a wrong --cc / --cross-prefix, or missing "
+                     "SDK headers) rather than running the same build again." % (" | ".join(why) or "none found"))
+        else:
+            tips += (" FFmpeg's configure test failed. Its real reason is in ffbuild/config.log: read the end of it "
+                     "with sandbox_run (find / -path '*/ffbuild/config.log' then tail -n 60 it) before changing "
+                     "anything.")
     if code != 0 and s["kind"] == "linux":
         pk, unknown = sandboxrecipe.packages_for(sandboxrecipe.missing_commands(out))
         if pk:
@@ -3673,6 +3867,14 @@ project_read and project_search; other Mac folders with mac_list and mac_read. A
 (PlayStation and other Linux-built projects), follow those sandbox steps (sandbox_build, then \
 propose_sandbox_copy_out) and don't check devkitPro or use propose_build. Only then propose_install, which shows \
 the user a card; nothing goes on the device without it.
+- WHERE AND HOW a program installs on a device is never a guess (on a jailbroken PS5, /user is NOT where homebrew \
+apps go). Before choosing a place: read the project's own README / install docs / Makefile install target, then look \
+it up for this program on this device (web_search with generic words, then read_web_page). Some programs aren't \
+copied at all (a package installer on the console, a payload loader): then say so. set_project needs \
+device_path_source (the project file or page that says it), and the install card shows it.
+- Never say a build worked, a file was copied, or something was installed unless a tool result in this question \
+says exactly that. A step that failed or a step you didn't get to is said plainly. PatchBay removes claims it \
+didn't see happen.
 """
 
 
@@ -3878,8 +4080,8 @@ Makefile, and the CI workflow in .github/workflows, which shows the exact comman
 out of date. Never invent tool names, paths or scripts: only use ones you saw in a file or tool result. For a \
 devkitPro CMake project on Switch the build is: aarch64-none-elf-cmake -S . -B build <options> && cmake --build \
 build -j8 (3DS: arm-none-eabi-cmake). For a Makefile project it's make. Put the whole build command, the built \
-file and device_path (where find_homebrew found it on the device; a background program's file is \
-/atmosphere/contents/<id>/exefs.nsp) in set_project, then propose_build.
+file and device_path (where find_homebrew found it on the device: device_path_source "device"; a background \
+program's file is /atmosphere/contents/<id>/exefs.nsp) in set_project, then propose_build.
   5. propose_build. Read the errors; fix the code with propose_project_edit (libnx renames and changed functions \
 are the usual cause on Switch; look up the library's changelog); build again until it builds cleanly.
   6. propose_install (the device's current file is backed up first). Then tell the user how to test it (restart \
@@ -4277,7 +4479,7 @@ def ask_user(st, emit, why, tried, bug=False):
         options.append({"label": "Ask Claude", "send": ASK_CLAUDE_CHOICE})
     options += [{"label": "Try another way", "send": "Try a different way. Don't repeat what already failed."},
                 {"label": "Stop here", "send": "Stop here for now and sum up what's wrong in two sentences."}]
-    text = "I'm stopping to check with you. %s\n\nWhat I tried:\n%s" % (why, steps)
+    text = "%s\n\nWhat I tried:\n%s" % (stopped_words(st, "I'm stopping to check with you. " + why), steps)
     if not bug and not (APP and APP.claude.has_key()):
         text += "\n\nTip: with a Claude API key (☁ Claude button), I could ask Claude instead of guessing."
     emit({"type": "choices", "text": text, "options": options})
@@ -5243,6 +5445,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
         st.messages.append(user_msg)
     elif user_text:
         st.messages.append({"role": "user", "content": user_text})
+    if (user_msg or user_text) and not str((user_msg or {}).get("content") or user_text or "").startswith("["):
+        proof.question_started(st)      # only what happens from now on can back up "it worked" in the answer
+    st.last_failed, st.build_job = "", False
     if st.plan:
         system += ("\n\nThe user approved this plan. Carry it out now, step by step, without stopping to ask. "
                    "Say in one short line what each step does.\n" + "\n".join(
@@ -5291,9 +5496,9 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             emit({"type": "status", "text": "Looking at PatchBay's own code..."})
             continue
         if not calls:
-            emit({"type": "answer", "text": clean_answer(msg.get("content"))})
+            emit({"type": "answer", "text": checked_words(st, clean_answer(msg.get("content")))})
             return
-        said = clean_answer(msg.get("content"))
+        said = checked_words(st, clean_answer(msg.get("content")))
         if said:
             emit({"type": "note", "text": said})
         card = None      # only one card at a time: after it shows, the turn ends and waits for the user
@@ -5312,6 +5517,8 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                 except ValueError:
                     args = {}
             emit({"type": "tool", "name": name, "args": args, "text": step_doing(name, args)})
+            if name in BUILD_JOB_TOOLS:
+                st.build_job = True     # a stop then also says what wasn't built, copied or installed
             cards_before = set(st.pending)
             try:
                 if name not in handlers:
@@ -5337,6 +5544,8 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
                 card = summary
                 continue
             bad = failed(result)
+            if bad:
+                st.last_failed = summary
             # A build that stops at a DIFFERENT missing program each time (git, then python3, then wget...) is moving
             # forward: PatchBay adds each one to the setup. Only the same missing program again counts as a repeat.
             fresh = bad and new_missing_programs(name, result, missing_seen)
@@ -5394,20 +5603,53 @@ def _chat_loop(st, user_text, emit, cfg, system, tools, handlers, user_msg=None)
             emit({"type": "answer", "text": "Check the card above and press Confirm or Cancel. I'll carry on from "
                                             "there."})
             return
-    # Out of steps: answer with what was found instead of just giving up.
+    # Out of steps: say plainly that the job isn't finished and what failed last (from PatchBay's own record, not the
+    # AI's memory), then the AI's summary of what it found, with any claim PatchBay didn't see happen taken out.
     check_stop()
     st.messages.append({"role": "user", "content": "[PatchBay: that's the step limit. Don't use any more tools. "
                                                    "Answer now with what you found, and say plainly what you didn't "
-                                                   "get to.]"})
+                                                   "get to. Only say a build worked, a file was copied, or something "
+                                                   "was installed if a tool result above says exactly that.]"})
     try:
         msg = ask_model(cfg, [{"role": "system", "content": system}] + st.messages, [], emit)
         text = clean_answer(msg.get("content"))
     except ToolError:
         text = ""
-    st.messages.append({"role": "assistant", "content": text})
-    emit({"type": "answer", "text": (text + "\n\n" if text else "") + "*(I stopped after %d steps so I don't "
-                                                                     "loop forever. Tell me if I should carry on.)*"
-                                                                     % rounds})
+    text, _ = proof.correct(text, st)
+    text = re.sub(r"^\*\*Correction from PatchBay:\*\*[^\n]*\n*", "", text)    # the header below says it plainly
+    head = stopped_words(st, "I stopped after %d steps so I don't loop forever." % rounds)
+    st.messages.append({"role": "assistant", "content": head + ("\n\n" + text if text else "")})
+    emit({"type": "answer", "text": head + ("\n\n" + text if text else "") + "\n\n*(Tell me if I should carry "
+                                                                               "on.)*"})
+
+
+def stopped_words(st, why):
+    """The first lines of any stop that ends a job early: it didn't finish, why, what failed last, and what didn't
+    happen (no build, nothing copied, nothing on the device), all from PatchBay's own record."""
+    words = "**Not finished.** %s" % why
+    last = re.sub(r"^Didn't work:\s*", "", getattr(st, "last_failed", "") or "")
+    if last:
+        words += " The last step that failed: %s" % last.rstrip(".") + "."
+    facts = proof.facts_line(st) if getattr(st, "build_job", False) else ""
+    if facts:
+        words += " " + facts
+    return words
+
+
+BUILD_JOB_TOOLS = {"propose_build", "propose_install", "propose_command", "sandbox_build", "sandbox_run",
+                   "propose_sandbox_copy_out", "propose_device_command", "prepare_homebrew_update"}
+
+
+def checked_words(st, text):
+    """The AI's words with any "it's built / copied / installed" that PatchBay didn't see happen taken out. The
+    corrected words also replace what the AI remembers saying, so it doesn't build on its own mistake."""
+    fixed, kinds = proof.correct(text, st)
+    if kinds:
+        for m in reversed(st.messages):
+            if m.get("role") == "assistant":
+                m["content"] = fixed
+                break
+    return fixed
 
 
 # What each step is doing / did, in plain words for the page. {x} is filled from the step's arguments.
@@ -5520,7 +5762,7 @@ def do_confirm(st, pid, typed, emit, enable_writes=False, understood=False):
         emit({"type": "note", "text": "Writing is now on for %s. You can turn it off again any time by asking me to "
                                       "turn off writing." % cfg["device_name"]})
     del st.pending[pid]
-    entry, result = device_write(cfg, p, emit)
+    entry, result = device_write(cfg, p, emit, st)
     emit({"type": "answer", "text": result})
     st.messages.append({"role": "user", "content": "[I confirmed the %s of %s on the card. Result: %s]"
                                                    % (p["kind"], p["remote"], result)})
@@ -5571,11 +5813,13 @@ def wait_for_helper(st, cfg, emit):
                                     "me \"done\"."})
 
 
-def device_write(cfg, p, emit):
+def device_write(cfg, p, emit, st=None):
     """Put a file on the device (the current one is backed up first). Returns (history entry or None, result text)."""
     with WRITES:
         entry, out = run_captured(emit, core.put_back, cfg, p["remote"], Path(p["source"]), p["kind"], p["note"],
                                   ask=lambda c, what: print(what))
+    if entry and entry.get("verified") and st is not None:
+        proof.record(st, "installed", "%s on %s (%s)" % (p["remote"], cfg["device_name"], Path(p["source"]).name))
     if entry and entry.get("verified"):
         result = "Done: change #%d. %s on %s was written, and any old file was backed up first." % (
             entry["id"], p["remote"], cfg["device_name"])
@@ -5667,6 +5911,9 @@ def step_key(p):
 def run_mac_step(st, cfg, p, emit):
     """Do one confirmed (or automatic) step on the Mac, and remember it if it failed."""
     short, detail = _run_mac_step(st, cfg, p, emit)
+    if p.get("kind") == "command" and p.get("where_level") == "device" and not re.search(r"\bfailed\b", short):
+        # A confirmed Mac command that sends to a device (e.g. the project's own "make install") exited 0.
+        proof.record(st, "installed", "%s: %s" % (p.get("project") or "", p.get("command") or ""))
     failed_steps = st.__dict__.setdefault("failed_steps", {})
     if re.search(r"\bfailed\b", short) and p.get("kind") in ("command", "install_packages") \
             and "password box was cancelled" not in detail:
@@ -5743,6 +5990,7 @@ def _run_mac_step(st, cfg, p, emit):
         st.unbuilt = False
         result = "The build of %s worked." % pr["name"]
         if built and built.is_file():
+            proof.record(st, "built", "project %s: %s" % (pr["name"], pr["output"]))
             probs = [x["text"] for x in core.check_bytes(built.name, built.read_bytes()) if x["level"] == "error"]
             result += " It made %s (%s)%s." % (pr["output"], core.human_size(built.stat().st_size),
                                                ", but it fails the damage checks: " + probs[0] if probs else
