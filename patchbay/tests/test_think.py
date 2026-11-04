@@ -34,11 +34,15 @@ class Think(unittest.TestCase):
         self.assertEqual(model_labels.think_value({}, URL, "orca-coder:latest", False), "low")
         self.assertEqual(model_labels.think_value({}, URL, "orca-coder:latest", True), "low")
 
+    def test_daily_qwen36_is_off(self):
+        self.assertIs(model_labels.think_value({}, URL, "qwen36-uncensored-fixed:latest", True), False)
+
     def test_qwen38_format_defaults_to_low(self):
         self.assertEqual(model_labels.think_value({}, URL, "qwen3.8:27b", True), "low")
 
     def test_other_models_keep_old_rule(self):
-        for name in ("qwen36-uncensored-fixed:latest", "gemma4:26b"):
+        known("qwen3.6:35b-a3b", "qwen3.5")
+        for name in ("qwen3.6:35b-a3b", "gemma4:26b"):
             self.assertEqual(model_labels.think_setting({}, URL, name), "auto")
             self.assertIs(model_labels.think_value({}, URL, name, True), True)
             self.assertIs(model_labels.think_value({}, URL, name, False), False)
