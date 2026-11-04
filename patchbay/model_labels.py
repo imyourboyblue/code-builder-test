@@ -147,6 +147,7 @@ def catalog(names, memory_gb=None):
 
 _TAGS = {"at": 0, "names": [], "url": None}
 _CAPS = {}
+_RENDERER = {}   # (Ollama address, model) -> the prompt format Ollama uses for it, e.g. "qwen3.8" ("" if none)
 
 
 def capabilities(ollama_url, name):
@@ -160,11 +161,51 @@ def capabilities(ollama_url, name):
             req = urllib.request.Request(ollama_url + "/api/show", data=json.dumps({"model": name}).encode(),
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=8) as r:
-                caps = json.loads(r.read()).get("capabilities")
+                info = json.loads(r.read())
+            caps = info.get("capabilities")
             _CAPS[key] = list(caps) if isinstance(caps, list) else None
+            _RENDERER[key] = str(info.get("renderer") or "")
         except (OSError, ValueError):
             return None      # try again next time
     return _CAPS[key]
+
+
+# ---------------------------------------------------------------- how hard each model thinks
+
+# Per model, by text in its name (first match wins): "off", "low", "medium", "high", or "auto" (think harder only
+# on hard jobs, as PatchBay always did). config.json "model_think", like {"orca-coder": "low"}, comes first.
+# Qwen 3.8 models take "thinking on" as their slowest level, which went round in circles on some coding jobs.
+# On a 36GB Mac, "low" solved 10 of 10 coding tests in about a quarter of the time (4 Nov 2026). The uncensored
+# Qwen 3.6 35B did worse with thinking on (6 of 10 instead of 8, and 14 times slower), so it stays off.
+THINK = [("orca-coder", "low"), ("qwen36", "off")]
+THINK_BY_FORMAT = {"qwen3.8": "low"}            # models whose prompt format (Ollama renderer) is this
+LEVELS = {"qwen3.8": {"low": "low", "medium": "medium", "high": "xhigh"}}   # formats that understand levels
+THINK_CHOICES = ("off", "low", "medium", "high", "auto")
+
+
+def think_setting(cfg, ollama_url, name):
+    """How hard this model thinks: one of THINK_CHOICES."""
+    low = (name or "").lower()
+    own = cfg.get("model_think") if isinstance(cfg.get("model_think"), dict) else {}
+    for text, value in list(own.items()) + THINK:
+        if str(text).lower() in low and str(value).lower() in THINK_CHOICES:
+            return str(value).lower()
+    capabilities(ollama_url, name)
+    return THINK_BY_FORMAT.get(_RENDERER.get((ollama_url, name), ""), "auto")
+
+
+def think_value(cfg, ollama_url, name, hard):
+    """What to send Ollama as "think" for this model: False, True, or a level like "low". hard: the job looks hard
+    (only matters for "auto"). The same model always gets the same value for the same kind of job, so Ollama can
+    reuse its work from one message to the next."""
+    setting = think_setting(cfg, ollama_url, name)
+    if setting == "auto":
+        return bool(hard)
+    if setting == "off":
+        return False
+    capabilities(ollama_url, name)
+    levels = LEVELS.get(_RENDERER.get((ollama_url, name), ""))
+    return levels[setting] if levels else True       # models without levels only know on and off
 
 
 def can_use_tools(ollama_url, name):
