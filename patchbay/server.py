@@ -5321,10 +5321,12 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
     keep = -1           # the model you loaded stays loaded: no reloading between questions
     if not model:
         model = current_model(cfg)
-        # It thinks harder on the same model when a job gets hard (no swapping models).
-        think = model_labels.which_layer(messages)[0] in ("hard", "second")
+        # It thinks harder on the same model when a job gets hard (no swapping models), unless the model has its
+        # own thinking setting (model_labels.THINK).
+        hard = model_labels.which_layer(messages)[0] in ("hard", "second")
+        think = model_labels.think_value(cfg, url, model, hard)
         if emit:
-            emit({"type": "status", "text": "Thinking harder..." if think else "Thinking..."})
+            emit({"type": "status", "text": "Thinking harder..." if hard and think else "Thinking..."})
     else:
         keep = 0 if model != model_labels.active(loaded_names(cfg)) else -1
     if tools and model_labels.can_use_tools(url, model) is False:
@@ -5340,7 +5342,7 @@ def ask_model(cfg, messages, tools=None, emit=None, model=None):
     if tools:
         body["tools"] = tools
     if think is not None:
-        body["think"] = bool(think)
+        body["think"] = think
     body = json.dumps(body).encode()
     req = urllib.request.Request(ollama_url(cfg) + "/api/chat", data=body, headers={"Content-Type": "application/json"})
     try:
@@ -5518,7 +5520,7 @@ def _ai_simple_once(cfg, url, messages, think, fmt, stream, emit, max_words):
         body["format"] = fmt
         body["options"]["temperature"] = 0
     if think and model_labels.can_think(url, model) is not False:
-        body["think"] = True
+        body["think"] = model_labels.think_value(cfg, url, model, True)
     elif model_labels.can_think(url, model):
         body["think"] = False
     req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
@@ -5857,7 +5859,8 @@ def after_answer(st, cfg):
                 "messages": [{"role": "system", "content": system}] + history_view(st, cfg, system, tools, False),
                 "options": {"num_ctx": num_ctx, "num_predict": 1}}
         if model_labels.can_think(url, model) is not False:
-            body["think"] = False
+            # As the next everyday question will be sent, or the start of the prompt won't match
+            body["think"] = model_labels.think_value(cfg, url, model, False)
         if tools and model_labels.can_use_tools(url, model) is not False:
             body["tools"] = tools
         req = urllib.request.Request(url + "/api/chat", data=json.dumps(body).encode(),
@@ -7143,6 +7146,7 @@ value="1"><button>Restart PatchBay</button></form>""" % (
                 caps = list(pool.map(lambda m: model_labels.can_use_tools(url, m["name"]), installed))
             for m, c in zip(installed, caps):
                 m["tools"] = c is not False
+                m["think"] = model_labels.think_setting(cfg, url, m["name"])
             here = core.ai_where(cfg) == "this Mac"
             mem = mac_memory_gb() if here else None
             self.json({"installed": installed, "error": err, "where": core.ai_where(cfg),
@@ -7613,6 +7617,27 @@ value="1"><button>Restart PatchBay</button></form>""" % (
             self.json(self.ollama_api(data))
         elif path == "/api/services":
             self.json(self.services_api(data))
+        elif path == "/api/models/use":
+            # Setup → AI → Use this model: free the model in use, then load the chosen one and keep it loaded.
+            if APP.chat_job and not APP.chat_job.done:
+                raise ToolError("The chat is still working. Press Stop first.")
+            name = (data.get("model") or "").strip()
+            cfg = APP.home.cfg()
+            model_labels._TAGS["at"] = 0
+            match = next((n for n in model_labels.installed(ollama_url(cfg)) if ollamactl.same_model(n, name)), None)
+            if not match:
+                raise ToolError("%s isn't one of your models." % (name or "That"))
+            if ollamactl.STATE["loading"]:
+                raise ToolError("%s is still loading. Wait for it first." % ollamactl.STATE["loading"])
+            try:
+                others = [m["name"] for m in loaded_models(cfg) if m["name"] != match]
+                gone = unload_models(cfg, others) if others else []
+            except (OSError, ValueError) as e:
+                raise ToolError("Couldn't ask Ollama: %s" % e)
+            ollamactl.STATE["loading"] = match
+            threading.Thread(target=ollamactl.load_model, args=(cfg, match), daemon=True).start()
+            self.json({"loading": match, "unloaded": gone,
+                       "think": model_labels.think_setting(cfg, ollama_url(cfg), match)})
         elif path == "/api/models/unload":
             if APP.chat_job and not APP.chat_job.done:
                 raise ToolError("The chat is still working. Press Stop first.")

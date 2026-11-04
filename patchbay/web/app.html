@@ -1193,13 +1193,14 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
     (md.error?'':md.loaded===null?'Couldn\'t ask Ollama which model is loaded.':
      !md.model?'<b>No model loaded.</b> Load one in Ollama, then ask again. In Terminal: '+cmd(md.example)+' (then type /bye).':
      'Using <b>'+esc(md.model)+'</b>.'+(md.loaded.length>1?' Also loaded: '+esc(md.loaded.filter(x=>x!==md.model).join(', '))+'.':''))+
-    ' PatchBay keeps the model you load in memory until you press <b>Free up memory</b> below, so answers start fast. To switch, free the memory and load another with '+cmd('MODEL-NAME')+'.'+
+    ' PatchBay keeps the model you load in memory until you press <b>Free up memory</b> below, so answers start fast. To switch, press <b>Use this model</b> next to another one below.'+
     (md.faster?'<div style="margin-top:3px">A faster version for Apple chips is available: <button class="md-get" data-m="'+esc(md.faster)+'"'+(busy?' disabled':'')+'>Download '+esc(md.faster)+'</button></div>':'')+'</div>';
   // Models on this computer, with Delete
   const used={};if(md.model)used[md.model]='the chat';if(md.second)used[md.second]=(used[md.second]?used[md.second]+', ':'')+'Second opinion';
   h+='<div class="md-head" style="margin-top:12px">Models on '+esc(where)+' <span>'+(j.memory_gb?j.memory_gb+' GB memory':'')+'</span></div>';
   h+=j.installed.length?'<div class="md-list">'+j.installed.map(m=>'<div class="md-row dl" style="padding:7px 10px"><div style="flex:1"><b>'+esc(m.name)+'</b> '+chip(esc(m.size))+
-      (used[m.name]?' '+chip('used by '+esc(used[m.name]),'ok'):' '+chip('not used'))+((md.loaded||[]).includes(m.name)?' '+chip('loaded now','ok'):'')+(m.tools===false?' '+chip('chat only','warn'):'')+'</div>'+
+      (used[m.name]?' '+chip('used by '+esc(used[m.name]),'ok'):' '+chip('not used'))+((md.loaded||[]).includes(m.name)?' '+chip('loaded now','ok'):'')+(m.tools===false?' '+chip('chat only','warn'):'')+(m.think&&m.think!=='auto'?' '+chip('thinks: '+esc(m.think)):'')+'</div>'+
+      (/embed/i.test(m.name)||(md.loaded||[]).includes(m.name)?'':'<button class="md-use" data-m="'+esc(m.name)+'">Use this model</button> ')+
       '<button class="md-del'+(used[m.name]?'':' danger')+'" data-m="'+esc(m.name)+'" data-used="'+esc(used[m.name]||'')+'" data-size="'+esc(m.size)+'">Delete</button></div>').join('')+'</div>'
     :(j.error?'':'<div>No models yet. Get one below.</div>');
   // Free ones to download, tucked away until wanted
@@ -1222,9 +1223,18 @@ async function drawModels(note){const box=$('sc-models');if(!box)return;let j,md
   box.querySelectorAll('.md-del').forEach(b=>b.onclick=async e=>{e.preventDefault();const u=b.dataset.used;
     if(!confirm('Delete '+b.dataset.m+' ('+b.dataset.size+') from '+where+'?'+(u?'\n\nIt is used by: '+u+'.':'')+'\n\nYou can download it again later.'))return;
     b.disabled=true;b.textContent='Deleting…';try{await postJSON('/api/models/delete',{model:b.dataset.m});loadModels();drawModels('Deleted '+b.dataset.m+'.')}catch(x){b.disabled=false;b.textContent='Delete';$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(x.message)+'</span>'}});
+  box.querySelectorAll('.md-use').forEach(b=>b.onclick=async()=>{box.querySelectorAll('.md-use').forEach(x=>x.disabled=true);b.textContent='Loading…';
+    try{const r=await postJSON('/api/models/use',{model:b.dataset.m});waitLoaded(r.loading,(r.unloaded.length?'Freed '+r.unloaded.join(', ')+'. ':'')+'Loading '+r.loading+'…')}
+    catch(e){box.querySelectorAll('.md-use').forEach(x=>x.disabled=false);b.textContent='Use this model';$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   box.querySelectorAll('.md-get').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await postJSON('/api/models/pull',{model:b.dataset.m});drawModels()}catch(e){b.disabled=false;$('md-msg').innerHTML='<span style="color:var(--bad)">'+esc(e.message)+'</span>'}});
   clearTimeout(MODEL_POLL);if(busy)MODEL_POLL=setTimeout(()=>{if($('sc-models'))drawModels()},3000);
   if(p.state==='done')loadModels()}
+
+// After Use this model: check every 2 s until Ollama has it loaded (big models take a while)
+async function waitLoaded(name,note,tries=0){let md;try{md=await getJSON('/api/models')}catch(e){md={}}
+  const ready=(md.loaded||[]).includes(name)&&!md.loading;
+  if($('sc-models'))drawModels(ready?'Now using '+name+'.':note);loadModels();
+  if(!ready&&tries<300)setTimeout(()=>waitLoaded(name,note,tries+1),2000)}
 
 async function drawMemory(note){const box=$('md-mem');if(!box)return;let j;
   try{j=await getJSON('/api/models/memory')}catch(e){box.textContent=e.message;return}
