@@ -36,6 +36,8 @@ class Think(unittest.TestCase):
 
     def test_daily_qwen36_is_off(self):
         self.assertIs(model_labels.think_value({}, URL, "qwen36-uncensored-fixed:latest", True), False)
+        known("qwen36-levels:latest", "qwen3.8")      # same weights, newer format: still off (low tested worse)
+        self.assertIs(model_labels.think_value({}, URL, "qwen36-levels:latest", True), False)
 
     def test_qwen38_format_defaults_to_low(self):
         self.assertEqual(model_labels.think_value({}, URL, "qwen3.8:27b", True), "low")

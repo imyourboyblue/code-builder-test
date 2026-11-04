@@ -177,7 +177,7 @@ def capabilities(ollama_url, name):
 # Qwen 3.8 models take "thinking on" as their slowest level, which went round in circles on some coding jobs.
 # On a 36GB Mac, "low" solved 10 of 10 coding tests in about a quarter of the time (4 Nov 2026). The uncensored
 # Qwen 3.6 35B did worse with thinking on (6 of 10 instead of 8, and 14 times slower), so it stays off.
-THINK = [("orca-coder", "low"), ("qwen36-uncensored-fixed", "off")]
+THINK = [("orca-coder", "low"), ("qwen36", "off")]
 THINK_BY_FORMAT = {"qwen3.8": "low"}            # models whose prompt format (Ollama renderer) is this
 LEVELS = {"qwen3.8": {"low": "low", "medium": "medium", "high": "xhigh"}}   # formats that understand levels
 THINK_CHOICES = ("off", "low", "medium", "high", "auto")
