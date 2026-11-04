@@ -274,6 +274,24 @@ class RosettaTar(Base):
         server.sandbox_hints(self.sb(), 2, TAR_FAIL, "build", time.time(), "make package")
         self.assertEqual(len(self.sb()["fixes"]), 1)
 
+    def test_tar_fix_runs_before_the_packages_and_replaces_the_old_one(self):
+        self.amd64()
+        s = self.sb()
+        s["setup_command"] = "apt-get update && apt-get install -y make"
+        sandbox.save(s)
+        sandbox.add_fix("EglantinePS5", "if [ ! -e /usr/bin/tar.openat2 ]; then old; fi", "old tar fix")
+        sandbox.add_fix("EglantinePS5", "ln -sf /a /b", "other fix")
+        server.add_tar_fix("EglantinePS5")
+        s = self.sb()
+        cmds = [f["command"] for f in s["fixes"]]
+        self.assertNotIn("if [ ! -e /usr/bin/tar.openat2 ]; then old; fi", cmds)
+        self.assertIn(server.TAR_FIX, cmds)
+        line = sandbox.step_command(s, "setup")
+        self.assertLess(line.index("tar.openat2"), line.index("apt-get update"))
+        self.assertLess(line.index("apt-get update"), line.index("ln -sf /a /b"))
+        self.assertIn("apt-helper", server.TAR_FIX)        # works without curl
+        self.assertIn("-xOf", server.TAR_FIX)             # unpacks without making files
+
     def test_only_newer_ubuntu_x86_needs_it(self):
         self.amd64("ubuntu:26.04")
         self.assertTrue(server.needs_tar_fix(self.sb()))

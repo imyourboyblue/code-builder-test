@@ -3776,12 +3776,22 @@ def rt_fix_command(path, ver):
 # not implemented". Ubuntu 24.04's tar (the same GNU tar 1.35) falls back to the old way, and runs fine on newer Ubuntu.
 ROSETTA_TAR = re.compile(r"\btar: .{1,400}: Cannot (open|mkdir|utime|change mode|create symlink)[^\n]{0,40}: "
                          r"Function not implemented")
-TAR_FIX = ("if [ ! -e /usr/bin/tar.openat2 ]; then d=$(mktemp -d) && f=$(curl -fsSL http://archive.ubuntu.com/ubuntu/"
-           "dists/noble-updates/main/binary-amd64/Packages.gz | gzip -dc | awk '/^Package: /{p=($2==\"tar\")} "
-           "p&&/^Filename: /{print $2; exit}') && [ -n \"$f\" ] && curl -fsSL -o \"$d/tar.deb\" "
-           "\"http://archive.ubuntu.com/ubuntu/$f\" && dpkg-deb -x \"$d/tar.deb\" \"$d/x\" && \"$d/x/usr/bin/tar\" "
-           "--version >/dev/null && cp \"$d/x/usr/bin/tar\" /usr/bin/tar.noble && dpkg-divert --local --rename "
-           "--divert /usr/bin/tar.openat2 --add /usr/bin/tar && mv /usr/bin/tar.noble /usr/bin/tar && rm -rf \"$d\"; fi")
+# Runs BEFORE the setup's apt-get (a broken tar makes every package install fail, so a fix after it never ran). It
+# needs neither curl (apt's own downloader is used when curl isn't there) nor a working tar to unpack files: the new
+# tar comes out of the package as one stream (tar -O writes to the screen, which needs no openat2), with Python as a
+# second way. Afterwards dpkg finishes any install the broken tar left half done.
+TAR_FIX = ("if [ ! -e /usr/bin/tar.openat2 ]; then d=$(mktemp -d) && g() { if command -v curl >/dev/null; then "
+           "curl -fsSL -o \"$2\" \"$1\"; else /usr/lib/apt/apt-helper download-file \"$1\" \"$2\"; fi; } && "
+           "g http://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz \"$d/P.gz\" && "
+           "f=$(gzip -dc \"$d/P.gz\" | awk '/^Package: /{p=($2==\"tar\")} p&&/^Filename: /{print $2; exit}') && "
+           "[ -n \"$f\" ] && g \"http://archive.ubuntu.com/ubuntu/$f\" \"$d/tar.deb\" && "
+           "{ dpkg-deb --fsys-tarfile \"$d/tar.deb\" | /usr/bin/tar -xOf - ./usr/bin/tar > \"$d/t\" && [ -s \"$d/t\" ] || "
+           "dpkg-deb --fsys-tarfile \"$d/tar.deb\" | python3 -c 'import sys,tarfile;t=tarfile.open(fileobj=sys.stdin."
+           "buffer,mode=\"r|\");[sys.stdout.buffer.write(t.extractfile(m).read()) for m in t if m.name.lstrip(\"./\")"
+           "==\"usr/bin/tar\"]' > \"$d/t\"; } && [ -s \"$d/t\" ] && chmod 755 \"$d/t\" && \"$d/t\" --version "
+           ">/dev/null && cp \"$d/t\" /usr/bin/tar.noble && dpkg-divert --local --rename --divert /usr/bin/tar.openat2 "
+           "--add /usr/bin/tar && mv /usr/bin/tar.noble /usr/bin/tar && rm -rf \"$d\"; fi && "
+           "{ dpkg --configure -a >/dev/null 2>&1 || true; }")
 TAR_FIX_WHY = ("tar that works under Rosetta: Ubuntu 24.04's GNU tar in place of this Ubuntu's, which needs openat2 "
                "(Rosetta doesn't have it)")
 
@@ -3797,8 +3807,13 @@ def add_tar_fix(name):
     """Save the tar fix (once) and its packages; the next setup step does it. True if something new was saved."""
     s = sandbox.load(name)
     changed = False
+    # An older version of this fix (it ran after the packages, so it never got its turn) is taken away.
+    for i in reversed([i for i, f in enumerate(s.get("fixes") or [], 1)
+                       if "tar.openat2" in f.get("command", "") and f.get("command") != TAR_FIX]):
+        sandbox.remove_fix(name, i)
+        changed = True
     if not any(f.get("command") == TAR_FIX for f in s.get("fixes") or []):
-        sandbox.add_fix(name, TAR_FIX, TAR_FIX_WHY)
+        sandbox.add_fix(name, TAR_FIX, TAR_FIX_WHY, first=True)
         changed = True
     cur = sandbox.load(name).get("setup_command") or ""
     new = sandboxrecipe.add_packages(cur, ["curl", "ca-certificates"])

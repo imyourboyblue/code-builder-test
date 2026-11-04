@@ -1643,7 +1643,7 @@ def set_alias(name, tool, use, why=""):
     return load(name)
 
 
-def add_fix(name, command, why=""):
+def add_fix(name, command, why="", first=False):
     """Save a fix to the sandbox's own system (a file put in place, a link): it's part of every setup step from now
     on, so a reset or a new container gets it again. Packages belong in the setup's apt-get line instead."""
     command = str(command or "").strip()
@@ -1653,6 +1653,8 @@ def add_fix(name, command, why=""):
     fixes = [f for f in sb.get("fixes") or [] if f.get("command") != command]
     fixes.append({"command": command[:2000], "why": re.sub(r"\s+", " ", str(why or "")).strip()[:300],
                   "time": time.strftime("%Y-%m-%d %H:%M")})
+    if first:       # runs before the setup's packages (for a fix the package install itself needs)
+        fixes[-1]["first"] = True
     if len(fixes) > FIXES_MAX:
         raise SandboxError("This sandbox already has %d saved fixes. Take an old one away first." % FIXES_MAX)
     sb["fixes"] = fixes
@@ -2203,11 +2205,18 @@ def undo_copy(n):
 
 def step_command(sb, step):
     """The setup or build command, with {cpus} filled in (containers don't always tell programs their CPU limit).
-    The setup also redoes every saved fix, after the packages are in, so a reset or new container gets them back."""
+    The setup also redoes every saved fix, after the packages are in (a few that the install itself needs, before),
+    so a reset or new container gets them back."""
     cmd = sb.get("setup_command" if step == "setup" else "build_command") or ""
     if step == "setup" and sb.get("fixes"):
-        fixes = " && ".join("{ %s ; }" % f["command"].rstrip("; ") for f in sb["fixes"])
-        cmd = "%s && %s" % (cmd, fixes) if cmd else fixes
+        first = [f for f in sb["fixes"] if f.get("first")]
+        rest = [f for f in sb["fixes"] if not f.get("first")]
+        if rest:
+            fixes = " && ".join("{ %s ; }" % f["command"].rstrip("; ") for f in rest)
+            cmd = "%s && %s" % (cmd, fixes) if cmd else fixes
+        if first:
+            fixes = " && ".join("{ %s ; }" % f["command"].rstrip("; ") for f in first)
+            cmd = "%s && %s" % (fixes, cmd) if cmd else fixes
     if step == "setup" and sb.get("kind") == "linux" and _aliases(sb):
         # The setup has just installed what the swaps point to: link them now and check they hold under a plain PATH.
         swaps = "{ %s ; }" % "; ".join(link_lines(sb) + check_lines(sb))
